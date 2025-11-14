@@ -1,11 +1,15 @@
+// webpack.config.js
 /* eslint-disable no-undef */
 
+const path = require("path");
+const webpack = require("webpack");
 const devCerts = require("office-addin-dev-certs");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 
-const urlDev = "https://localhost:3000/";
-const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
+// Dev & Prod base URLs
+const urlDev = "https://localhost:4001/";
+const urlProd = "https://zojad.github.io/vejice_1/";
 
 async function getHttpsOptions() {
   const httpsOptions = await devCerts.getHttpsServerOptions();
@@ -13,85 +17,86 @@ async function getHttpsOptions() {
 }
 
 module.exports = async (env, options) => {
-  const dev = options.mode === "development";
+  if (!process.env.VEJICE_API_KEY) {
+    console.warn("[webpack] VEJICE_API_KEY is not set. API calls will fail until you provide it.");
+  }
+
   const config = {
     devtool: "source-map",
     entry: {
       polyfill: ["core-js/stable", "regenerator-runtime/runtime"],
-      taskpane: ["./src/taskpane/taskpane.js", "./src/taskpane/taskpane.html"],
       commands: "./src/commands/commands.js",
     },
     output: {
+      filename: "[name].js",
+      path: path.resolve(__dirname, "dist"),
       clean: true,
     },
-    resolve: {
-      extensions: [".html", ".js"],
-    },
+    resolve: { extensions: [".html", ".js"] },
     module: {
       rules: [
-        {
-          test: /\.js$/,
-          exclude: /node_modules/,
-          use: {
-            loader: "babel-loader",
-          },
-        },
+        { test: /\.js$/, exclude: /node_modules/, use: { loader: "babel-loader" } },
         {
           test: /\.html$/,
           exclude: /node_modules/,
-          use: "html-loader",
+          use: { loader: "html-loader", options: { sources: false } },
         },
         {
-          test: /\.(png|jpg|jpeg|gif|ico)$/,
+          test: /\.(png|jpg|jpeg|gif|ico)$/i,
           type: "asset/resource",
-          generator: {
-            filename: "assets/[name][ext][query]",
-          },
+          generator: { filename: "assets/[name][ext][query]" },
         },
       ],
     },
     plugins: [
       new HtmlWebpackPlugin({
-        filename: "taskpane.html",
-        template: "./src/taskpane/taskpane.html",
-        chunks: ["polyfill", "taskpane"],
+        filename: "commands.html",
+        template: "./src/commands/commands.html",
+        chunks: ["polyfill", "commands"],
+        inject: "body",
+      }),
+      new webpack.DefinePlugin({
+        "process.env.VEJICE_API_KEY": JSON.stringify(process.env.VEJICE_API_KEY || ""),
       }),
       new CopyWebpackPlugin({
         patterns: [
+          { from: "assets/*", to: "assets/[name][ext][query]" },
+          { from: "src/manifests/manifest.dev.xml", to: "manifest.dev.xml" },
           {
-            from: "assets/*",
-            to: "assets/[name][ext][query]",
-          },
-          {
-            from: "manifest*.xml",
-            to: "[name]" + "[ext]",
+            from: "src/manifests/manifest.dev.xml",
+            to: "manifest.prod.xml",
             transform(content) {
-              if (dev) {
-                return content;
-              } else {
-                return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
-              }
+              return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
             },
           },
         ],
       }),
-      new HtmlWebpackPlugin({
-        filename: "commands.html",
-        template: "./src/commands/commands.html",
-        chunks: ["polyfill", "commands"],
-      }),
     ],
     devServer: {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-      },
+      // If you need to reach from another device/VM, switch host to "0.0.0.0"
+      host: "localhost",
+      allowedHosts: "all",
+      port: 4001,
+      static: "./dist",
       server: {
         type: "https",
-        options: env.WEBPACK_BUILD || options.https !== undefined ? options.https : await getHttpsOptions(),
+        options:
+          env.WEBPACK_BUILD || options.https !== undefined
+            ? options.https
+            : await getHttpsOptions(),
       },
-      port: process.env.npm_package_config_dev_server_port || 3000,
+      headers: {
+        // CORS
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        "Access-Control-Allow-Credentials": "true",
+        // Required for Chrome’s Private Network Access (public -> localhost)
+        "Access-Control-Allow-Private-Network": "true",
+      },
+      // write actual files so Word Online can fetch them reliably
+      devMiddleware: { writeToDisk: true },
     },
   };
-
   return config;
 };

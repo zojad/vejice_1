@@ -1,128 +1,94 @@
-/* global Office, Word */
+/* global Office, Word, window, process, performance, console */
+
+// Wire your checker and expose globals the manifest calls.
 import { checkDocumentText as runCheckVejice } from "../logic/preveriVejice.js";
 
-Office.onReady(() => {
-  // Office.js is ready
-});
-
-/** ─────────────────────────────────────────────────────────
- * Helpers
- * ───────────────────────────────────────────────────────── */
-const isCommaish = (t) => {
-  const s = (t || "").trim();
-  return s === "," || s === "‚" || s === "，"; // extend if you need more variants
+const envIsProd = () =>
+  (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
+  (typeof window !== "undefined" && window.__VEJICE_ENV__ === "production");
+const DEBUG_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
+    ? window.__VEJICE_DEBUG__
+    : undefined;
+const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
+const log = (...a) => DEBUG && console.log("[Vejice CMD]", ...a);
+const errL = (...a) => console.error("[Vejice CMD]", ...a);
+const tnow = () => performance?.now?.() ?? Date.now();
+const done = (event, tag) => {
+  try {
+    event && event.completed && event.completed();
+  } catch (e) {
+    errL(`${tag}: event.completed() threw`, e);
+  }
 };
 
-async function getLatestBodyZone(context) {
-  const boxes = context.document.contentControls;
-  boxes.load("items/tag");
-  await context.sync();
+Office.onReady(() => {
+  log("Office ready | Host:", Office?.context?.host, "| Platform:", Office?.platform);
+});
 
-  const candidates = boxes.items
-    .filter((c) => (c.tag || "").startsWith("vejice-body-"))
-    .sort((a, b) => (a.tag > b.tag ? -1 : 1)); // newest first
-  return candidates[0] || null;
-}
+// —————————————————————————————————————————————
+// Ribbon commands (must be globals)
+// —————————————————————————————————————————————
+window.checkDocumentText = async (event) => {
+  const t0 = tnow();
+  log("CLICK: Preveri vejice (checkDocumentText)");
+  try {
+    await runCheckVejice();
+    log("DONE: checkDocumentText |", Math.round(tnow() - t0), "ms");
+  } catch (err) {
+    errL("checkDocumentText failed:", err);
+  } finally {
+    done(event, "checkDocumentText");
+    log("event.completed(): checkDocumentText");
+  }
+};
 
-/** Accept only comma revisions inside the body zone */
-async function acceptCommasInZone(event) {
+window.acceptAllChanges = async (event) => {
+  const t0 = tnow();
+  log("CLICK: Sprejmi spremembe (acceptAllChanges)");
   try {
     await Word.run(async (context) => {
-      const box = await getLatestBodyZone(context);
-      if (!box) {
-        // nothing to do
-        return;
-      }
-      const boxRange = box.getRange();
-
-      const revisions = context.document.body.revisions;
-      revisions.load("items/range,text,type");
+      const revisions = context.document.revisions;
+      revisions.load("items");
       await context.sync();
 
-      for (const rev of revisions.items) {
-        // Scope to the zone only
-        const relation = rev.range.compareLocationWith(boxRange);
-        const inside =
-          relation === Word.LocationRelation.inside ||
-          relation === Word.LocationRelation.equal;
+      const count = revisions.items.length;
+      log("Revisions to accept:", count);
 
-        if (!inside) continue;
-
-        // Accept only comma-like edits
-        rev.range.load("text");
-        await context.sync();
-        if (isCommaish(rev.range.text)) {
-          rev.accept();
-        }
-      }
+      revisions.items.forEach((rev) => rev.accept());
       await context.sync();
 
-      // Optional: remove the zone after applying
-      // box.delete(true); await context.sync();
+      log("Accepted revisions:", count, "|", Math.round(tnow() - t0), "ms");
     });
-  } catch (e) {
-    console.error("acceptAllChanges error:", e);
+  } catch (err) {
+    errL("acceptAllChanges failed:", err);
   } finally {
-    event.completed();
+    done(event, "acceptAllChanges");
+    log("event.completed(): acceptAllChanges");
   }
-}
+};
 
-/** Reject only comma revisions inside the body zone */
-async function rejectCommasInZone(event) {
+window.rejectAllChanges = async (event) => {
+  const t0 = tnow();
+  log("CLICK: Zavrni spremembe (rejectAllChanges)");
   try {
     await Word.run(async (context) => {
-      const box = await getLatestBodyZone(context);
-      if (!box) {
-        return;
-      }
-      const boxRange = box.getRange();
-
-      const revisions = context.document.body.revisions;
-      revisions.load("items/range,text,type");
+      const revisions = context.document.revisions;
+      revisions.load("items");
       await context.sync();
 
-      for (const rev of revisions.items) {
-        const relation = rev.range.compareLocationWith(boxRange);
-        const inside =
-          relation === Word.LocationRelation.inside ||
-          relation === Word.LocationRelation.equal;
+      const count = revisions.items.length;
+      log("Revisions to reject:", count);
 
-        if (!inside) continue;
-
-        rev.range.load("text");
-        await context.sync();
-        if (isCommaish(rev.range.text)) {
-          rev.reject();
-        }
-      }
+      revisions.items.forEach((rev) => rev.reject());
       await context.sync();
 
-      // Optional: remove the zone after applying
-      // box.delete(true); await context.sync();
+      log("Rejected revisions:", count, "|", Math.round(tnow() - t0), "ms");
     });
-  } catch (e) {
-    console.error("rejectAllChanges error:", e);
+  } catch (err) {
+    errL("rejectAllChanges failed:", err);
   } finally {
-    event.completed();
+    done(event, "rejectAllChanges");
+    log("event.completed(): rejectAllChanges");
   }
-}
-
-/** ─────────────────────────────────────────────────────────
- * Ribbon command entry points (match manifest FunctionName)
- * ───────────────────────────────────────────────────────── */
-async function checkDocumentText(event) {
-  await runCheckVejice(event); // runs the whole-doc, paragraph-by-paragraph logic
-}
-
-async function acceptAllChanges(event) {
-  await acceptCommasInZone(event);
-}
-
-async function rejectAllChanges(event) {
-  await rejectCommasInZone(event);
-}
-
-/** Register the functions with Office (names must match manifest FunctionName) */
-Office.actions.associate("checkDocumentText", checkDocumentText);
-Office.actions.associate("acceptAllChanges", acceptAllChanges);
-Office.actions.associate("rejectAllChanges", rejectAllChanges);
+};
