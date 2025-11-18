@@ -216,19 +216,15 @@ export async function checkDocumentText() {
       const doc = context.document;
       let trackToggleSupported = false;
       let prevTrack = false;
-      if (typeof doc.trackRevisions === "undefined") {
-        warn("trackRevisions not available on this host -> skip toggling");
-      } else {
-        try {
-          doc.load("trackRevisions");
-          await context.sync();
-          prevTrack = doc.trackRevisions;
-          doc.trackRevisions = true;
-          trackToggleSupported = true;
-          log("TrackRevisions:", prevTrack, "-> true");
-        } catch (trackErr) {
-          warn("trackRevisions toggle failed -> skip", trackErr);
-        }
+      try {
+        doc.load("trackRevisions");
+        await context.sync();
+        prevTrack = doc.trackRevisions;
+        doc.trackRevisions = true;
+        trackToggleSupported = true;
+        log("TrackRevisions:", prevTrack, "-> true");
+      } catch (trackErr) {
+        warn("trackRevisions not available -> skip toggling", trackErr);
       }
 
       try {
