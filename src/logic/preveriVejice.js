@@ -17,7 +17,7 @@ const warn = (...a) => DEBUG && console.warn("[Vejice CHECK]", ...a);
 const errL = (...a) => console.error("[Vejice CHECK]", ...a);
 const tnow = () => performance?.now?.() ?? Date.now();
 const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
-const MAX_AUTOFIX_PASSES = 3;
+const MAX_AUTOFIX_PASSES = typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
 
 /** ─────────────────────────────────────────────────────────
  *  Helpers: znaki & pravila
