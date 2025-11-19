@@ -35,6 +35,16 @@ export function getPendingSuggestionsOnline() {
   return pendingSuggestionsOnline;
 }
 
+const paragraphsTouchedOnline = new Set();
+function resetParagraphsTouchedOnline() {
+  paragraphsTouchedOnline.clear();
+}
+function markParagraphTouched(paragraphIndex) {
+  if (typeof paragraphIndex === "number" && paragraphIndex >= 0) {
+    paragraphsTouchedOnline.add(paragraphIndex);
+  }
+}
+
 const paragraphTokenAnchorsOnline = [];
 function resetParagraphTokenAnchorsOnline() {
   paragraphTokenAnchorsOnline.length = 0;
@@ -604,6 +614,7 @@ async function highlightDeleteSuggestion(
     highlightRange: targetRange,
     metadata,
   });
+  markParagraphTouched(paragraphIndex);
   return true;
 }
 
@@ -697,6 +708,7 @@ async function highlightInsertSuggestion(
     highlightRange: range,
     metadata,
   });
+  markParagraphTouched(paragraphIndex);
   return true;
 }
 
@@ -763,14 +775,14 @@ async function applyDeleteSuggestion(context, paragraph, suggestion) {
 function selectInsertAnchor(metadata) {
   if (!metadata) return null;
   const candidates = [
-    metadata.sourceTokenAfter
-      ? { anchor: metadata.sourceTokenAfter, location: Word.InsertLocation.before }
-      : null,
     metadata.sourceTokenAt
       ? { anchor: metadata.sourceTokenAt, location: Word.InsertLocation.after }
       : null,
     metadata.sourceTokenBefore
       ? { anchor: metadata.sourceTokenBefore, location: Word.InsertLocation.after }
+      : null,
+    metadata.sourceTokenAfter
+      ? { anchor: metadata.sourceTokenAfter, location: Word.InsertLocation.before }
       : null,
     metadata.targetTokenBefore
       ? { anchor: metadata.targetTokenBefore, location: Word.InsertLocation.before }
@@ -824,6 +836,61 @@ async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
 async function applyInsertSuggestion(context, paragraph, suggestion) {
   if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return;
   await applyInsertSuggestionLegacy(context, paragraph, suggestion);
+}
+
+async function normalizeCommaSpacingInParagraph(context, paragraph) {
+  paragraph.load("text");
+  await context.sync();
+  const text = paragraph.text || "";
+  if (!text.includes(",")) return;
+
+  for (let idx = text.length - 1; idx >= 0; idx--) {
+    if (text[idx] !== ",") continue;
+    if (idx > 0 && /\s/.test(text[idx - 1])) {
+      const toTrim = await getRangeForCharacterSpan(
+        context,
+        paragraph,
+        text,
+        idx - 1,
+        idx,
+        "trim-space-before-comma",
+        " "
+      );
+      if (toTrim) {
+        toTrim.insertText("", Word.InsertLocation.replace);
+      }
+    }
+
+    const nextChar = text[idx + 1] ?? "";
+    if (!nextChar) continue;
+    if (!/\s/.test(nextChar) && !QUOTES.has(nextChar) && !isDigit(nextChar)) {
+      const afterRange = await getRangeForCharacterSpan(
+        context,
+        paragraph,
+        text,
+        idx + 1,
+        idx + 2,
+        "space-after-comma",
+        nextChar
+      );
+      if (afterRange) {
+        afterRange.insertText(" ", Word.InsertLocation.before);
+      }
+    }
+  }
+}
+
+async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes) {
+  if (!indexes?.size) return;
+  for (const idx of indexes) {
+    const paragraph = paragraphs.items[idx];
+    if (!paragraph) continue;
+    try {
+      await normalizeCommaSpacingInParagraph(context, paragraph);
+    } catch (err) {
+      warn("Failed to normalize comma spacing", err);
+    }
+  }
 }
 
 async function findRangeForInsert(context, paragraph, suggestion) {
@@ -894,6 +961,7 @@ export async function applyAllSuggestionsOnline() {
     const paras = context.document.body.paragraphs;
     paras.load("items/text");
     await context.sync();
+    const touchedIndexes = new Set(paragraphsTouchedOnline);
 
     for (const sug of pendingSuggestionsOnline) {
       const p = paras.items[sug.paragraphIndex];
@@ -912,6 +980,8 @@ export async function applyAllSuggestionsOnline() {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
     }
+    await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
+    resetParagraphsTouchedOnline();
     await clearOnlineSuggestionMarkers(context);
   });
 }
@@ -1060,6 +1130,7 @@ async function checkDocumentTextOnline() {
     await Word.run(async (context) => {
       await clearOnlineSuggestionMarkers(context);
       resetPendingSuggestionsOnline();
+      resetParagraphsTouchedOnline();
       resetParagraphTokenAnchorsOnline();
 
       const paras = context.document.body.paragraphs;
