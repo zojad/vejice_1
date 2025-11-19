@@ -39,6 +39,7 @@ if (typeof window !== "undefined") {
   window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
   window.__VEJICE_DEBUG_STATE__.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = () => paragraphTokenAnchorsOnline;
+  window.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
 }
 
 const paragraphsTouchedOnline = new Set();
