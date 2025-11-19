@@ -107,20 +107,60 @@ function mockCorrectSentence(sentence = "") {
   return corrected;
 }
 
-async function mockPopraviPoved(poved = "") {
+function tokenizeForMock(text = "", prefix = "t") {
+  if (typeof text !== "string" || !text.length) return [];
+  const tokens = [];
+  const regex = /[^\s]+/g;
+  let match;
+  let idx = 1;
+  while ((match = regex.exec(text))) {
+    tokens.push({
+      token_id: `${prefix}${idx++}`,
+      token: match[0],
+      start_char: match.index,
+      end_char: match.index + match[0].length,
+    });
+  }
+  return tokens;
+}
+
+async function mockRequestPopravljenPoved(poved = "") {
   return new Promise((resolve) => {
-    setTimeout(() => resolve(mockCorrectSentence(poved)), MOCK_LATENCY_MS);
+    setTimeout(() => {
+      const correctedText = mockCorrectSentence(poved);
+      resolve({
+        correctedText,
+        raw: {
+          source_text: poved,
+          target_text: correctedText,
+          source_tokens: tokenizeForMock(poved, "s"),
+          target_tokens: tokenizeForMock(correctedText, "t"),
+        },
+      });
+    }, MOCK_LATENCY_MS);
   });
 }
 
-/**
- * Pokliče Vejice API in vrne popravljeno poved.
- * Vrne popravljeno besedilo ali original, če pride do težave.
- */
-export async function popraviPoved(poved) {
+function pickCorrectedText(fallback, payload = {}) {
+  const candidateTexts = [
+    payload.popravljeno_besedilo,
+    payload.target_text,
+    payload.popravki?.[0]?.predlog,
+    Array.isArray(payload.corrections) ? payload.corrections[0]?.suggested_text : undefined,
+    Array.isArray(payload.apply_corrections)
+      ? payload.apply_corrections[0]?.suggested_text
+      : undefined,
+  ];
+  return (
+    candidateTexts.map((txt) => (typeof txt === "string" ? txt.trim() : "")).find((txt) => txt) ||
+    fallback
+  );
+}
+
+async function requestPopravek(poved) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
-    return mockPopraviPoved(poved);
+    return mockRequestPopravljenPoved(poved);
   }
   if (!API_KEY) {
     throw new VejiceApiError("Missing VEJICE_API_KEY configuration");
@@ -149,18 +189,10 @@ export async function popraviPoved(poved) {
     log("POST", url, "| len:", poved?.length ?? 0, "| snippet:", snip(poved));
     const r = await axios.post(url, data, config);
     const t1 = performance?.now?.() ?? Date.now();
-
-    const d = r?.data || {};
-    const candidateTexts = [
-      d.popravljeno_besedilo,
-      d.target_text,
-      d.popravki?.[0]?.predlog,
-      Array.isArray(d.corrections) ? d.corrections[0]?.suggested_text : undefined,
-      Array.isArray(d.apply_corrections) ? d.apply_corrections[0]?.suggested_text : undefined,
-    ];
-    const out =
-      candidateTexts.map((txt) => (typeof txt === "string" ? txt.trim() : "")).find((txt) => txt) ||
-      poved;
+    const raw = { ...(r?.data || {}) };
+    const correctedText = pickCorrectedText(poved, raw);
+    if (typeof raw.source_text !== "string") raw.source_text = poved;
+    if (typeof raw.target_text !== "string") raw.target_text = correctedText;
 
     log(
       "OK",
@@ -168,12 +200,16 @@ export async function popraviPoved(poved) {
       "| status:",
       r?.status,
       "| changed:",
-      out !== poved,
+      correctedText !== poved,
       "| keys:",
-      d && Object.keys(d)
+      raw && Object.keys(raw),
+      "| sourceTokens:",
+      Array.isArray(raw?.source_tokens) ? raw.source_tokens.length : 0,
+      "| targetTokens:",
+      Array.isArray(raw?.target_tokens) ? raw.target_tokens.length : 0
     );
 
-    return out;
+    return { correctedText, raw };
   } catch (err) {
     const t1 = performance?.now?.() ?? Date.now();
     const info = describeAxiosError(err);
@@ -184,4 +220,25 @@ export async function popraviPoved(poved) {
       cause: err,
     });
   }
+}
+
+/**
+ * Pokliče Vejice API in vrne popravljeno poved.
+ * Vrne popravljeno besedilo ali original, če pride do težave.
+ */
+export async function popraviPoved(poved) {
+  const { correctedText } = await requestPopravek(poved);
+  return correctedText;
+}
+
+export async function popraviPovedDetailed(poved) {
+  const { correctedText, raw } = await requestPopravek(poved);
+  return {
+    correctedText,
+    raw,
+    sourceTokens: Array.isArray(raw?.source_tokens) ? raw.source_tokens : [],
+    targetTokens: Array.isArray(raw?.target_tokens) ? raw.target_tokens : [],
+    sourceText: typeof raw?.source_text === "string" ? raw.source_text : poved,
+    targetText: typeof raw?.target_text === "string" ? raw.target_text : correctedText,
+  };
 }

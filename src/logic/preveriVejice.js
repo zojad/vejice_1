@@ -1,5 +1,5 @@
 /* global Word, window, process, performance, console, Office */
-import { popraviPoved } from "../api/apiVejice.js";
+import { popraviPoved, popraviPovedDetailed } from "../api/apiVejice.js";
 import { isWordOnline } from "../utils/host.js";
 
 /** ─────────────────────────────────────────────────────────
@@ -33,6 +33,297 @@ function addPendingSuggestionOnline(suggestion) {
 }
 export function getPendingSuggestionsOnline() {
   return pendingSuggestionsOnline;
+}
+
+const paragraphTokenAnchorsOnline = [];
+function resetParagraphTokenAnchorsOnline() {
+  paragraphTokenAnchorsOnline.length = 0;
+}
+function setParagraphTokenAnchorsOnline(paragraphIndex, anchors) {
+  paragraphTokenAnchorsOnline[paragraphIndex] = anchors;
+}
+
+function createParagraphTokenAnchors({
+  paragraphIndex,
+  originalText = "",
+  correctedText = "",
+  sourceTokens = [],
+  targetTokens = [],
+  documentOffset = 0,
+}) {
+  const safeOriginal = typeof originalText === "string" ? originalText : "";
+  const safeCorrected = typeof correctedText === "string" ? correctedText : "";
+  const normalizedSource = normalizeTokenList(sourceTokens, "s");
+  const normalizedTarget = normalizeTokenList(targetTokens, "t");
+  const entry = {
+    paragraphIndex,
+    documentOffset,
+    originalText: safeOriginal,
+    correctedText: safeCorrected,
+    sourceTokens: normalizedSource,
+    targetTokens: normalizedTarget,
+    sourceAnchors: mapTokensToParagraphText(
+      paragraphIndex,
+      safeOriginal,
+      normalizedSource,
+      documentOffset
+    ),
+    targetAnchors: mapTokensToParagraphText(
+      paragraphIndex,
+      safeCorrected,
+      normalizedTarget,
+      documentOffset
+    ),
+  };
+  setParagraphTokenAnchorsOnline(paragraphIndex, entry);
+  return entry;
+}
+
+function normalizeTokenList(tokens, prefix) {
+  if (!Array.isArray(tokens)) return [];
+  const normalized = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = normalizeToken(tokens[i], prefix, i);
+    if (token) normalized.push(token);
+  }
+  return normalized;
+}
+
+function normalizeToken(rawToken, prefix, index) {
+  if (rawToken === null || typeof rawToken === "undefined") return null;
+  if (typeof rawToken === "string") {
+    return {
+      id: `${prefix}${index + 1}`,
+      text: rawToken,
+      raw: rawToken,
+    };
+  }
+  if (typeof rawToken === "object") {
+    const idCandidate =
+      rawToken.token_id ??
+      rawToken.tokenId ??
+      rawToken.id ??
+      rawToken.ID ??
+      rawToken.name ??
+      rawToken.key;
+    const textCandidate =
+      rawToken.token ??
+      rawToken.text ??
+      rawToken.form ??
+      rawToken.value ??
+      rawToken.surface ??
+      rawToken.word;
+    const trailing =
+      rawToken.whitespace ??
+      rawToken.trailing_ws ??
+      rawToken.trailingWhitespace ??
+      rawToken.after ??
+      rawToken.space ??
+      "";
+    const leading =
+      rawToken.leading_ws ?? rawToken.leadingWhitespace ?? rawToken.before ?? rawToken.prefix ?? "";
+    return {
+      id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
+      text: typeof textCandidate === "string" ? textCandidate : "",
+      trailingWhitespace: typeof trailing === "string" ? trailing : "",
+      leadingWhitespace: typeof leading === "string" ? leading : "",
+      raw: rawToken,
+    };
+  }
+  return null;
+}
+
+function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documentOffset = 0) {
+  const byId = Object.create(null);
+  const ordered = [];
+  if (!Array.isArray(tokens) || !tokens.length) {
+    return { byId, ordered };
+  }
+  const safeParagraph = typeof paragraphText === "string" ? paragraphText : "";
+  let cursor = 0;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const tokenText = token?.text ?? "";
+    const tokenId = token?.id ?? `tok${i + 1}`;
+    const tokenLength = tokenText.length;
+    const charStart = resolveTokenPosition(safeParagraph, tokenText, cursor);
+    const charEnd = charStart >= 0 ? charStart + tokenLength : -1;
+
+    if (charStart >= 0) {
+      cursor = charEnd;
+    } else if (tokenText) {
+      warn("Token mapping failed", { paragraphIndex, tokenId, tokenText, cursor });
+    }
+
+    const anchor = {
+      paragraphIndex,
+      tokenId,
+      tokenIndex: i,
+      tokenText,
+      length: tokenLength,
+      charStart,
+      charEnd,
+      documentCharStart: charStart >= 0 ? documentOffset + charStart : -1,
+      documentCharEnd: charEnd >= 0 ? documentOffset + charEnd : -1,
+      matched: charStart >= 0,
+    };
+    byId[tokenId] = anchor;
+    ordered.push(anchor);
+  }
+
+  return { byId, ordered };
+}
+
+function resolveTokenPosition(text, tokenText, fromIndex) {
+  if (!tokenText || typeof text !== "string") return -1;
+  const textLength = text.length;
+  if (!textLength) return -1;
+  let searchStart = fromIndex;
+  if (searchStart < 0) searchStart = 0;
+  if (searchStart > textLength) searchStart = textLength;
+
+  let idx = text.indexOf(tokenText, searchStart);
+  if (idx !== -1) return idx;
+
+  const trimmed = tokenText.trim();
+  if (trimmed && trimmed !== tokenText) {
+    idx = text.indexOf(trimmed, searchStart);
+    if (idx !== -1) return idx;
+  }
+
+  if (searchStart > 0) {
+    const retryStart = Math.max(0, searchStart - tokenText.length - 1);
+    idx = text.indexOf(tokenText, retryStart);
+    if (idx !== -1) return idx;
+  }
+  return text.indexOf(tokenText);
+}
+
+function selectTokenAnchors(entry, type) {
+  if (!entry) return null;
+  return type === "target" ? entry.targetAnchors : entry.sourceAnchors;
+}
+
+function snapshotAnchor(anchor) {
+  if (!anchor) return undefined;
+  return {
+    tokenId: anchor.tokenId,
+    tokenIndex: anchor.tokenIndex,
+    charStart: anchor.charStart,
+    charEnd: anchor.charEnd,
+    documentCharStart: anchor.documentCharStart,
+    documentCharEnd: anchor.documentCharEnd,
+    length: anchor.length,
+    matched: anchor.matched,
+  };
+}
+
+function findAnchorsNearChar(entry, type, charIndex) {
+  const collection = selectTokenAnchors(entry, type);
+  if (!collection?.ordered?.length || typeof charIndex !== "number" || charIndex < 0) {
+    return { before: null, at: null, after: null };
+  }
+  let before = null;
+  for (let i = 0; i < collection.ordered.length; i++) {
+    const anchor = collection.ordered[i];
+    if (!anchor || anchor.charStart < 0) continue;
+    if (charIndex >= anchor.charStart && charIndex <= anchor.charEnd) {
+      return {
+        before: before ?? anchor,
+        at: anchor,
+        after: findNextAnchorWithPosition(collection.ordered, i + 1),
+      };
+    }
+    if (anchor.charStart > charIndex) {
+      return {
+        before,
+        at: null,
+        after: anchor,
+      };
+    }
+    before = anchor;
+  }
+  return { before, at: null, after: null };
+}
+
+function findNextAnchorWithPosition(list, startIndex) {
+  if (!Array.isArray(list)) return null;
+  for (let i = startIndex; i < list.length; i++) {
+    const anchor = list[i];
+    if (anchor && anchor.charStart >= 0) return anchor;
+  }
+  return null;
+}
+
+async function getRangeForCharacterSpan(context, paragraph, charStart, charEnd, reason = "span") {
+  if (!paragraph || typeof paragraph.getRange !== "function") return null;
+  if (!Number.isFinite(charStart) || charStart < 0) return null;
+  const safeStart = Math.max(0, Math.floor(charStart));
+  const length = Math.max(1, Math.floor((charEnd ?? safeStart + 1) - safeStart));
+  try {
+    const paragraphRange = paragraph.getRange();
+    paragraphRange.load("text");
+    await context.sync();
+    // eslint-disable-next-line office-addins/load-object-before-read
+    if (typeof paragraphRange.split === "function") {
+      const fragments = paragraphRange.split(safeStart, length);
+      fragments.load("items");
+      await context.sync();
+      if (fragments.items.length) {
+        return fragments.items[0];
+      }
+    }
+  } catch (err) {
+    warn(`getRangeForCharacterSpan(${reason}) failed`, err);
+  }
+  return null;
+}
+
+function buildDeleteSuggestionMetadata(entry, charIndex) {
+  const sourceAround = findAnchorsNearChar(entry, "source", charIndex);
+  const documentOffset = entry?.documentOffset ?? 0;
+  const charStart = charIndex;
+  const charEnd = charIndex + 1;
+  return {
+    kind: "delete",
+    paragraphIndex: entry?.paragraphIndex ?? -1,
+    charStart,
+    charEnd,
+    documentCharStart: documentOffset + charStart,
+    documentCharEnd: documentOffset + charEnd,
+    sourceTokenBefore: snapshotAnchor(sourceAround.before),
+    sourceTokenAt: snapshotAnchor(sourceAround.at),
+    sourceTokenAfter: snapshotAnchor(sourceAround.after),
+  };
+}
+
+function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharIndex }) {
+  const srcIndex = typeof originalCharIndex === "number" ? originalCharIndex : -1;
+  const targetIndex = typeof targetCharIndex === "number" ? targetCharIndex : srcIndex;
+  const sourceAround = findAnchorsNearChar(entry, "source", srcIndex);
+  const targetAround = findAnchorsNearChar(entry, "target", targetIndex);
+  const documentOffset = entry?.documentOffset ?? 0;
+  const highlightAnchor = sourceAround.before ?? sourceAround.at ?? sourceAround.after;
+  const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
+  const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
+
+  return {
+    kind: "insert",
+    paragraphIndex: entry?.paragraphIndex ?? -1,
+    targetCharStart: targetIndex,
+    targetCharEnd: targetIndex >= 0 ? targetIndex + 1 : targetIndex,
+    targetDocumentCharStart: targetIndex >= 0 ? documentOffset + targetIndex : targetIndex,
+    targetDocumentCharEnd: targetIndex >= 0 ? documentOffset + targetIndex + 1 : targetIndex,
+    highlightCharStart,
+    highlightCharEnd,
+    sourceTokenBefore: snapshotAnchor(sourceAround.before),
+    sourceTokenAt: snapshotAnchor(sourceAround.at),
+    sourceTokenAfter: snapshotAnchor(sourceAround.after),
+    targetTokenBefore: snapshotAnchor(targetAround.before),
+    targetTokenAt: snapshotAnchor(targetAround.at),
+    targetTokenAfter: snapshotAnchor(targetAround.after),
+  };
 }
 
 /** ─────────────────────────────────────────────────────────
@@ -70,12 +361,12 @@ function diffCommasOnly(original, corrected) {
       continue;
     }
     if (c === "," && o !== ",") {
-      ops.push({ kind: "insert", pos: j });
+      ops.push({ kind: "insert", pos: j, originalPos: i, correctedPos: j });
       j++;
       continue;
     }
     if (o === "," && c !== ",") {
-      ops.push({ kind: "delete", pos: i });
+      ops.push({ kind: "delete", pos: i, originalPos: i, correctedPos: j });
       i++;
       continue;
     }
@@ -203,12 +494,27 @@ async function highlightSuggestionOnline(
   original,
   corrected,
   op,
-  paragraphIndex
+  paragraphIndex,
+  paragraphAnchors
 ) {
   if (op.kind === "delete") {
-    return highlightDeleteSuggestion(context, paragraph, original, op, paragraphIndex);
+    return highlightDeleteSuggestion(
+      context,
+      paragraph,
+      original,
+      op,
+      paragraphIndex,
+      paragraphAnchors
+    );
   }
-  return highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex);
+  return highlightInsertSuggestion(
+    context,
+    paragraph,
+    corrected,
+    op,
+    paragraphIndex,
+    paragraphAnchors
+  );
 }
 
 function countCommasUpTo(text, pos) {
@@ -219,23 +525,28 @@ function countCommasUpTo(text, pos) {
   return count;
 }
 
-async function highlightDeleteSuggestion(context, paragraph, original, op, paragraphIndex) {
-  const ordinal = countCommasUpTo(original, op.pos);
-  if (ordinal <= 0) {
-    warn("highlight delete: no comma ordinal", op);
-    return false;
+async function highlightDeleteSuggestion(
+  context,
+  paragraph,
+  original,
+  op,
+  paragraphIndex,
+  anchorsEntry
+) {
+  const metadata = buildDeleteSuggestionMetadata(anchorsEntry, op.originalPos ?? op.pos);
+  let targetRange = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    metadata.charStart,
+    metadata.charEnd,
+    "highlight-delete"
+  );
+
+  if (!targetRange) {
+    targetRange = await findCommaRangeByOrdinal(context, paragraph, original, op);
+    if (!targetRange) return false;
   }
 
-  const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
-  commaSearch.load("items");
-  await context.sync();
-
-  if (!commaSearch.items.length || ordinal > commaSearch.items.length) {
-    warn("highlight delete: comma search out of range");
-    return false;
-  }
-
-  const targetRange = commaSearch.items[ordinal - 1];
   targetRange.font.highlightColor = HIGHLIGHT_DELETE;
   context.trackedObjects.add(targetRange);
   addPendingSuggestionOnline({
@@ -244,11 +555,32 @@ async function highlightDeleteSuggestion(context, paragraph, original, op, parag
     paragraphIndex,
     originalPos: op.pos,
     highlightRange: targetRange,
+    metadata,
   });
   return true;
 }
 
-async function highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex) {
+async function highlightInsertSuggestion(
+  context,
+  paragraph,
+  corrected,
+  op,
+  paragraphIndex,
+  anchorsEntry
+) {
+  const metadata = buildInsertSuggestionMetadata(anchorsEntry, {
+    originalCharIndex: op.originalPos ?? op.pos,
+    targetCharIndex: op.correctedPos ?? op.pos,
+  });
+
+  let range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    metadata.highlightCharStart,
+    metadata.highlightCharEnd,
+    "highlight-insert"
+  );
+
   const anchor = makeAnchor(corrected, op.pos);
   const rawLeft = anchor.left || "";
   const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
@@ -257,10 +589,9 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
 
   const lastWord = extractLastWord(rawLeft);
   let leftContext = rawLeft.slice(-20).replace(/[\r\n]+/g, " ");
-  let range = null;
   const searchOpts = { matchCase: false, matchWholeWord: false };
 
-  if (lastWord) {
+  if (!range && lastWord) {
     const wordSearch = paragraph.getRange().search(lastWord, {
       matchCase: false,
       matchWholeWord: true,
@@ -315,8 +646,25 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
     leftSnippet: leftSnippetStored,
     rightSnippet: rightSnippetStored,
     highlightRange: range,
+    metadata,
   });
   return true;
+}
+
+async function findCommaRangeByOrdinal(context, paragraph, original, op) {
+  const ordinal = countCommasUpTo(original, op.pos);
+  if (ordinal <= 0) {
+    warn("highlight delete: no comma ordinal", op);
+    return null;
+  }
+  const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
+  commaSearch.load("items");
+  await context.sync();
+  if (!commaSearch.items.length || ordinal > commaSearch.items.length) {
+    warn("highlight delete: comma search out of range");
+    return null;
+  }
+  return commaSearch.items[ordinal - 1];
 }
 
 function extractLastWord(text) {
@@ -324,7 +672,22 @@ function extractLastWord(text) {
   return match ? match[1] : "";
 }
 
-async function applyDeleteSuggestion(context, paragraph, suggestion) {
+async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
+  const meta = suggestion?.metadata;
+  if (!meta || !Number.isFinite(meta.charStart) || meta.charStart < 0) return false;
+  const range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    meta.charStart,
+    meta.charEnd,
+    "apply-delete"
+  );
+  if (!range) return false;
+  range.insertText("", Word.InsertLocation.replace);
+  return true;
+}
+
+async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
   const ordinal = countCommasUpTo(paragraph.text || "", suggestion.originalPos);
   if (ordinal <= 0) {
     warn("apply delete: no ordinal");
@@ -341,7 +704,61 @@ async function applyDeleteSuggestion(context, paragraph, suggestion) {
   commaSearch.items[idx].insertText("", Word.InsertLocation.replace);
 }
 
-async function applyInsertSuggestion(context, paragraph, suggestion) {
+async function applyDeleteSuggestion(context, paragraph, suggestion) {
+  if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
+  await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
+}
+
+function selectInsertAnchor(metadata) {
+  if (!metadata) return null;
+  const candidates = [
+    metadata.sourceTokenAfter
+      ? { anchor: metadata.sourceTokenAfter, location: Word.InsertLocation.before }
+      : null,
+    metadata.sourceTokenAt
+      ? { anchor: metadata.sourceTokenAt, location: Word.InsertLocation.after }
+      : null,
+    metadata.sourceTokenBefore
+      ? { anchor: metadata.sourceTokenBefore, location: Word.InsertLocation.after }
+      : null,
+    metadata.targetTokenBefore
+      ? { anchor: metadata.targetTokenBefore, location: Word.InsertLocation.before }
+      : null,
+    metadata.targetTokenAt
+      ? { anchor: metadata.targetTokenAt, location: Word.InsertLocation.before }
+      : null,
+    metadata.targetTokenAfter
+      ? { anchor: metadata.targetTokenAfter, location: Word.InsertLocation.before }
+      : null,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (
+      candidate?.anchor?.matched &&
+      Number.isFinite(candidate.anchor.charStart) &&
+      candidate.anchor.charStart >= 0
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
+  const anchorInfo = selectInsertAnchor(suggestion?.metadata);
+  if (!anchorInfo) return false;
+  const range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    anchorInfo.anchor.charStart,
+    anchorInfo.anchor.charEnd,
+    "apply-insert"
+  );
+  if (!range) return false;
+  range.insertText(",", anchorInfo.location);
+  return true;
+}
+
+async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
   const range = await findRangeForInsert(context, paragraph, suggestion);
   if (!range) {
     warn("apply insert: unable to locate range");
@@ -349,6 +766,11 @@ async function applyInsertSuggestion(context, paragraph, suggestion) {
   }
   const after = range.getRange("After");
   after.insertText(",", Word.InsertLocation.before);
+}
+
+async function applyInsertSuggestion(context, paragraph, suggestion) {
+  if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return;
+  await applyInsertSuggestionLegacy(context, paragraph, suggestion);
 }
 
 async function findRangeForInsert(context, paragraph, suggestion) {
@@ -581,28 +1003,62 @@ async function checkDocumentTextOnline() {
     await Word.run(async (context) => {
       await clearOnlineSuggestionMarkers(context);
       resetPendingSuggestionsOnline();
+      resetParagraphTokenAnchorsOnline();
 
       const paras = context.document.body.paragraphs;
       paras.load("items/text");
       await context.sync();
 
+      let documentCharOffset = 0;
+
       for (let idx = 0; idx < paras.items.length; idx++) {
         const p = paras.items[idx];
         const original = p.text || "";
         const trimmed = original.trim();
-        if (!trimmed) continue;
+        const paragraphDocOffset = documentCharOffset;
+        documentCharOffset += original.length + 1;
+        let paragraphAnchors = null;
+        if (!trimmed) {
+          paragraphAnchors = createParagraphTokenAnchors({
+            paragraphIndex: idx,
+            originalText: original,
+            correctedText: original,
+            sourceTokens: [],
+            targetTokens: [],
+            documentOffset: paragraphDocOffset,
+          });
+          continue;
+        }
 
         paragraphsProcessed++;
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
 
-        let corrected;
+        let detail;
         try {
-          corrected = await popraviPoved(original);
+          detail = await popraviPovedDetailed(original);
         } catch (apiErr) {
           apiErrors++;
           warn(`P${idx}: API call failed -> skip paragraph`, apiErr);
+          paragraphAnchors = createParagraphTokenAnchors({
+            paragraphIndex: idx,
+            originalText: original,
+            correctedText: original,
+            sourceTokens: [],
+            targetTokens: [],
+            documentOffset: paragraphDocOffset,
+          });
           continue;
         }
+        const corrected = detail.correctedText;
+
+        paragraphAnchors = createParagraphTokenAnchors({
+          paragraphIndex: idx,
+          originalText: original,
+          correctedText: corrected,
+          sourceTokens: detail.sourceTokens,
+          targetTokens: detail.targetTokens,
+          documentOffset: paragraphDocOffset,
+        });
 
         if (!onlyCommasChanged(original, corrected)) {
           log(`P${idx}: API changed more than commas -> SKIP`);
@@ -613,7 +1069,15 @@ async function checkDocumentTextOnline() {
         if (!ops.length) continue;
 
         for (const op of ops) {
-          const marked = await highlightSuggestionOnline(context, p, original, corrected, op, idx);
+          const marked = await highlightSuggestionOnline(
+            context,
+            p,
+            original,
+            corrected,
+            op,
+            idx,
+            paragraphAnchors
+          );
           if (marked) suggestions++;
         }
       }
