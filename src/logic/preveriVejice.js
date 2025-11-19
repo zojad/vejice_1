@@ -242,17 +242,20 @@ async function highlightDeleteSuggestion(context, paragraph, original, op, parag
     id: createSuggestionId("del", paragraphIndex, op.pos),
     kind: "delete",
     paragraphIndex,
-    position: op.pos,
-    range: targetRange,
-    originalText: original,
+    commaOrdinal: ordinal,
+    highlightRange: targetRange,
   });
   return true;
 }
 
 async function highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex) {
   const anchor = makeAnchor(corrected, op.pos);
-  let leftContext = anchor.left || "";
-  leftContext = leftContext.slice(-12).replace(/[\r\n]+/g, " ");
+  const rawLeft = anchor.left || "";
+  const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 16);
+  const leftSnippetStored = rawLeft.slice(-20);
+  const rightSnippetStored = rawRight.slice(0, 20);
+
+  let leftContext = rawLeft.slice(-12).replace(/[\r\n]+/g, " ");
   let range = null;
   const searchOpts = { matchCase: false, matchWholeWord: false };
 
@@ -266,8 +269,8 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
   }
 
   if (!range) {
-    let rightSnippet = (anchor.right || corrected.slice(op.pos, op.pos + 8)).trim();
-    rightSnippet = rightSnippet.replace(/,/g, "").slice(0, 8).trim();
+    let rightSnippet = rightSnippetStored.replace(/,/g, "").trim();
+    rightSnippet = rightSnippet.slice(0, 8);
     if (rightSnippet) {
       const rightSearch = paragraph.getRange().search(rightSnippet, searchOpts);
       rightSearch.load("items");
@@ -295,11 +298,65 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
     id: createSuggestionId("ins", paragraphIndex, op.pos),
     kind: "insert",
     paragraphIndex,
-    position: op.pos,
-    range,
-    correctedText: corrected,
+    leftSnippet: leftSnippetStored,
+    rightSnippet: rightSnippetStored,
+    highlightRange: range,
   });
   return true;
+}
+
+async function applyDeleteSuggestion(context, paragraph, suggestion) {
+  const ordinal = suggestion.commaOrdinal;
+  if (!ordinal || ordinal <= 0) return;
+  const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
+  commaSearch.load("items");
+  await context.sync();
+  const idx = ordinal - 1;
+  if (!commaSearch.items.length || idx >= commaSearch.items.length) {
+    warn("apply delete: ordinal out of range");
+    return;
+  }
+  commaSearch.items[idx].insertText("", Word.InsertLocation.replace);
+}
+
+async function applyInsertSuggestion(context, paragraph, suggestion) {
+  const range = await findRangeForInsert(context, paragraph, suggestion);
+  if (!range) {
+    warn("apply insert: unable to locate range");
+    return;
+  }
+  const after = range.getRange("After");
+  after.insertText(",", Word.InsertLocation.before);
+}
+
+async function findRangeForInsert(context, paragraph, suggestion) {
+  const searchOpts = { matchCase: false, matchWholeWord: false };
+  let leftFrag = (suggestion.leftSnippet || "").slice(-12).replace(/[\r\n]+/g, " ");
+  let range = null;
+
+  if (leftFrag) {
+    const leftSearch = paragraph.getRange().search(leftFrag, searchOpts);
+    leftSearch.load("items");
+    await context.sync();
+    if (leftSearch.items.length) {
+      range = leftSearch.items[leftSearch.items.length - 1];
+    }
+  }
+
+  if (!range) {
+    let rightFrag = (suggestion.rightSnippet || "").replace(/,/g, "").trim();
+    rightFrag = rightFrag.slice(0, 8);
+    if (rightFrag) {
+      const rightSearch = paragraph.getRange().search(rightFrag, searchOpts);
+      rightSearch.load("items");
+      await context.sync();
+      if (rightSearch.items.length) {
+        range = rightSearch.items[0];
+      }
+    }
+  }
+
+  return range;
 }
 
 async function clearOnlineSuggestionMarkers(context) {
@@ -309,8 +366,10 @@ async function clearOnlineSuggestionMarkers(context) {
   }
   for (const sug of pendingSuggestionsOnline) {
     try {
-      sug.range.font.highlightColor = null;
-      context.trackedObjects.remove(sug.range);
+      if (sug.highlightRange) {
+        sug.highlightRange.font.highlightColor = null;
+        context.trackedObjects.remove(sug.highlightRange);
+      }
     } catch (err) {
       warn("Failed to clear highlight", err);
     }
@@ -322,21 +381,23 @@ async function clearOnlineSuggestionMarkers(context) {
 export async function applyAllSuggestionsOnline() {
   if (!pendingSuggestionsOnline.length) return;
   await Word.run(async (context) => {
+    const paras = context.document.body.paragraphs;
+    paras.load("items/text");
+    await context.sync();
+
     for (const sug of pendingSuggestionsOnline) {
+      const p = paras.items[sug.paragraphIndex];
+      if (!p) continue;
       try {
-        context.trackedObjects.add(sug.range);
         if (sug.kind === "delete") {
-          sug.range.insertText("", Word.InsertLocation.replace);
+          await applyDeleteSuggestion(context, p, sug);
         } else {
-          const after = sug.range.getRange("After");
-          after.insertText(",", Word.InsertLocation.before);
+          await applyInsertSuggestion(context, p, sug);
         }
-        sug.range.font.highlightColor = null;
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
     }
-    await context.sync();
     await clearOnlineSuggestionMarkers(context);
   });
 }
