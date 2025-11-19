@@ -256,24 +256,57 @@ function findNextAnchorWithPosition(list, startIndex) {
   return null;
 }
 
-async function getRangeForCharacterSpan(context, paragraph, charStart, charEnd, reason = "span") {
+function countSnippetOccurrencesBefore(text, snippet, limit) {
+  if (!snippet) return 0;
+  const safeText = typeof text === "string" ? text : "";
+  const hop = Math.max(1, snippet.length);
+  let count = 0;
+  let idx = safeText.indexOf(snippet);
+  while (idx !== -1 && idx < limit) {
+    count++;
+    idx = safeText.indexOf(snippet, idx + hop);
+  }
+  return count;
+}
+
+async function getRangeForCharacterSpan(
+  context,
+  paragraph,
+  paragraphText,
+  charStart,
+  charEnd,
+  reason = "span",
+  fallbackSnippet
+) {
   if (!paragraph || typeof paragraph.getRange !== "function") return null;
   if (!Number.isFinite(charStart) || charStart < 0) return null;
-  const safeStart = Math.max(0, Math.floor(charStart));
-  const length = Math.max(1, Math.floor((charEnd ?? safeStart + 1) - safeStart));
+  const text = typeof paragraphText === "string" ? paragraphText : paragraph.text || "";
+  if (!text) return null;
+  const safeStart = Math.max(0, Math.min(Math.floor(charStart), text.length ? text.length - 1 : 0));
+  const computedEnd = Math.max(safeStart + 1, Math.floor(charEnd ?? safeStart + 1));
+  const safeEnd = Math.min(computedEnd, text.length);
+  let snippet = text.slice(safeStart, safeEnd);
+  if (!snippet && typeof fallbackSnippet === "string" && fallbackSnippet.length) {
+    snippet = fallbackSnippet;
+  }
+  if (!snippet) return null;
+
   try {
-    const paragraphRange = paragraph.getRange();
-    paragraphRange.load("text");
+    const matches = paragraph.getRange().search(snippet, {
+      matchCase: true,
+      matchWholeWord: false,
+      ignoreSpace: false,
+      ignorePunct: false,
+    });
+    matches.load("items");
     await context.sync();
-    // eslint-disable-next-line office-addins/load-object-before-read
-    if (typeof paragraphRange.split === "function") {
-      const fragments = paragraphRange.split(safeStart, length);
-      fragments.load("items");
-      await context.sync();
-      if (fragments.items.length) {
-        return fragments.items[0];
-      }
+    if (!matches.items.length) {
+      warn(`getRangeForCharacterSpan(${reason}): snippet not found`, { snippet, safeStart });
+      return null;
     }
+    const occurrence = countSnippetOccurrencesBefore(text, snippet, safeStart);
+    const idx = Math.min(occurrence, matches.items.length - 1);
+    return matches.items[idx];
   } catch (err) {
     warn(`getRangeForCharacterSpan(${reason}) failed`, err);
   }
@@ -283,8 +316,10 @@ async function getRangeForCharacterSpan(context, paragraph, charStart, charEnd, 
 function buildDeleteSuggestionMetadata(entry, charIndex) {
   const sourceAround = findAnchorsNearChar(entry, "source", charIndex);
   const documentOffset = entry?.documentOffset ?? 0;
-  const charStart = charIndex;
-  const charEnd = charIndex + 1;
+  const charStart = Math.max(0, charIndex);
+  const charEnd = charStart + 1;
+  const paragraphText = entry?.originalText ?? "";
+  const highlightText = paragraphText.slice(charStart, charEnd) || ",";
   return {
     kind: "delete",
     paragraphIndex: entry?.paragraphIndex ?? -1,
@@ -295,6 +330,7 @@ function buildDeleteSuggestionMetadata(entry, charIndex) {
     sourceTokenBefore: snapshotAnchor(sourceAround.before),
     sourceTokenAt: snapshotAnchor(sourceAround.at),
     sourceTokenAfter: snapshotAnchor(sourceAround.after),
+    highlightText,
   };
 }
 
@@ -307,6 +343,14 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const highlightAnchor = sourceAround.before ?? sourceAround.at ?? sourceAround.after;
   const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
+  const paragraphText = entry?.originalText ?? "";
+  let highlightText = "";
+  if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {
+    highlightText = paragraphText.slice(highlightCharStart, highlightCharEnd);
+  }
+  if (!highlightText && highlightCharStart >= 0) {
+    highlightText = paragraphText.slice(highlightCharStart, highlightCharStart + 1);
+  }
 
   return {
     kind: "insert",
@@ -317,6 +361,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetDocumentCharEnd: targetIndex >= 0 ? documentOffset + targetIndex + 1 : targetIndex,
     highlightCharStart,
     highlightCharEnd,
+    highlightText,
     sourceTokenBefore: snapshotAnchor(sourceAround.before),
     sourceTokenAt: snapshotAnchor(sourceAround.at),
     sourceTokenAfter: snapshotAnchor(sourceAround.after),
@@ -537,9 +582,11 @@ async function highlightDeleteSuggestion(
   let targetRange = await getRangeForCharacterSpan(
     context,
     paragraph,
+    original,
     metadata.charStart,
     metadata.charEnd,
-    "highlight-delete"
+    "highlight-delete",
+    metadata.highlightText
   );
 
   if (!targetRange) {
@@ -576,9 +623,11 @@ async function highlightInsertSuggestion(
   let range = await getRangeForCharacterSpan(
     context,
     paragraph,
+    anchorsEntry?.originalText ?? corrected,
     metadata.highlightCharStart,
     metadata.highlightCharEnd,
-    "highlight-insert"
+    "highlight-insert",
+    metadata.highlightText
   );
 
   const anchor = makeAnchor(corrected, op.pos);
@@ -678,9 +727,11 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   const range = await getRangeForCharacterSpan(
     context,
     paragraph,
+    paragraph.text,
     meta.charStart,
     meta.charEnd,
-    "apply-delete"
+    "apply-delete",
+    meta.highlightText
   );
   if (!range) return false;
   range.insertText("", Word.InsertLocation.replace);
@@ -749,9 +800,11 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const range = await getRangeForCharacterSpan(
     context,
     paragraph,
+    paragraph.text,
     anchorInfo.anchor.charStart,
     anchorInfo.anchor.charEnd,
-    "apply-insert"
+    "apply-insert",
+    anchorInfo.anchor.tokenText || suggestion?.metadata?.highlightText
   );
   if (!range) return false;
   range.insertText(",", anchorInfo.location);
@@ -851,6 +904,10 @@ export async function applyAllSuggestionsOnline() {
         } else {
           await applyInsertSuggestion(context, p, sug);
         }
+        p.load("text");
+        // Keep paragraph.text up-to-date for subsequent metadata lookups.
+        // eslint-disable-next-line office-addins/no-context-sync-in-loop
+        await context.sync();
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
