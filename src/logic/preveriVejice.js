@@ -252,7 +252,7 @@ async function highlightDeleteSuggestion(context, paragraph, original, op, parag
 async function highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex) {
   const anchor = makeAnchor(corrected, op.pos);
   let leftContext = anchor.left || "";
-  leftContext = leftContext.slice(-8).trim();
+  leftContext = leftContext.slice(-12).replace(/[\r\n]+/g, " ");
   let range = null;
   const searchOpts = { matchCase: false, matchWholeWord: false };
 
