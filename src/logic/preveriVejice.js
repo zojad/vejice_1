@@ -242,7 +242,7 @@ async function highlightDeleteSuggestion(context, paragraph, original, op, parag
     id: createSuggestionId("del", paragraphIndex, op.pos),
     kind: "delete",
     paragraphIndex,
-    commaOrdinal: ordinal,
+    originalPos: op.pos,
     highlightRange: targetRange,
   });
   return true;
@@ -251,16 +251,29 @@ async function highlightDeleteSuggestion(context, paragraph, original, op, parag
 async function highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex) {
   const anchor = makeAnchor(corrected, op.pos);
   const rawLeft = anchor.left || "";
-  const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 16);
-  const leftSnippetStored = rawLeft.slice(-20);
-  const rightSnippetStored = rawRight.slice(0, 20);
+  const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
+  const leftSnippetStored = rawLeft.slice(-40);
+  const rightSnippetStored = rawRight.slice(0, 40);
 
-  let leftContext = rawLeft.slice(-12).replace(/[\r\n]+/g, " ");
+  const lastWord = extractLastWord(rawLeft);
+  let leftContext = rawLeft.slice(-20).replace(/[\r\n]+/g, " ");
   let range = null;
   const searchOpts = { matchCase: false, matchWholeWord: false };
 
-  if (leftContext) {
-    const leftSearch = paragraph.getRange().search(leftContext, searchOpts);
+  if (lastWord) {
+    const wordSearch = paragraph.getRange().search(lastWord, {
+      matchCase: false,
+      matchWholeWord: true,
+    });
+    wordSearch.load("items");
+    await context.sync();
+    if (wordSearch.items.length) {
+      range = wordSearch.items[wordSearch.items.length - 1];
+    }
+  }
+
+  if (!range && leftContext.trim()) {
+    const leftSearch = paragraph.getRange().search(leftContext.trim(), searchOpts);
     leftSearch.load("items");
     await context.sync();
     if (leftSearch.items.length) {
@@ -298,6 +311,7 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
     id: createSuggestionId("ins", paragraphIndex, op.pos),
     kind: "insert",
     paragraphIndex,
+    leftWord: lastWord,
     leftSnippet: leftSnippetStored,
     rightSnippet: rightSnippetStored,
     highlightRange: range,
@@ -305,9 +319,17 @@ async function highlightInsertSuggestion(context, paragraph, corrected, op, para
   return true;
 }
 
+function extractLastWord(text) {
+  const match = text.match(/([\p{L}\d]+)[^\p{L}\d]*$/u);
+  return match ? match[1] : "";
+}
+
 async function applyDeleteSuggestion(context, paragraph, suggestion) {
-  const ordinal = suggestion.commaOrdinal;
-  if (!ordinal || ordinal <= 0) return;
+  const ordinal = countCommasUpTo(paragraph.text || "", suggestion.originalPos);
+  if (ordinal <= 0) {
+    warn("apply delete: no ordinal");
+    return;
+  }
   const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
   commaSearch.load("items");
   await context.sync();
@@ -331,11 +353,24 @@ async function applyInsertSuggestion(context, paragraph, suggestion) {
 
 async function findRangeForInsert(context, paragraph, suggestion) {
   const searchOpts = { matchCase: false, matchWholeWord: false };
-  let leftFrag = (suggestion.leftSnippet || "").slice(-12).replace(/[\r\n]+/g, " ");
   let range = null;
 
-  if (leftFrag) {
-    const leftSearch = paragraph.getRange().search(leftFrag, searchOpts);
+  if (suggestion.leftWord) {
+    const wordSearch = paragraph.getRange().search(suggestion.leftWord, {
+      matchCase: false,
+      matchWholeWord: true,
+    });
+    wordSearch.load("items");
+    await context.sync();
+    if (wordSearch.items.length) {
+      range = wordSearch.items[wordSearch.items.length - 1];
+    }
+  }
+
+  let leftFrag = (suggestion.leftSnippet || "").slice(-20).replace(/[\r\n]+/g, " ");
+
+  if (!range && leftFrag.trim()) {
+    const leftSearch = paragraph.getRange().search(leftFrag.trim(), searchOpts);
     leftSearch.load("items");
     await context.sync();
     if (leftSearch.items.length) {
