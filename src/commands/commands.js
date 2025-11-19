@@ -1,7 +1,12 @@
 /* global Office, Word, window, process, performance, console, URLSearchParams */
 
 // Wire your checker and expose globals the manifest calls.
-import { checkDocumentText as runCheckVejice } from "../logic/preveriVejice.js";
+import {
+  checkDocumentText as runCheckVejice,
+  applyAllSuggestionsOnline,
+  rejectAllSuggestionsOnline,
+} from "../logic/preveriVejice.js";
+import { isWordOnline } from "../utils/host.js";
 
 const envIsProd = () =>
   (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
@@ -92,22 +97,27 @@ window.acceptAllChanges = async (event) => {
   const t0 = tnow();
   log("CLICK: Sprejmi spremembe (acceptAllChanges)");
   try {
-    if (!revisionsApiSupported()) {
-      throw new Error("Revisions API is not available on this host");
+    if (isWordOnline()) {
+      await applyAllSuggestionsOnline();
+      log("Applied online suggestions |", Math.round(tnow() - t0), "ms");
+    } else {
+      if (!revisionsApiSupported()) {
+        throw new Error("Revisions API is not available on this host");
+      }
+      await Word.run(async (context) => {
+        const revisions = context.document.revisions;
+        revisions.load("items");
+        await context.sync();
+
+        const count = revisions.items.length;
+        log("Revisions to accept:", count);
+
+        revisions.items.forEach((rev) => rev.accept());
+        await context.sync();
+
+        log("Accepted revisions:", count, "|", Math.round(tnow() - t0), "ms");
+      });
     }
-    await Word.run(async (context) => {
-      const revisions = context.document.revisions;
-      revisions.load("items");
-      await context.sync();
-
-      const count = revisions.items.length;
-      log("Revisions to accept:", count);
-
-      revisions.items.forEach((rev) => rev.accept());
-      await context.sync();
-
-      log("Accepted revisions:", count, "|", Math.round(tnow() - t0), "ms");
-    });
   } catch (err) {
     if (err?.message?.includes("Revisions API is not available")) {
       errL("acceptAllChanges skipped: revisions API is not available on this host");
@@ -124,22 +134,27 @@ window.rejectAllChanges = async (event) => {
   const t0 = tnow();
   log("CLICK: Zavrni spremembe (rejectAllChanges)");
   try {
-    if (!revisionsApiSupported()) {
-      throw new Error("Revisions API is not available on this host");
+    if (isWordOnline()) {
+      await rejectAllSuggestionsOnline();
+      log("Cleared online suggestions |", Math.round(tnow() - t0), "ms");
+    } else {
+      if (!revisionsApiSupported()) {
+        throw new Error("Revisions API is not available on this host");
+      }
+      await Word.run(async (context) => {
+        const revisions = context.document.revisions;
+        revisions.load("items");
+        await context.sync();
+
+        const count = revisions.items.length;
+        log("Revisions to reject:", count);
+
+        revisions.items.forEach((rev) => rev.reject());
+        await context.sync();
+
+        log("Rejected revisions:", count, "|", Math.round(tnow() - t0), "ms");
+      });
     }
-    await Word.run(async (context) => {
-      const revisions = context.document.revisions;
-      revisions.load("items");
-      await context.sync();
-
-      const count = revisions.items.length;
-      log("Revisions to reject:", count);
-
-      revisions.items.forEach((rev) => rev.reject());
-      await context.sync();
-
-      log("Rejected revisions:", count, "|", Math.round(tnow() - t0), "ms");
-    });
   } catch (err) {
     if (err?.message?.includes("Revisions API is not available")) {
       errL("rejectAllChanges skipped: revisions API is not available on this host");

@@ -1,5 +1,6 @@
-/* global Word, window, process, performance, console */
+/* global Word, window, process, performance, console, Office */
 import { popraviPoved } from "../api/apiVejice.js";
+import { isWordOnline } from "../utils/host.js";
 
 /** ─────────────────────────────────────────────────────────
  *  DEBUG helpers (flip DEBUG=false to silence logs)
@@ -17,7 +18,22 @@ const warn = (...a) => DEBUG && console.warn("[Vejice CHECK]", ...a);
 const errL = (...a) => console.error("[Vejice CHECK]", ...a);
 const tnow = () => performance?.now?.() ?? Date.now();
 const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
-const MAX_AUTOFIX_PASSES = typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
+const MAX_AUTOFIX_PASSES =
+  typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
+
+const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
+const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
+
+const pendingSuggestionsOnline = [];
+function resetPendingSuggestionsOnline() {
+  pendingSuggestionsOnline.length = 0;
+}
+function addPendingSuggestionOnline(suggestion) {
+  pendingSuggestionsOnline.push(suggestion);
+}
+export function getPendingSuggestionsOnline() {
+  return pendingSuggestionsOnline;
+}
 
 /** ─────────────────────────────────────────────────────────
  *  Helpers: znaki & pravila
@@ -177,10 +193,149 @@ async function deleteCommaAt(context, paragraph, original, atOriginalPos) {
   matches.items[idx].insertText("", Word.InsertLocation.replace);
 }
 
+function createSuggestionId(kind, paragraphIndex, pos) {
+  return `${kind}-${paragraphIndex}-${pos}-${pendingSuggestionsOnline.length}`;
+}
+
+async function highlightSuggestionOnline(
+  context,
+  paragraph,
+  original,
+  corrected,
+  op,
+  paragraphIndex
+) {
+  if (op.kind === "delete") {
+    return highlightDeleteSuggestion(context, paragraph, original, op, paragraphIndex);
+  }
+  return highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex);
+}
+
+function countCommasUpTo(text, pos) {
+  let count = 0;
+  for (let i = 0; i <= pos && i < text.length; i++) {
+    if (text[i] === ",") count++;
+  }
+  return count;
+}
+
+async function highlightDeleteSuggestion(context, paragraph, original, op, paragraphIndex) {
+  const ordinal = countCommasUpTo(original, op.pos);
+  if (ordinal <= 0) {
+    warn("highlight delete: no comma ordinal", op);
+    return false;
+  }
+
+  const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
+  commaSearch.load("items");
+  await context.sync();
+
+  if (!commaSearch.items.length || ordinal > commaSearch.items.length) {
+    warn("highlight delete: comma search out of range");
+    return false;
+  }
+
+  const targetRange = commaSearch.items[ordinal - 1];
+  targetRange.font.highlightColor = HIGHLIGHT_DELETE;
+  context.trackedObjects.add(targetRange);
+  addPendingSuggestionOnline({
+    id: createSuggestionId("del", paragraphIndex, op.pos),
+    kind: "delete",
+    paragraphIndex,
+    position: op.pos,
+    range: targetRange,
+    originalText: original,
+  });
+  return true;
+}
+
+async function highlightInsertSuggestion(context, paragraph, corrected, op, paragraphIndex) {
+  const anchor = makeAnchor(corrected, op.pos);
+  let leftContext = anchor.left || "";
+  leftContext = leftContext.slice(-8).trim();
+  let range = null;
+  const searchOpts = { matchCase: false, matchWholeWord: false };
+
+  if (leftContext) {
+    const leftSearch = paragraph.getRange().search(leftContext, searchOpts);
+    leftSearch.load("items");
+    await context.sync();
+    if (leftSearch.items.length) {
+      range = leftSearch.items[leftSearch.items.length - 1];
+    }
+  }
+
+  if (!range) {
+    let rightSnippet = (anchor.right || corrected.slice(op.pos, op.pos + 8)).trim();
+    rightSnippet = rightSnippet.replace(/,/g, "").slice(0, 8).trim();
+    if (rightSnippet) {
+      const rightSearch = paragraph.getRange().search(rightSnippet, searchOpts);
+      rightSearch.load("items");
+      await context.sync();
+      if (rightSearch.items.length) {
+        range = rightSearch.items[0];
+      }
+    }
+  }
+
+  if (!range) {
+    warn("highlight insert: could not locate snippet");
+    return false;
+  }
+
+  range.font.highlightColor = HIGHLIGHT_INSERT;
+  context.trackedObjects.add(range);
+  addPendingSuggestionOnline({
+    id: createSuggestionId("ins", paragraphIndex, op.pos),
+    kind: "insert",
+    paragraphIndex,
+    position: op.pos,
+    range,
+    correctedText: corrected,
+  });
+  return true;
+}
+
+async function clearOnlineSuggestionMarkers(context) {
+  if (!pendingSuggestionsOnline.length) {
+    context.document.body.font.highlightColor = null;
+    return;
+  }
+  for (const sug of pendingSuggestionsOnline) {
+    try {
+      sug.range.font.highlightColor = null;
+      context.trackedObjects.remove(sug.range);
+    } catch (err) {
+      warn("Failed to clear highlight", err);
+    }
+  }
+  await context.sync();
+  resetPendingSuggestionsOnline();
+}
+
+export async function applyAllSuggestionsOnline() {
+  await checkDocumentTextDesktop();
+  await Word.run(async (context) => {
+    await clearOnlineSuggestionMarkers(context);
+  });
+}
+
+export async function rejectAllSuggestionsOnline() {
+  await Word.run(async (context) => {
+    await clearOnlineSuggestionMarkers(context);
+  });
+}
 /** ─────────────────────────────────────────────────────────
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih
  *  ───────────────────────────────────────────────────────── */
 export async function checkDocumentText() {
+  if (isWordOnline()) {
+    return checkDocumentTextOnline();
+  }
+  return checkDocumentTextDesktop();
+}
+
+async function checkDocumentTextDesktop() {
   log("START checkDocumentText()");
   let totalInserted = 0;
   let totalDeleted = 0;
@@ -240,9 +395,7 @@ export async function checkDocumentText() {
 
             const opsAll = diffCommasOnly(passText, corrected);
             const ops = filterCommaOps(passText, corrected, opsAll);
-            log(
-              `P${idx} pass ${pass}: ops candidate=${opsAll.length}, after filter=${ops.length}`
-            );
+            log(`P${idx} pass ${pass}: ops candidate=${opsAll.length}, after filter=${ops.length}`);
 
             if (!ops.length) {
               if (pass === 0) log(`P${idx}: no applicable comma ops`);
@@ -260,8 +413,10 @@ export async function checkDocumentText() {
               }
             }
 
+            // eslint-disable-next-line office-addins/no-context-sync-in-loop
             await context.sync();
             p.load("text");
+            // eslint-disable-next-line office-addins/no-context-sync-in-loop
             await context.sync();
             const updated = p.text || "";
             if (!updated || updated === passText) break;
@@ -296,5 +451,68 @@ export async function checkDocumentText() {
     );
   } catch (e) {
     errL("ERROR in checkDocumentText:", e);
+  }
+}
+
+async function checkDocumentTextOnline() {
+  log("START checkDocumentTextOnline()");
+  let paragraphsProcessed = 0;
+  let suggestions = 0;
+  let apiErrors = 0;
+
+  try {
+    await Word.run(async (context) => {
+      await clearOnlineSuggestionMarkers(context);
+      resetPendingSuggestionsOnline();
+
+      const paras = context.document.body.paragraphs;
+      paras.load("items/text");
+      await context.sync();
+
+      for (let idx = 0; idx < paras.items.length; idx++) {
+        const p = paras.items[idx];
+        const original = p.text || "";
+        const trimmed = original.trim();
+        if (!trimmed) continue;
+
+        paragraphsProcessed++;
+        log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
+
+        let corrected;
+        try {
+          corrected = await popraviPoved(original);
+        } catch (apiErr) {
+          apiErrors++;
+          warn(`P${idx}: API call failed -> skip paragraph`, apiErr);
+          continue;
+        }
+
+        if (!onlyCommasChanged(original, corrected)) {
+          log(`P${idx}: API changed more than commas -> SKIP`);
+          continue;
+        }
+
+        const ops = filterCommaOps(original, corrected, diffCommasOnly(original, corrected));
+        if (!ops.length) continue;
+
+        for (const op of ops) {
+          const marked = await highlightSuggestionOnline(context, p, original, corrected, op, idx);
+          if (marked) suggestions++;
+        }
+      }
+
+      await context.sync();
+    });
+
+    log(
+      "DONE checkDocumentTextOnline() | paragraphs:",
+      paragraphsProcessed,
+      "| suggestions:",
+      suggestions,
+      "| apiErrors:",
+      apiErrors
+    );
+  } catch (e) {
+    errL("ERROR in checkDocumentTextOnline:", e);
   }
 }

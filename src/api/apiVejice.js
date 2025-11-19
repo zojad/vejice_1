@@ -158,9 +158,9 @@ export async function popraviPoved(poved) {
       Array.isArray(d.corrections) ? d.corrections[0]?.suggested_text : undefined,
       Array.isArray(d.apply_corrections) ? d.apply_corrections[0]?.suggested_text : undefined,
     ];
-    const out = candidateTexts
-      .map((txt) => (typeof txt === "string" ? txt.trim() : ""))
-      .find((txt) => txt) || poved;
+    const out =
+      candidateTexts.map((txt) => (typeof txt === "string" ? txt.trim() : "")).find((txt) => txt) ||
+      poved;
 
     log(
       "OK",
