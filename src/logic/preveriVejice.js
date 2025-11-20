@@ -360,17 +360,15 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const sourceAround = findAnchorsNearChar(entry, "source", srcIndex);
   const targetAround = findAnchorsNearChar(entry, "target", targetIndex);
   const documentOffset = entry?.documentOffset ?? 0;
-  const highlightAnchorTarget =
+  const highlightAnchor =
+    sourceAround.after ??
+    sourceAround.at ??
+    sourceAround.before ??
     targetAround.before ??
     targetAround.at ??
-    targetAround.after ??
-    sourceAround.before ??
-    sourceAround.at ??
-    sourceAround.after;
-  const highlightCharStart =
-    highlightAnchorTarget?.charStart ?? sourceAround.before?.charStart ?? srcIndex;
-  const highlightCharEnd =
-    highlightAnchorTarget?.charEnd ?? sourceAround.before?.charEnd ?? srcIndex;
+    targetAround.after;
+  const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
+  const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
   const paragraphText = entry?.originalText ?? "";
   let highlightText = "";
   if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {
@@ -396,7 +394,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetTokenBefore: snapshotAnchor(targetAround.before),
     targetTokenAt: snapshotAnchor(targetAround.at),
     targetTokenAfter: snapshotAnchor(targetAround.after),
-    highlightAnchorTarget: snapshotAnchor(highlightAnchorTarget),
+    highlightAnchorTarget: snapshotAnchor(highlightAnchor),
   };
 }
 
@@ -650,16 +648,6 @@ async function highlightInsertSuggestion(
     targetCharIndex: op.correctedPos ?? op.pos,
   });
 
-  let range = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    anchorsEntry?.originalText ?? corrected,
-    metadata.highlightCharStart,
-    metadata.highlightCharEnd,
-    "highlight-insert",
-    metadata.highlightText
-  );
-
   const anchor = makeAnchor(corrected, op.pos);
   const rawLeft = anchor.left || "";
   const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
@@ -669,6 +657,7 @@ async function highlightInsertSuggestion(
   const lastWord = extractLastWord(rawLeft);
   let leftContext = rawLeft.slice(-20).replace(/[\r\n]+/g, " ");
   const searchOpts = { matchCase: false, matchWholeWord: false };
+  let range = null;
 
   if (!range && lastWord) {
     const wordSearch = paragraph.getRange().search(lastWord, {
@@ -706,7 +695,16 @@ async function highlightInsertSuggestion(
 
   if (!range) {
     warn("highlight insert: could not locate snippet");
-    return false;
+    range = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      anchorsEntry?.originalText ?? corrected,
+      metadata.highlightCharStart,
+      metadata.highlightCharEnd,
+      "highlight-insert",
+      metadata.highlightText
+    );
+    if (!range) return false;
   }
 
   try {
@@ -792,48 +790,57 @@ async function applyDeleteSuggestion(context, paragraph, suggestion) {
   await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
 }
 
+function selectInsertAnchor(meta) {
+  if (!meta) return null;
+  const candidates = [
+    meta.sourceTokenAfter
+      ? { anchor: meta.sourceTokenAfter, location: Word.InsertLocation.before }
+      : null,
+    meta.sourceTokenAt ? { anchor: meta.sourceTokenAt, location: Word.InsertLocation.after } : null,
+    meta.sourceTokenBefore
+      ? { anchor: meta.sourceTokenBefore, location: Word.InsertLocation.after }
+      : null,
+    meta.targetTokenBefore
+      ? { anchor: meta.targetTokenBefore, location: Word.InsertLocation.before }
+      : null,
+    meta.targetTokenAt ? { anchor: meta.targetTokenAt, location: Word.InsertLocation.after } : null,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (
+      candidate?.anchor?.matched &&
+      Number.isFinite(candidate.anchor.charStart) &&
+      candidate.anchor.charStart >= 0
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   if (!meta) return false;
+  const anchorInfo = selectInsertAnchor(meta);
+  if (!anchorInfo) return false;
   const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
-  let highlightRange = null;
-
-  if (meta.highlightAnchorTarget?.tokenText) {
-    const tokenText = meta.highlightAnchorTarget.tokenText;
-    try {
-      const targetMatches = paragraph.getRange().search(tokenText, {
-        matchCase: true,
-        matchWholeWord: false,
-        ignoreSpace: false,
-        ignorePunct: false,
-      });
-      targetMatches.load("items");
-      await context.sync();
-      if (targetMatches.items.length) {
-        highlightRange = targetMatches.items[targetMatches.items.length - 1];
-      }
-    } catch (err) {
-      warn("apply insert metadata: target token search failed", err);
-    }
-  }
-
-  if (!highlightRange) {
-    highlightRange = await getRangeForCharacterSpan(
-      context,
-      paragraph,
-      entry?.originalText ?? paragraph.text,
-      meta.highlightCharStart,
-      meta.highlightCharEnd,
-      "apply-insert-highlight",
-      meta.highlightText
-    );
-  }
-  if (!highlightRange) return false;
+  const range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    entry?.originalText ?? paragraph.text,
+    anchorInfo.anchor.charStart,
+    anchorInfo.anchor.charEnd,
+    "apply-insert-anchor",
+    anchorInfo.anchor.tokenText || meta.highlightText
+  );
+  if (!range) return false;
   try {
-    const after = highlightRange.getRange("After");
-    after.insertText(",", Word.InsertLocation.before);
+    if (anchorInfo.location === Word.InsertLocation.before) {
+      range.insertText(",", Word.InsertLocation.before);
+    } else {
+      range.getRange("After").insertText(",", Word.InsertLocation.before);
+    }
   } catch (err) {
-    warn("apply insert metadata: failed to insert via highlight", err);
+    warn("apply insert metadata: failed to insert via anchor", err);
     return false;
   }
   return true;
