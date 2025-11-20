@@ -171,6 +171,8 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
     return { byId, ordered };
   }
   const safeParagraph = typeof paragraphText === "string" ? paragraphText : "";
+  const textOccurrences = Object.create(null);
+  const trimmedOccurrences = Object.create(null);
   let cursor = 0;
 
   for (let i = 0; i < tokens.length; i++) {
@@ -187,12 +189,24 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
       warn("Token mapping failed", { paragraphIndex, tokenId, tokenText, cursor });
     }
 
+    const textKey = tokenText || "";
+    const trimmedKey = textKey.trim();
+    const occurrence = textOccurrences[textKey] ?? 0;
+    textOccurrences[textKey] = occurrence + 1;
+    const trimmedOccurrence =
+      trimmedKey && trimmedKey !== textKey ? (trimmedOccurrences[trimmedKey] ?? 0) : occurrence;
+    if (trimmedKey && trimmedKey !== textKey) {
+      trimmedOccurrences[trimmedKey] = trimmedOccurrence + 1;
+    }
+
     const anchor = {
       paragraphIndex,
       tokenId,
       tokenIndex: i,
       tokenText,
       length: tokenLength,
+      textOccurrence: occurrence,
+      trimmedTextOccurrence: trimmedKey ? trimmedOccurrence : occurrence,
       charStart,
       charEnd,
       documentCharStart: charStart >= 0 ? documentOffset + charStart : -1,
@@ -242,6 +256,8 @@ function snapshotAnchor(anchor) {
     tokenId: anchor.tokenId,
     tokenIndex: anchor.tokenIndex,
     tokenText: anchor.tokenText,
+    textOccurrence: anchor.textOccurrence,
+    trimmedTextOccurrence: anchor.trimmedTextOccurrence,
     charStart: anchor.charStart,
     charEnd: anchor.charEnd,
     documentCharStart: anchor.documentCharStart,
@@ -837,18 +853,39 @@ async function applyDeleteSuggestion(context, paragraph, suggestion) {
 
 async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot) {
   if (!anchorSnapshot?.tokenText) return null;
-  const matches = paragraph.getRange().search(anchorSnapshot.tokenText, {
-    matchCase: false,
-    matchWholeWord: false,
-  });
-  matches.load("items");
-  await context.sync();
-  if (!matches.items.length) return null;
-  const targetIndex = Math.min(
-    typeof anchorSnapshot.tokenIndex === "number" ? anchorSnapshot.tokenIndex : 0,
-    matches.items.length - 1
-  );
-  return matches.items[targetIndex];
+  const fallbackOrdinal =
+    typeof anchorSnapshot.textOccurrence === "number"
+      ? anchorSnapshot.textOccurrence
+      : typeof anchorSnapshot.tokenIndex === "number"
+        ? anchorSnapshot.tokenIndex
+        : 0;
+  const tryFind = async (text, ordinalHint) => {
+    if (!text) return null;
+    const matches = paragraph.getRange().search(text, {
+      matchCase: false,
+      matchWholeWord: false,
+    });
+    matches.load("items");
+    await context.sync();
+    if (!matches.items.length) return null;
+    const ordinal =
+      typeof ordinalHint === "number"
+        ? ordinalHint
+        : typeof anchorSnapshot.tokenIndex === "number"
+          ? anchorSnapshot.tokenIndex
+          : fallbackOrdinal;
+    const targetIndex = Math.max(0, Math.min(ordinal, matches.items.length - 1));
+    return matches.items[targetIndex];
+  };
+
+  let range = await tryFind(anchorSnapshot.tokenText, anchorSnapshot.textOccurrence);
+  if (range) return range;
+  const trimmed = anchorSnapshot.tokenText.trim();
+  if (trimmed && trimmed !== anchorSnapshot.tokenText) {
+    range = await tryFind(trimmed, anchorSnapshot.trimmedTextOccurrence);
+    if (range) return range;
+  }
+  return null;
 }
 
 function selectInsertAnchor(meta) {
