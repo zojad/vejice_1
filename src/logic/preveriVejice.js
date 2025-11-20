@@ -21,32 +21,6 @@ const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
 const MAX_AUTOFIX_PASSES =
   typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
 
-const boolFromString = (value) => {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const trimmed = value.trim().toLowerCase();
-    if (!trimmed) return undefined;
-    if (["1", "true", "yes", "on"].includes(trimmed)) return true;
-    if (["0", "false", "no", "off"].includes(trimmed)) return false;
-  }
-  return undefined;
-};
-
-const allowNonCommaDiffsFlag = (() => {
-  if (typeof window !== "undefined" && typeof window.__VEJICE_ALLOW_NON_COMMA__ === "boolean") {
-    return window.__VEJICE_ALLOW_NON_COMMA__;
-  }
-  if (typeof process !== "undefined") {
-    const envValue =
-      process.env?.VEJICE_ALLOW_NON_COMMA ?? process.env?.VEJICE_ALLOW_NON_COMMA_DIFFS;
-    const parsed = boolFromString(envValue);
-    if (typeof parsed === "boolean") return parsed;
-  }
-  return false;
-})();
-
-const shouldAllowNonCommaDiffs = () => allowNonCommaDiffsFlag === true;
-
 const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 
@@ -1065,11 +1039,8 @@ async function checkDocumentTextDesktop() {
             log(`P${idx} pass ${pass}: corrected -> "${SNIP(corrected)}"`);
 
             if (!onlyCommasChanged(passText, corrected)) {
-              if (!shouldAllowNonCommaDiffs()) {
-                log(`P${idx} pass ${pass}: API changed more than commas -> SKIP`);
-                break;
-              }
-              log(`P${idx} pass ${pass}: non-comma changes ALLOWED via flag`);
+              log(`P${idx} pass ${pass}: API changed more than commas -> SKIP`);
+              break;
             }
 
             const opsAll = diffCommasOnly(passText, corrected);
@@ -1202,11 +1173,8 @@ async function checkDocumentTextOnline() {
         });
 
         if (!onlyCommasChanged(original, corrected)) {
-          if (!shouldAllowNonCommaDiffs()) {
-            log(`P${idx}: API changed more than commas -> SKIP`);
-            continue;
-          }
-          log(`P${idx}: non-comma changes ALLOWED via flag`);
+          log(`P${idx}: API changed more than commas -> SKIP`);
+          continue;
         }
 
         const ops = filterCommaOps(original, corrected, diffCommasOnly(original, corrected));
