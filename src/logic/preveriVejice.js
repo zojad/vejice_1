@@ -959,7 +959,11 @@ async function findRangeForInsert(context, paragraph, suggestion) {
   return range;
 }
 
-async function clearOnlineSuggestionMarkers(context) {
+async function clearOnlineSuggestionMarkers(context, suggestionsOverride) {
+  const source =
+    Array.isArray(suggestionsOverride) && suggestionsOverride.length
+      ? suggestionsOverride
+      : pendingSuggestionsOnline;
   const clearHighlight = (sug) => {
     if (!sug?.highlightRange) return;
     try {
@@ -972,16 +976,18 @@ async function clearOnlineSuggestionMarkers(context) {
     }
   };
 
-  if (!pendingSuggestionsOnline.length) {
+  if (!source.length) {
     context.document.body.font.highlightColor = null;
     await context.sync();
     return;
   }
-  for (const sug of pendingSuggestionsOnline) {
+  for (const sug of source) {
     clearHighlight(sug);
   }
   await context.sync();
-  resetPendingSuggestionsOnline();
+  if (!suggestionsOverride) {
+    resetPendingSuggestionsOnline();
+  }
 }
 
 export async function applyAllSuggestionsOnline() {
@@ -991,6 +997,7 @@ export async function applyAllSuggestionsOnline() {
     paras.load("items/text");
     await context.sync();
     const touchedIndexes = new Set(paragraphsTouchedOnline);
+    const processedSuggestions = [];
 
     for (const sug of pendingSuggestionsOnline) {
       const p = paras.items[sug.paragraphIndex];
@@ -1005,23 +1012,15 @@ export async function applyAllSuggestionsOnline() {
         // Keep paragraph.text up-to-date for subsequent metadata lookups.
         // eslint-disable-next-line office-addins/no-context-sync-in-loop
         await context.sync();
-        if (sug.highlightRange) {
-          try {
-            sug.highlightRange.font.highlightColor = null;
-            context.trackedObjects.remove(sug.highlightRange);
-          } catch (err) {
-            warn("applyAllSuggestionsOnline: failed to clear highlight", err);
-          } finally {
-            sug.highlightRange = null;
-          }
-        }
+        processedSuggestions.push(sug);
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
     }
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
     resetParagraphsTouchedOnline();
-    await clearOnlineSuggestionMarkers(context);
+    await clearOnlineSuggestionMarkers(context, processedSuggestions);
+    resetParagraphTokenAnchorsOnline();
   });
 }
 
