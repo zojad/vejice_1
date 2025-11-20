@@ -1027,12 +1027,14 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     await context.sync();
     return;
   }
-  for (const sug of source) {
-    const paragraph = paragraphs?.items?.[sug.paragraphIndex];
+  for (const item of source) {
+    const suggestion = item?.suggestion ?? item;
+    if (!suggestion) continue;
+    const paragraph = item?.paragraph ?? paragraphs?.items?.[suggestion.paragraphIndex];
     if (paragraph) {
-      await clearHighlightForSuggestion(context, paragraph, sug);
+      await clearHighlightForSuggestion(context, paragraph, suggestion);
     } else {
-      clearHighlight(sug);
+      clearHighlight(suggestion);
     }
   }
   await context.sync();
@@ -1063,7 +1065,7 @@ export async function applyAllSuggestionsOnline() {
         // Keep paragraph.text up-to-date for subsequent metadata lookups.
         // eslint-disable-next-line office-addins/no-context-sync-in-loop
         await context.sync();
-        processedSuggestions.push(sug);
+        processedSuggestions.push({ suggestion: sug, paragraph: p });
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
