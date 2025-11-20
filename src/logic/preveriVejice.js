@@ -789,6 +789,15 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   if (commaAnchor) {
     const tokenRange = await findTokenRangeForAnchor(context, paragraph, commaAnchor);
     if (tokenRange) {
+      tokenRange.load("text");
+      await context.sync();
+      const text = tokenRange.text || "";
+      const commaIndex = text.indexOf(",");
+      if (commaIndex >= 0) {
+        const newText = text.slice(0, commaIndex) + text.slice(commaIndex + 1);
+        tokenRange.insertText(newText, Word.InsertLocation.replace);
+        return true;
+      }
       const commaSearch = tokenRange.search(",", { matchCase: false, matchWholeWord: false });
       commaSearch.load("items");
       await context.sync();
