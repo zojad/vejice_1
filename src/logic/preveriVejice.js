@@ -768,6 +768,17 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   return true;
 }
 
+async function tryApplyDeleteUsingHighlight(suggestion) {
+  if (!suggestion?.highlightRange) return false;
+  try {
+    suggestion.highlightRange.insertText("", Word.InsertLocation.replace);
+    return true;
+  } catch (err) {
+    warn("apply delete: highlight range removal failed", err);
+    return false;
+  }
+}
+
 async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
   const ordinal = countCommasUpTo(paragraph.text || "", suggestion.originalPos);
   if (ordinal <= 0) {
@@ -786,6 +797,7 @@ async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
 }
 
 async function applyDeleteSuggestion(context, paragraph, suggestion) {
+  if (await tryApplyDeleteUsingHighlight(suggestion)) return;
   if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
   await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
 }
