@@ -360,9 +360,17 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const sourceAround = findAnchorsNearChar(entry, "source", srcIndex);
   const targetAround = findAnchorsNearChar(entry, "target", targetIndex);
   const documentOffset = entry?.documentOffset ?? 0;
-  const highlightAnchor = sourceAround.before ?? sourceAround.at ?? sourceAround.after;
-  const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
-  const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
+  const highlightAnchorTarget =
+    targetAround.before ??
+    targetAround.at ??
+    targetAround.after ??
+    sourceAround.before ??
+    sourceAround.at ??
+    sourceAround.after;
+  const highlightCharStart =
+    highlightAnchorTarget?.charStart ?? sourceAround.before?.charStart ?? srcIndex;
+  const highlightCharEnd =
+    highlightAnchorTarget?.charEnd ?? sourceAround.before?.charEnd ?? srcIndex;
   const paragraphText = entry?.originalText ?? "";
   let highlightText = "";
   if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {
@@ -388,6 +396,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetTokenBefore: snapshotAnchor(targetAround.before),
     targetTokenAt: snapshotAnchor(targetAround.at),
     targetTokenAfter: snapshotAnchor(targetAround.after),
+    highlightAnchorTarget: snapshotAnchor(highlightAnchorTarget),
   };
 }
 
@@ -787,15 +796,38 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   if (!meta) return false;
   const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
-  const highlightRange = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    entry?.originalText ?? paragraph.text,
-    meta.highlightCharStart,
-    meta.highlightCharEnd,
-    "apply-insert-highlight",
-    meta.highlightText
-  );
+  let highlightRange = null;
+
+  if (meta.highlightAnchorTarget?.tokenText) {
+    const tokenText = meta.highlightAnchorTarget.tokenText;
+    try {
+      const targetMatches = paragraph.getRange().search(tokenText, {
+        matchCase: true,
+        matchWholeWord: false,
+        ignoreSpace: false,
+        ignorePunct: false,
+      });
+      targetMatches.load("items");
+      await context.sync();
+      if (targetMatches.items.length) {
+        highlightRange = targetMatches.items[targetMatches.items.length - 1];
+      }
+    } catch (err) {
+      warn("apply insert metadata: target token search failed", err);
+    }
+  }
+
+  if (!highlightRange) {
+    highlightRange = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      entry?.originalText ?? paragraph.text,
+      meta.highlightCharStart,
+      meta.highlightCharEnd,
+      "apply-insert-highlight",
+      meta.highlightText
+    );
+  }
   if (!highlightRange) return false;
   try {
     const after = highlightRange.getRange("After");
