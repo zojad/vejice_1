@@ -766,8 +766,14 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   if (!meta) return false;
 
-  if (meta.sourceTokenAt?.tokenText?.includes(",")) {
-    const tokenRange = await findTokenRangeForAnchor(context, paragraph, meta.sourceTokenAt);
+  if (
+    meta.sourceTokenAt?.tokenText?.includes(",") ||
+    meta.sourceTokenAfter?.tokenText?.includes(",")
+  ) {
+    const anchorSnapshot = meta.sourceTokenAt?.tokenText?.includes(",")
+      ? meta.sourceTokenAt
+      : meta.sourceTokenAfter;
+    const tokenRange = await findTokenRangeForAnchor(context, paragraph, anchorSnapshot);
     if (tokenRange) {
       const commaSearch = tokenRange.search(",", { matchCase: false, matchWholeWord: false });
       commaSearch.load("items");
@@ -1363,4 +1369,3 @@ async function checkDocumentTextOnline() {
     errL("ERROR in checkDocumentTextOnline:", e);
   }
 }
-
