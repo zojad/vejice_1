@@ -498,9 +498,13 @@ function isNumericComma(original, corrected, kind, pos) {
   return isDigit(prev) && isDigit(next);
 }
 
-/** Guard: ali so se spremenile samo vejice */
+/**
+ * Guard: ali so se spremenile samo vejice (in presledki okoli njih).
+ * Nekateri API odzivi spreminjajo razmike, zato jih ignoriramo, da ne
+ * preskočimo veljavnih predlogov.
+ */
 function onlyCommasChanged(original, corrected) {
-  const strip = (x) => x.replace(/,/g, "");
+  const strip = (text) => text.replace(/[\s,]+/g, "");
   return strip(original) === strip(corrected);
 }
 
