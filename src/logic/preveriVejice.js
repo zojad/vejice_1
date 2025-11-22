@@ -1169,6 +1169,9 @@ export async function applyAllSuggestionsOnline() {
     resetParagraphsTouchedOnline();
     await clearOnlineSuggestionMarkers(context, processedSuggestions);
     resetParagraphTokenAnchorsOnline();
+    resetPendingSuggestionsOnline();
+    context.document.body.font.highlightColor = null;
+    await context.sync();
   });
 }
 
