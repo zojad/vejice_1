@@ -63,6 +63,7 @@ module.exports = async (env, options) => {
       new CopyWebpackPlugin({
         patterns: [
           { from: "assets/*", to: "assets/[name][ext][query]" },
+          { from: "src/commands/toast.html", to: "toast.html" },
           { from: "src/manifests/manifest.dev.xml", to: "manifest.dev.xml" },
           {
             from: "src/manifests/manifest.dev.xml",

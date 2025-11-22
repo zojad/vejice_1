@@ -1,4 +1,4 @@
-/* global Word, window, process, performance, console, Office */
+/* global Word, window, process, performance, console, Office, URL */
 import { popraviPoved, popraviPovedDetailed } from "../api/apiVejice.js";
 import { isWordOnline } from "../utils/host.js";
 
@@ -25,6 +25,9 @@ const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 
 const pendingSuggestionsOnline = [];
+const MAX_PARAGRAPH_CHARS = 1000;
+const LONG_PARAGRAPH_MESSAGE =
+  "Odstavek je predolg za preverjanje. Razdelite ga na krajše stavke in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -61,6 +64,60 @@ function markParagraphTouched(paragraphIndex) {
   if (typeof paragraphIndex === "number" && paragraphIndex >= 0) {
     paragraphsTouchedOnline.add(paragraphIndex);
   }
+}
+
+let toastDialog = null;
+function showToastNotification(message) {
+  if (!message) return;
+  if (typeof Office === "undefined" || !Office.context?.ui?.displayDialogAsync) {
+    warn("Toast notification unavailable", message);
+    return;
+  }
+  const origin =
+    (typeof window !== "undefined" && window.location && window.location.origin) || null;
+  if (!origin) {
+    warn("Toast notification: origin unavailable");
+    return;
+  }
+  const toastUrl = new URL("toast.html", origin);
+  toastUrl.searchParams.set("message", message);
+  Office.context.ui.displayDialogAsync(
+    toastUrl.toString(),
+    { height: 20, width: 30, displayInIframe: true },
+    (asyncResult) => {
+      if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
+        warn("Toast notification failed", asyncResult.error);
+        return;
+      }
+      if (toastDialog) {
+        try {
+          toastDialog.close();
+        } catch (err) {
+          warn("Toast notification: failed to close previous dialog", err);
+        }
+      }
+      toastDialog = asyncResult.value;
+      const closeDialog = () => {
+        if (!toastDialog) return;
+        try {
+          toastDialog.close();
+        } catch (err) {
+          warn("Toast notification: failed to close dialog", err);
+        } finally {
+          toastDialog = null;
+        }
+      };
+      toastDialog.addEventHandler(Office.EventType.DialogMessageReceived, closeDialog);
+      toastDialog.addEventHandler(Office.EventType.DialogEventReceived, closeDialog);
+    }
+  );
+}
+
+function notifyParagraphTooLong(paragraphIndex, length) {
+  const label = paragraphIndex + 1;
+  const msg = `Odstavek ${label}: ${LONG_PARAGRAPH_MESSAGE} (${length} znakov).`;
+  warn("Paragraph too long – skipped", { paragraphIndex, length });
+  showToastNotification(msg);
 }
 
 const paragraphTokenAnchorsOnline = [];
@@ -1231,6 +1288,10 @@ async function checkDocumentTextDesktop() {
           let sourceText = p.text || "";
           const trimmed = sourceText.trim();
           if (!trimmed) continue;
+          if (trimmed.length > MAX_PARAGRAPH_CHARS) {
+            notifyParagraphTooLong(idx, trimmed.length);
+            continue;
+          }
 
           const pStart = tnow();
           paragraphsProcessed++;
@@ -1353,6 +1414,10 @@ async function checkDocumentTextOnline() {
 
         paragraphsProcessed++;
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
+        if (trimmed.length > MAX_PARAGRAPH_CHARS) {
+          notifyParagraphTooLong(idx, trimmed.length);
+          continue;
+        }
 
         let detail;
         try {

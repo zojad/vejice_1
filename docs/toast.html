@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="sl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vejice – Obvestilo</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 12px;
+        background: #323130;
+        color: #fdfdfd;
+      }
+      .toast {
+        font-size: 14px;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toast" id="toast-message">Preverjam ...</div>
+    <script>
+      const CLOSE_DELAY_MS = 4500;
+      const params = new URLSearchParams(window.location.search);
+      const msg = params.get("message") || "Obvestilo";
+      document.getElementById("toast-message").textContent = msg;
+      function closeDialog() {
+        if (typeof Office === "undefined" || !Office.context?.ui?.messageParent) return;
+        try {
+          Office.context.ui.messageParent("close");
+        } catch (err) {
+          console.warn("Toast close failed", err);
+        }
+      }
+      setTimeout(closeDialog, CLOSE_DELAY_MS);
+    </script>
+  </body>
+</html>
