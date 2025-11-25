@@ -28,6 +28,8 @@ const pendingSuggestionsOnline = [];
 const MAX_PARAGRAPH_CHARS = 1000;
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
+const LONG_SENTENCE_MESSAGE =
+  "Stavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -117,6 +119,13 @@ function notifyParagraphTooLong(paragraphIndex, length) {
   const label = paragraphIndex + 1;
   const msg = `Odstavek ${label}: ${LONG_PARAGRAPH_MESSAGE} (${length} znakov).`;
   warn("Paragraph too long – skipped", { paragraphIndex, length });
+  showToastNotification(msg);
+}
+
+function notifySentenceTooLong(paragraphIndex, length) {
+  const label = paragraphIndex + 1;
+  const msg = `Odstavek ${label}: ${LONG_SENTENCE_MESSAGE} (${length} znakov).`;
+  warn("Sentence too long – skipped", { paragraphIndex, length });
   showToastNotification(msg);
 }
 
@@ -1439,12 +1448,26 @@ async function checkDocumentTextOnline() {
           continue;
         }
 
-        paragraphsProcessed++;
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
         if (trimmed.length > MAX_PARAGRAPH_CHARS) {
-          notifyParagraphTooLong(idx, trimmed.length);
+          const chunkResult = await processLongParagraphOnline({
+            context,
+            paragraph: p,
+            paragraphIndex: idx,
+            originalText: original,
+            paragraphDocOffset,
+          });
+          suggestions += chunkResult.suggestionsAdded;
+          apiErrors += chunkResult.apiErrors;
+          if (chunkResult.processedAny) {
+            paragraphsProcessed++;
+          } else {
+            notifyParagraphTooLong(idx, trimmed.length);
+          }
           continue;
         }
+
+        paragraphsProcessed++;
 
         let detail;
         try {
@@ -1509,4 +1532,200 @@ async function checkDocumentTextOnline() {
   } catch (e) {
     errL("ERROR in checkDocumentTextOnline:", e);
   }
+}
+
+function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!safeText) return [];
+  const sentences = [];
+  let start = 0;
+
+  const pushSentence = (end) => {
+    if (end <= start) return;
+    sentences.push({ start, end });
+    start = end;
+  };
+
+  for (let i = 0; i < safeText.length; i++) {
+    const ch = safeText[i];
+    if (ch === "\n") {
+      pushSentence(i + 1);
+      continue;
+    }
+    if (/[.!?]/.test(ch)) {
+      let end = i + 1;
+      while (end < safeText.length && /[\])"'»”’]+/.test(safeText[end])) end++;
+      while (end < safeText.length && /\s/.test(safeText[end])) end++;
+      pushSentence(end);
+      i = end - 1;
+    }
+  }
+  if (start < safeText.length) {
+    sentences.push({ start, end: safeText.length });
+  }
+
+  const chunks = [];
+  let current = null;
+  let chunkIndex = 0;
+
+  const finalizeCurrent = () => {
+    if (!current) return;
+    chunks.push({
+      index: current.index,
+      start: current.start,
+      end: current.end,
+      length: current.end - current.start,
+      text: safeText.slice(current.start, current.end),
+      tooLong: false,
+    });
+    current = null;
+  };
+
+  sentences.forEach((sentence) => {
+    const sentenceLength = sentence.end - sentence.start;
+    if (sentenceLength > maxLen) {
+      finalizeCurrent();
+      chunks.push({
+        index: chunkIndex++,
+        start: sentence.start,
+        end: sentence.end,
+        length: sentenceLength,
+        text: safeText.slice(sentence.start, sentence.end),
+        tooLong: true,
+      });
+      return;
+    }
+    if (!current) {
+      current = { start: sentence.start, end: sentence.end, index: chunkIndex++ };
+      return;
+    }
+    if (sentence.end - current.start <= maxLen) {
+      current.end = sentence.end;
+      return;
+    }
+    finalizeCurrent();
+    current = { start: sentence.start, end: sentence.end, index: chunkIndex++ };
+  });
+
+  finalizeCurrent();
+  return chunks;
+}
+
+function rekeyTokens(tokens, prefix) {
+  if (!Array.isArray(tokens)) return [];
+  return tokens.map((token, idx) => {
+    if (token && typeof token === "object") {
+      return { ...token, token_id: `${prefix}${idx + 1}` };
+    }
+    return {
+      token_id: `${prefix}${idx + 1}`,
+      token: typeof token === "string" ? token : "",
+    };
+  });
+}
+
+async function processLongParagraphOnline({
+  context,
+  paragraph,
+  paragraphIndex,
+  originalText,
+  paragraphDocOffset,
+}) {
+  const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS);
+  if (!chunks.length) {
+    return { suggestionsAdded: 0, apiErrors: 0, processedAny: false };
+  }
+
+  const chunkDetails = [];
+  const processedMeta = [];
+  let suggestionsAdded = 0;
+  let apiErrors = 0;
+
+  for (const chunk of chunks) {
+    const meta = {
+      chunk,
+      correctedText: chunk.text,
+      detail: null,
+    };
+    processedMeta.push(meta);
+
+    if (chunk.tooLong) {
+      notifySentenceTooLong(paragraphIndex, chunk.length);
+      continue;
+    }
+    let detail = null;
+    try {
+      detail = await popraviPovedDetailed(chunk.text);
+    } catch (apiErr) {
+      apiErrors++;
+      warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
+      continue;
+    }
+    const correctedChunk = detail.correctedText;
+    meta.detail = detail;
+    if (!onlyCommasChanged(chunk.text, correctedChunk)) {
+      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`);
+      continue;
+    }
+    meta.correctedText = correctedChunk;
+    const ops = filterCommaOps(chunk.text, correctedChunk, diffCommasOnly(chunk.text, correctedChunk));
+    if (!ops.length) continue;
+    chunkDetails.push({
+      chunk,
+      detail,
+      ops,
+    });
+  }
+
+  if (!processedMeta.some((meta) => meta.detail)) {
+    return { suggestionsAdded: 0, apiErrors, processedAny: false };
+  }
+
+  const correctedParagraph = processedMeta.map((meta) => meta.correctedText).join("");
+  const sourceTokens = [];
+  const targetTokens = [];
+
+  processedMeta.forEach((meta) => {
+    if (!meta.detail) return;
+    const prefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
+    sourceTokens.push(...rekeyTokens(meta.detail.sourceTokens, `${prefix}s`));
+    targetTokens.push(...rekeyTokens(meta.detail.targetTokens, `${prefix}t`));
+  });
+
+  const paragraphAnchors = createParagraphTokenAnchors({
+    paragraphIndex,
+    originalText,
+    correctedText: correctedParagraph,
+    sourceTokens,
+    targetTokens,
+    documentOffset: paragraphDocOffset,
+  });
+
+  for (const entry of chunkDetails) {
+    for (const op of entry.ops) {
+      const offset = entry.chunk.start;
+      const adjustedOp = {
+        ...op,
+        pos: op.pos + offset,
+        originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
+        correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
+      };
+      const marked = await highlightSuggestionOnline(
+        context,
+        paragraph,
+        originalText,
+        correctedParagraph,
+        adjustedOp,
+        paragraphIndex,
+        paragraphAnchors
+      );
+      if (marked) suggestionsAdded++;
+    }
+  }
+
+  return {
+    suggestionsAdded,
+    apiErrors,
+    processedAny: true,
+  };
 }
