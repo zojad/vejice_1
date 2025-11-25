@@ -757,6 +757,11 @@ async function highlightInsertSuggestion(
     await context.sync();
     if (wordSearch.items.length) {
       range = wordSearch.items[wordSearch.items.length - 1];
+      log("highlight insert: range via lastWord", {
+        paragraphIndex,
+        lastWord,
+        matches: wordSearch.items.length,
+      });
     }
   }
 
@@ -766,6 +771,11 @@ async function highlightInsertSuggestion(
     await context.sync();
     if (leftSearch.items.length) {
       range = leftSearch.items[leftSearch.items.length - 1];
+      log("highlight insert: range via leftSnippet", {
+        paragraphIndex,
+        snippet: leftContext.trim(),
+        matches: leftSearch.items.length,
+      });
     }
   }
 
@@ -778,6 +788,11 @@ async function highlightInsertSuggestion(
       await context.sync();
       if (rightSearch.items.length) {
         range = rightSearch.items[0];
+        log("highlight insert: range via rightSnippet", {
+          paragraphIndex,
+          snippet: rightSnippet,
+          matches: rightSearch.items.length,
+        });
       }
     }
   }
@@ -793,6 +808,14 @@ async function highlightInsertSuggestion(
       "highlight-insert",
       metadata.highlightText
     );
+    if (range) {
+      log("highlight insert: range via metadata", {
+        paragraphIndex,
+        highlightStart: metadata.highlightCharStart,
+        highlightEnd: metadata.highlightCharEnd,
+        highlightText: metadata.highlightText,
+      });
+    }
     if (!range) return false;
   }
 
