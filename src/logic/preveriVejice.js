@@ -27,7 +27,7 @@ const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 const pendingSuggestionsOnline = [];
 const MAX_PARAGRAPH_CHARS = 1000;
 const LONG_PARAGRAPH_MESSAGE =
-  "Odstavek je predolg za preverjanje. Razdelite ga na krajše stavke in poskusite znova.";
+  "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
