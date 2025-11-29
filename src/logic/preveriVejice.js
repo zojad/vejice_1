@@ -32,8 +32,6 @@ const LONG_SENTENCE_MESSAGE =
   "Poved je predolga za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
 const CHUNK_API_ERROR_MESSAGE =
   "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
-const CHUNK_NON_COMMA_MESSAGE =
-  "API je predlagal tudi druge popravke. Preglejte označene vejice ročno.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -138,14 +136,6 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
   const chunkLabel = chunkIndex + 1;
   const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_API_ERROR_MESSAGE}`;
   warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
-  showToastNotification(msg);
-}
-
-function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex) {
-  const paragraphLabel = paragraphIndex + 1;
-  const chunkLabel = chunkIndex + 1;
-  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_NON_COMMA_MESSAGE}`;
-  warn("Sentence contains non-comma changes", { paragraphIndex, chunkIndex });
   showToastNotification(msg);
 }
 
@@ -1418,11 +1408,6 @@ async function checkDocumentTextDesktop() {
             }
             log(`P${idx} pass ${pass}: corrected -> "${SNIP(corrected)}"`);
 
-            if (!onlyCommasChanged(passText, corrected)) {
-              log(`P${idx} pass ${pass}: API changed more than commas -> SKIP`);
-              break;
-            }
-
             const opsAll = diffCommasOnly(passText, corrected);
             const ops = filterCommaOps(passText, corrected, opsAll);
             log(`P${idx} pass ${pass}: ops candidate=${opsAll.length}, after filter=${ops.length}`);
@@ -1580,11 +1565,6 @@ async function checkDocumentTextOnline() {
           targetTokens: detail.targetTokens,
           documentOffset: paragraphDocOffset,
         });
-
-        if (!onlyCommasChanged(original, corrected)) {
-          log(`P${idx}: API changed more than commas -> SKIP`);
-          continue;
-        }
 
         const ops = filterCommaOps(original, corrected, diffCommasOnly(original, corrected));
         if (!ops.length) continue;
@@ -1774,22 +1754,13 @@ async function processLongParagraphOnline({
       continue;
     }
     const correctedChunk = detail.correctedText;
-    let chunkHasUnsafeChanges = false;
+    meta.detail = detail;
     meta.correctedText = correctedChunk;
     if (!onlyCommasChanged(chunk.text, correctedChunk)) {
-      chunkHasUnsafeChanges = true;
-      notifyChunkNonCommaChanges(paragraphIndex, chunk.index);
-      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> FLAG`, {
+      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas`, {
         original: chunk.text,
         corrected: correctedChunk,
       });
-      meta.correctedText = chunk.text;
-      meta.syntheticTokens = tokenizeForAnchoring(
-        chunk.text,
-        `p${paragraphIndex}_c${chunk.index}_syn_`
-      );
-    } else {
-      meta.detail = detail;
     }
 
     const ops = filterCommaOps(chunk.text, correctedChunk, diffCommasOnly(chunk.text, correctedChunk));
@@ -1797,7 +1768,6 @@ async function processLongParagraphOnline({
     chunkDetails.push({
       chunk,
       ops,
-      unsafe: chunkHasUnsafeChanges,
     });
   }
 
