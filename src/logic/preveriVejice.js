@@ -1699,6 +1699,23 @@ function rekeyTokens(tokens, prefix) {
   });
 }
 
+function tokenizeForAnchoring(text = "", prefix = "syn") {
+  if (typeof text !== "string" || !text.length) return [];
+  const tokens = [];
+  const regex = /[^\s]+/g;
+  let match;
+  let idx = 1;
+  while ((match = regex.exec(text))) {
+    tokens.push({
+      token_id: `${prefix}${idx++}`,
+      token: match[0],
+      start_char: match.index,
+      end_char: match.index + match[0].length,
+    });
+  }
+  return tokens;
+}
+
 async function processLongParagraphOnline({
   context,
   paragraph,
@@ -1721,11 +1738,16 @@ async function processLongParagraphOnline({
       chunk,
       correctedText: chunk.text,
       detail: null,
+      syntheticTokens: null,
     };
     processedMeta.push(meta);
 
     if (chunk.tooLong) {
       notifySentenceTooLong(paragraphIndex, chunk.length);
+      meta.syntheticTokens = tokenizeForAnchoring(
+        chunk.text,
+        `p${paragraphIndex}_c${chunk.index}_syn_`
+      );
       continue;
     }
     let detail = null;
@@ -1735,12 +1757,20 @@ async function processLongParagraphOnline({
       apiErrors++;
       warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
       notifyChunkApiFailure(paragraphIndex, chunk.index);
+      meta.syntheticTokens = tokenizeForAnchoring(
+        chunk.text,
+        `p${paragraphIndex}_c${chunk.index}_syn_`
+      );
       continue;
     }
     const correctedChunk = detail.correctedText;
     meta.detail = detail;
     if (!onlyCommasChanged(chunk.text, correctedChunk)) {
       log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`);
+      meta.syntheticTokens = tokenizeForAnchoring(
+        chunk.text,
+        `p${paragraphIndex}_c${chunk.index}_syn_`
+      );
       continue;
     }
     meta.correctedText = correctedChunk;
@@ -1762,10 +1792,17 @@ async function processLongParagraphOnline({
   const targetTokens = [];
 
   processedMeta.forEach((meta) => {
-    if (!meta.detail) return;
-    const prefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
-    sourceTokens.push(...rekeyTokens(meta.detail.sourceTokens, `${prefix}s`));
-    targetTokens.push(...rekeyTokens(meta.detail.targetTokens, `${prefix}t`));
+    const basePrefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
+    if (meta.detail) {
+      sourceTokens.push(...rekeyTokens(meta.detail.sourceTokens, `${basePrefix}s`));
+      targetTokens.push(...rekeyTokens(meta.detail.targetTokens, `${basePrefix}t`));
+      return;
+    }
+    if (meta.syntheticTokens && meta.syntheticTokens.length) {
+      const rekeyed = rekeyTokens(meta.syntheticTokens, `${basePrefix}syn_`);
+      sourceTokens.push(...rekeyed);
+      targetTokens.push(...rekeyed);
+    }
   });
 
   const paragraphAnchors = createParagraphTokenAnchors({
