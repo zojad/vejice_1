@@ -25,7 +25,7 @@ const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 
 const pendingSuggestionsOnline = [];
-const MAX_PARAGRAPH_CHARS = 1000;
+const MAX_PARAGRAPH_CHARS = 3000;
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 const LONG_SENTENCE_MESSAGE =
