@@ -1766,7 +1766,10 @@ async function processLongParagraphOnline({
     const correctedChunk = detail.correctedText;
     meta.detail = detail;
     if (!onlyCommasChanged(chunk.text, correctedChunk)) {
-      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`);
+      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`, {
+        original: chunk.text,
+        corrected: correctedChunk,
+      });
       meta.syntheticTokens = tokenizeForAnchoring(
         chunk.text,
         `p${paragraphIndex}_c${chunk.index}_syn_`
