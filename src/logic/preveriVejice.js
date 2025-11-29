@@ -29,7 +29,7 @@ const MAX_PARAGRAPH_CHARS = 1000;
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 const LONG_SENTENCE_MESSAGE =
-  "Stavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
+  "Poved je predolg za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -756,6 +756,31 @@ async function highlightInsertSuggestion(
   let leftContext = rawLeft.slice(-20).replace(/[\r\n]+/g, " ");
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
+
+  // Prefer token-based char spans before fuzzy snippet searches; this keeps
+  // repeated words from pointing to the wrong occurrence.
+  if (
+    metadata.highlightCharStart >= 0 &&
+    metadata.highlightCharEnd > metadata.highlightCharStart
+  ) {
+    range = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      anchorsEntry?.originalText ?? paragraph.text ?? corrected,
+      metadata.highlightCharStart,
+      metadata.highlightCharEnd,
+      "highlight-insert-anchor",
+      metadata.highlightText
+    );
+    if (range) {
+      log("highlight insert: range via char-span metadata", {
+        paragraphIndex,
+        highlightStart: metadata.highlightCharStart,
+        highlightEnd: metadata.highlightCharEnd,
+        highlightText: metadata.highlightText,
+      });
+    }
+  }
 
   if (!range && lastWord) {
     const wordSearch = paragraph.getRange().search(lastWord, {
