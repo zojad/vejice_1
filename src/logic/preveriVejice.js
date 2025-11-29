@@ -30,6 +30,8 @@ const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 const LONG_SENTENCE_MESSAGE =
   "Poved je predolga za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
+const CHUNK_API_ERROR_MESSAGE =
+  "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -126,6 +128,14 @@ function notifySentenceTooLong(paragraphIndex, length) {
   const label = paragraphIndex + 1;
   const msg = `Odstavek ${label}: ${LONG_SENTENCE_MESSAGE} (${length} znakov).`;
   warn("Sentence too long – skipped", { paragraphIndex, length });
+  showToastNotification(msg);
+}
+
+function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
+  const paragraphLabel = paragraphIndex + 1;
+  const chunkLabel = chunkIndex + 1;
+  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_API_ERROR_MESSAGE}`;
+  warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
   showToastNotification(msg);
 }
 
@@ -1527,7 +1537,19 @@ async function checkDocumentTextOnline() {
           detail = await popraviPovedDetailed(original);
         } catch (apiErr) {
           apiErrors++;
-          warn(`P${idx}: API call failed -> skip paragraph`, apiErr);
+          warn(`P${idx}: API call failed -> fallback to chunking`, apiErr);
+          const chunkResult = await processLongParagraphOnline({
+            context,
+            paragraph: p,
+            paragraphIndex: idx,
+            originalText: original,
+            paragraphDocOffset,
+          });
+          suggestions += chunkResult.suggestionsAdded;
+          apiErrors += chunkResult.apiErrors;
+          if (chunkResult.processedAny) {
+            continue;
+          }
           paragraphAnchors = createParagraphTokenAnchors({
             paragraphIndex: idx,
             originalText: original,
@@ -1712,6 +1734,7 @@ async function processLongParagraphOnline({
     } catch (apiErr) {
       apiErrors++;
       warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
+      notifyChunkApiFailure(paragraphIndex, chunk.index);
       continue;
     }
     const correctedChunk = detail.correctedText;
