@@ -759,16 +759,17 @@ async function highlightInsertSuggestion(
 
   // Prefer token-based char spans before fuzzy snippet searches; this keeps
   // repeated words from pointing to the wrong occurrence.
-  if (
-    metadata.highlightCharStart >= 0 &&
-    metadata.highlightCharEnd > metadata.highlightCharStart
-  ) {
+  if (metadata.highlightCharStart >= 0) {
+    const metaEnd =
+      metadata.highlightCharEnd > metadata.highlightCharStart
+        ? metadata.highlightCharEnd
+        : metadata.highlightCharStart + 1;
     range = await getRangeForCharacterSpan(
       context,
       paragraph,
       anchorsEntry?.originalText ?? paragraph.text ?? corrected,
       metadata.highlightCharStart,
-      metadata.highlightCharEnd,
+      metaEnd,
       "highlight-insert-anchor",
       metadata.highlightText
     );
@@ -776,8 +777,16 @@ async function highlightInsertSuggestion(
       log("highlight insert: range via char-span metadata", {
         paragraphIndex,
         highlightStart: metadata.highlightCharStart,
-        highlightEnd: metadata.highlightCharEnd,
+        highlightEnd: metaEnd,
         highlightText: metadata.highlightText,
+      });
+    } else {
+      log("highlight insert: char-span metadata lookup failed", {
+        paragraphIndex,
+        highlightStart: metadata.highlightCharStart,
+        highlightEnd: metaEnd,
+        highlightText: metadata.highlightText,
+        anchorSource: metadata.highlightAnchorTarget,
       });
     }
   }
