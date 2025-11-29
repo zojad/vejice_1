@@ -455,11 +455,11 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const targetAround = findAnchorsNearChar(entry, "target", targetIndex);
   const documentOffset = entry?.documentOffset ?? 0;
   const highlightAnchor =
-    sourceAround.after ??
     sourceAround.at ??
     sourceAround.before ??
-    targetAround.before ??
+    sourceAround.after ??
     targetAround.at ??
+    targetAround.before ??
     targetAround.after;
   const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
@@ -757,15 +757,6 @@ async function highlightInsertSuggestion(
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  log("highlight insert: op meta", {
-    paragraphIndex,
-    highlightCharStart: metadata.highlightCharStart,
-    highlightCharEnd: metadata.highlightCharEnd,
-    highlightText: metadata.highlightText,
-    leftSnippet: leftSnippetStored,
-    rightSnippet: rightSnippetStored,
-    lastWord,
-  });
 
   // Prefer token-based char spans before fuzzy snippet searches; this keeps
   // repeated words from pointing to the wrong occurrence.
