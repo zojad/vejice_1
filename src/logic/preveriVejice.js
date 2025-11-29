@@ -538,9 +538,16 @@ function isNumericComma(original, corrected, kind, pos) {
  * Nekateri API odzivi spreminjajo razmike, zato jih ignoriramo, da ne
  * preskočimo veljavnih predlogov.
  */
+function normalizeForComparison(text) {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(/\s+/g, "")
+    .replace(/,/g, "")
+    .replace(/[()]/g, "");
+}
+
 function onlyCommasChanged(original, corrected) {
-  const strip = (text) => text.replace(/[\s,]+/g, "");
-  return strip(original) === strip(corrected);
+  return normalizeForComparison(original) === normalizeForComparison(corrected);
 }
 
 /** Minimalni diff: samo operacije z vejicami */
