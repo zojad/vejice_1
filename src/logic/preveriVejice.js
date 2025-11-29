@@ -757,10 +757,28 @@ async function highlightInsertSuggestion(
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
+  if (!range && metadata.highlightAnchorTarget?.tokenText) {
+    range = await findTokenRangeForAnchor(context, paragraph, metadata.highlightAnchorTarget);
+    if (range) {
+      try {
+        range = range.getRange("Content");
+      } catch (err) {
+        warn("highlight insert: token anchor getRange failed", err);
+      }
+      if (range) {
+        log("highlight insert: range via token anchor", {
+          paragraphIndex,
+          tokenId: metadata.highlightAnchorTarget.tokenId,
+          tokenText: metadata.highlightAnchorTarget.tokenText,
+        });
+      }
+    }
+  }
+
 
   // Prefer token-based char spans before fuzzy snippet searches; this keeps
   // repeated words from pointing to the wrong occurrence.
-  if (metadata.highlightCharStart >= 0) {
+  if (!range && metadata.highlightCharStart >= 0) {
     const metaEnd =
       metadata.highlightCharEnd > metadata.highlightCharStart
         ? metadata.highlightCharEnd
