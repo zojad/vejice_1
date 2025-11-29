@@ -25,7 +25,6 @@ const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 
 const pendingSuggestionsOnline = [];
-const skippedParagraphsOnline = [];
 const MAX_PARAGRAPH_CHARS = 3000;
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
@@ -34,7 +33,7 @@ const LONG_SENTENCE_MESSAGE =
 const CHUNK_API_ERROR_MESSAGE =
   "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
 const PARAGRAPH_NON_COMMA_MESSAGE =
-  "API je spremenil več kot vejice. Preglejte odstavek ročno.";
+  "API je spremenil več kot vejice. Razdelite odstavek na krajše dele ali ga uredite ročno in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -55,37 +54,12 @@ export function getPendingSuggestionsOnline(debugSnapshot = false) {
   }));
 }
 
-function resetSkippedParagraphsOnline() {
-  skippedParagraphsOnline.length = 0;
-}
-function addSkippedParagraphOnline(entry) {
-  skippedParagraphsOnline.push(entry);
-}
-export function getSkippedParagraphsOnline() {
-  return skippedParagraphsOnline.slice();
-}
-
-function publishSkippedParagraphsOnline() {
-  try {
-    if (typeof window !== "undefined" && window.localStorage) {
-      window.localStorage.setItem(
-        "__VEJICE_SKIPPED_PARAGRAPHS__",
-        JSON.stringify(skippedParagraphsOnline)
-      );
-    }
-  } catch (err) {
-    warn("Failed to publish skipped paragraphs to localStorage", err);
-  }
-}
-
 if (typeof window !== "undefined") {
   window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
   window.__VEJICE_DEBUG_STATE__.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = () => paragraphTokenAnchorsOnline;
-  window.__VEJICE_DEBUG_STATE__.getSkippedParagraphsOnline = getSkippedParagraphsOnline;
   window.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.getPendingSuggestionsSnapshot = () => getPendingSuggestionsOnline(true);
-  window.getSkippedParagraphsOnline = getSkippedParagraphsOnline;
 }
 
 const paragraphsTouchedOnline = new Set();
@@ -170,7 +144,7 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
 function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, corrected) {
   const paragraphLabel = paragraphIndex + 1;
   const chunkLabel = chunkIndex + 1;
-  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: API je spremenil več kot vejice. Preglejte poved ročno.`;
+  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: API je spremenil več kot vejice. Razdelite poved ali jo uredite ročno in poskusite znova.`;
   warn("Sentence skipped due to non-comma changes", { paragraphIndex, chunkIndex, original, corrected });
   showToastNotification(msg);
 }
@@ -1533,8 +1507,6 @@ async function checkDocumentTextOnline() {
       resetPendingSuggestionsOnline();
       resetParagraphsTouchedOnline();
       resetParagraphTokenAnchorsOnline();
-      resetSkippedParagraphsOnline();
-
       let documentCharOffset = 0;
 
       for (let idx = 0; idx < paras.items.length; idx++) {
@@ -1618,12 +1590,6 @@ async function checkDocumentTextOnline() {
 
         if (!onlyCommasChanged(original, corrected)) {
           notifyParagraphNonCommaChanges(idx, original, corrected);
-          addSkippedParagraphOnline({
-            paragraphIndex: idx,
-            chunkIndex: null,
-            originalText: original,
-            correctedText: corrected,
-          });
           continue;
         }
 
@@ -1658,7 +1624,6 @@ async function checkDocumentTextOnline() {
   } catch (e) {
     errL("ERROR in checkDocumentTextOnline:", e);
   }
-  publishSkippedParagraphsOnline();
 }
 
 function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
@@ -1821,12 +1786,6 @@ async function processLongParagraphOnline({
       log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`, {
         original: chunk.text,
         corrected: correctedChunk,
-      });
-      addSkippedParagraphOnline({
-        paragraphIndex,
-        chunkIndex: chunk.index,
-        originalText: chunk.text,
-        correctedText: correctedChunk,
       });
       meta.syntheticTokens = tokenizeForAnchoring(
         chunk.text,
