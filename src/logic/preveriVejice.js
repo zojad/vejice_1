@@ -29,7 +29,7 @@ const MAX_PARAGRAPH_CHARS = 1000;
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
 const LONG_SENTENCE_MESSAGE =
-  "Poved je predolg za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
+  "Poved je predolga za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
