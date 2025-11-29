@@ -17,6 +17,8 @@ const API_KEY =
   (typeof process !== "undefined" && process.env?.VEJICE_API_KEY) ||
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
+const API_MAX_ATTEMPTS = 3;
+const API_RETRY_DELAY_MS = 400;
 
 const boolFromString = (value) => {
   if (typeof value === "boolean") return value;
@@ -28,6 +30,11 @@ const boolFromString = (value) => {
   }
   return undefined;
 };
+
+const delayMs = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const envMockFlag =
   typeof process !== "undefined" ? boolFromString(process.env?.VEJICE_USE_MOCK ?? "") : undefined;
@@ -157,6 +164,14 @@ function pickCorrectedText(fallback, payload = {}) {
   );
 }
 
+function isRetryableError(info) {
+  const status = info?.status;
+  if (typeof status === "number" && status >= 500 && status < 600) return true;
+  const code = typeof info?.code === "string" ? info.code.toUpperCase() : "";
+  if (!code) return false;
+  return ["ECONNABORTED", "ETIMEDOUT", "ERR_NETWORK"].includes(code);
+}
+
 async function requestPopravek(poved) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
@@ -184,41 +199,64 @@ async function requestPopravek(poved) {
     // withCredentials: false, // keep default; not needed unless API sets cookies
   };
 
-  const t0 = performance?.now?.() ?? Date.now();
-  try {
-    log("POST", url, "| len:", poved?.length ?? 0, "| snippet:", snip(poved));
-    const r = await axios.post(url, data, config);
-    const t1 = performance?.now?.() ?? Date.now();
-    const raw = { ...(r?.data || {}) };
-    const correctedText = pickCorrectedText(poved, raw);
-    if (typeof raw.source_text !== "string") raw.source_text = poved;
-    if (typeof raw.target_text !== "string") raw.target_text = correctedText;
+  const attempts = Math.max(1, API_MAX_ATTEMPTS);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const t0 = performance?.now?.() ?? Date.now();
+    try {
+      log(
+        "POST",
+        url,
+        "| len:",
+        poved?.length ?? 0,
+        "| snippet:",
+        snip(poved),
+        "| attempt:",
+        attempt
+      );
+      const r = await axios.post(url, data, config);
+      const t1 = performance?.now?.() ?? Date.now();
+      const raw = { ...(r?.data || {}) };
+      const correctedText = pickCorrectedText(poved, raw);
+      if (typeof raw.source_text !== "string") raw.source_text = poved;
+      if (typeof raw.target_text !== "string") raw.target_text = correctedText;
 
-    log(
-      "OK",
-      `${Math.round(t1 - t0)} ms`,
-      "| status:",
-      r?.status,
-      "| changed:",
-      correctedText !== poved,
-      "| keys:",
-      raw && Object.keys(raw),
-      "| sourceTokens:",
-      Array.isArray(raw?.source_tokens) ? raw.source_tokens.length : 0,
-      "| targetTokens:",
-      Array.isArray(raw?.target_tokens) ? raw.target_tokens.length : 0
-    );
+      log(
+        "OK",
+        `${Math.round(t1 - t0)} ms`,
+        "| status:",
+        r?.status,
+        "| changed:",
+        correctedText !== poved,
+        "| keys:",
+        raw && Object.keys(raw),
+        "| sourceTokens:",
+        Array.isArray(raw?.source_tokens) ? raw.source_tokens.length : 0,
+        "| targetTokens:",
+        Array.isArray(raw?.target_tokens) ? raw.target_tokens.length : 0,
+        "| attempt:",
+        attempt
+      );
 
-    return { correctedText, raw };
-  } catch (err) {
-    const t1 = performance?.now?.() ?? Date.now();
-    const info = describeAxiosError(err);
-    log("ERROR", `${Math.round(t1 - t0)} ms`, info);
-    throw new VejiceApiError("Vejice API call failed", {
-      durationMs: Math.round(t1 - t0),
-      info,
-      cause: err,
-    });
+      return { correctedText, raw };
+    } catch (err) {
+      const t1 = performance?.now?.() ?? Date.now();
+      const durationMs = Math.round(t1 - t0);
+      const info = describeAxiosError(err);
+      const retryable = attempt < attempts && isRetryableError(info);
+      log("ERROR", `${durationMs} ms`, { ...info, attempt, retryable });
+      if (retryable) {
+        const delay = API_RETRY_DELAY_MS * attempt;
+        log("Retrying Vejice API request in", delay, "ms");
+        await delayMs(delay);
+        continue;
+      }
+      throw new VejiceApiError("Vejice API call failed", {
+        durationMs,
+        info,
+        attempt,
+        cause: err,
+      });
+    }
   }
 }
 
