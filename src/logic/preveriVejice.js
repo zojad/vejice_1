@@ -32,6 +32,8 @@ const LONG_SENTENCE_MESSAGE =
   "Poved je predolga za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
 const CHUNK_API_ERROR_MESSAGE =
   "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
+const PARAGRAPH_NON_COMMA_MESSAGE =
+  "API je spremenil več kot vejice. Preglejte odstavek ročno.";
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -137,6 +139,20 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
   const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_API_ERROR_MESSAGE}`;
   warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
   showToastNotification(msg);
+}
+
+function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, corrected) {
+  const paragraphLabel = paragraphIndex + 1;
+  const chunkLabel = chunkIndex + 1;
+  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: API je spremenil več kot vejice. Preglejte poved ročno.`;
+  warn("Sentence skipped due to non-comma changes", { paragraphIndex, chunkIndex, original, corrected });
+  showToastNotification(msg);
+}
+
+function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
+  const label = paragraphIndex + 1;
+  warn("Paragraph skipped due to non-comma changes", { paragraphIndex, original, corrected });
+  showToastNotification(`Odstavek ${label}: ${PARAGRAPH_NON_COMMA_MESSAGE}`);
 }
 
 const paragraphTokenAnchorsOnline = [];
@@ -1566,6 +1582,11 @@ async function checkDocumentTextOnline() {
           documentOffset: paragraphDocOffset,
         });
 
+        if (!onlyCommasChanged(original, corrected)) {
+          notifyParagraphNonCommaChanges(idx, original, corrected);
+          continue;
+        }
+
         const ops = filterCommaOps(original, corrected, diffCommasOnly(original, corrected));
         if (!ops.length) continue;
 
@@ -1754,14 +1775,20 @@ async function processLongParagraphOnline({
       continue;
     }
     const correctedChunk = detail.correctedText;
-    meta.detail = detail;
-    meta.correctedText = correctedChunk;
     if (!onlyCommasChanged(chunk.text, correctedChunk)) {
-      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas`, {
+      notifyChunkNonCommaChanges(paragraphIndex, chunk.index, chunk.text, correctedChunk);
+      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`, {
         original: chunk.text,
         corrected: correctedChunk,
       });
+      meta.syntheticTokens = tokenizeForAnchoring(
+        chunk.text,
+        `p${paragraphIndex}_c${chunk.index}_syn_`
+      );
+      continue;
     }
+    meta.detail = detail;
+    meta.correctedText = correctedChunk;
 
     const ops = filterCommaOps(chunk.text, correctedChunk, diffCommasOnly(chunk.text, correctedChunk));
     if (!ops.length) continue;
@@ -1784,9 +1811,7 @@ async function processLongParagraphOnline({
     if (meta.detail) {
       sourceTokens.push(...rekeyTokens(meta.detail.sourceTokens, `${basePrefix}s`));
       targetTokens.push(...rekeyTokens(meta.detail.targetTokens, `${basePrefix}t`));
-      return;
-    }
-    if (meta.syntheticTokens && meta.syntheticTokens.length) {
+    } else if (meta.syntheticTokens && meta.syntheticTokens.length) {
       const rekeyed = rekeyTokens(meta.syntheticTokens, `${basePrefix}syn_`);
       sourceTokens.push(...rekeyed);
       targetTokens.push(...rekeyed);
