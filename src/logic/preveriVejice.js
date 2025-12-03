@@ -25,7 +25,7 @@ const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 
 const pendingSuggestionsOnline = [];
-const MAX_PARAGRAPH_CHARS = 5000; //probavaj
+const MAX_PARAGRAPH_CHARS = 4000; //probavaj
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na več odstavkov in poskusite znova.";
 const LONG_SENTENCE_MESSAGE =
@@ -892,13 +892,6 @@ async function highlightInsertSuggestion(
     targetCharIndex: op.correctedPos ?? op.pos,
   });
 
-  // Highlight the word before the missing comma whenever possible so users can
-  // immediately see which word the suggestion refers to.
-  const displayAnchor =
-    metadata.sourceTokenBefore ??
-    metadata.targetTokenBefore ??
-    metadata.highlightAnchorTarget;
-
   const anchor = makeAnchor(corrected, op.pos);
   const rawLeft = anchor.left || "";
   const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
@@ -910,8 +903,8 @@ async function highlightInsertSuggestion(
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (!range && displayAnchor?.tokenText) {
-    range = await findTokenRangeForAnchor(context, paragraph, displayAnchor);
+  if (!range && metadata.highlightAnchorTarget?.tokenText) {
+    range = await findTokenRangeForAnchor(context, paragraph, metadata.highlightAnchorTarget);
     if (range) {
       try {
         range = range.getRange("Content");
@@ -921,8 +914,8 @@ async function highlightInsertSuggestion(
       if (range) {
         log("highlight insert: range via token anchor", {
           paragraphIndex,
-          tokenId: displayAnchor.tokenId,
-          tokenText: displayAnchor.tokenText,
+          tokenId: metadata.highlightAnchorTarget.tokenId,
+          tokenText: metadata.highlightAnchorTarget.tokenText,
         });
       }
     }
@@ -931,23 +924,16 @@ async function highlightInsertSuggestion(
 
   // Prefer token-based char spans before fuzzy snippet searches; this keeps
   // repeated words from pointing to the wrong occurrence.
-  const displayCharStart =
-    typeof displayAnchor?.charStart === "number"
-      ? displayAnchor.charStart
-      : metadata.highlightCharStart;
-  const displayCharEnd =
-    typeof displayAnchor?.charEnd === "number"
-      ? displayAnchor.charEnd
-      : metadata.highlightCharEnd;
-
-  if (!range && displayCharStart >= 0) {
+  if (!range && metadata.highlightCharStart >= 0) {
     const metaEnd =
-      displayCharEnd > displayCharStart ? displayCharEnd : displayCharStart + 1;
+      metadata.highlightCharEnd > metadata.highlightCharStart
+        ? metadata.highlightCharEnd
+        : metadata.highlightCharStart + 1;
     range = await getRangeForCharacterSpan(
       context,
       paragraph,
       anchorsEntry?.originalText ?? paragraph.text ?? corrected,
-      displayCharStart,
+      metadata.highlightCharStart,
       metaEnd,
       "highlight-insert-anchor",
       metadata.highlightText
@@ -955,17 +941,17 @@ async function highlightInsertSuggestion(
     if (range) {
       log("highlight insert: range via char-span metadata", {
         paragraphIndex,
-        highlightStart: displayCharStart,
+        highlightStart: metadata.highlightCharStart,
         highlightEnd: metaEnd,
         highlightText: metadata.highlightText,
       });
     } else {
       log("highlight insert: char-span metadata lookup failed", {
         paragraphIndex,
-        highlightStart: displayCharStart,
+        highlightStart: metadata.highlightCharStart,
         highlightEnd: metaEnd,
         highlightText: metadata.highlightText,
-        anchorSource: displayAnchor,
+        anchorSource: metadata.highlightAnchorTarget,
       });
     }
   }
@@ -1025,16 +1011,16 @@ async function highlightInsertSuggestion(
       context,
       paragraph,
       anchorsEntry?.originalText ?? corrected,
-      displayCharStart,
-      displayCharEnd,
+      metadata.highlightCharStart,
+      metadata.highlightCharEnd,
       "highlight-insert",
       metadata.highlightText
     );
     if (range) {
       log("highlight insert: range via metadata", {
         paragraphIndex,
-        highlightStart: displayCharStart,
-        highlightEnd: displayCharEnd,
+        highlightStart: metadata.highlightCharStart,
+        highlightEnd: metadata.highlightCharEnd,
         highlightText: metadata.highlightText,
       });
     }
