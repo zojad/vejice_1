@@ -779,6 +779,11 @@ async function highlightInsertSuggestion(
     targetCharIndex: op.correctedPos ?? op.pos,
   });
 
+  const displayAnchor =
+    metadata.sourceTokenBefore ??
+    metadata.targetTokenBefore ??
+    metadata.highlightAnchorTarget;
+
   const anchor = makeAnchor(corrected, op.pos);
   const rawLeft = anchor.left || "";
   const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
@@ -790,8 +795,8 @@ async function highlightInsertSuggestion(
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (!range && metadata.highlightAnchorTarget?.tokenText) {
-    range = await findTokenRangeForAnchor(context, paragraph, metadata.highlightAnchorTarget);
+  if (!range && displayAnchor?.tokenText) {
+    range = await findTokenRangeForAnchor(context, paragraph, displayAnchor);
     if (range) {
       try {
         range = range.getRange("Content");
@@ -801,8 +806,8 @@ async function highlightInsertSuggestion(
       if (range) {
         log("highlight insert: range via token anchor", {
           paragraphIndex,
-          tokenId: metadata.highlightAnchorTarget.tokenId,
-          tokenText: metadata.highlightAnchorTarget.tokenText,
+          tokenId: displayAnchor.tokenId,
+          tokenText: displayAnchor.tokenText,
         });
       }
     }
@@ -811,16 +816,23 @@ async function highlightInsertSuggestion(
 
   // Prefer token-based char spans before fuzzy snippet searches; this keeps
   // repeated words from pointing to the wrong occurrence.
-  if (!range && metadata.highlightCharStart >= 0) {
+  const displayCharStart =
+    typeof displayAnchor?.charStart === "number"
+      ? displayAnchor.charStart
+      : metadata.highlightCharStart;
+  const displayCharEnd =
+    typeof displayAnchor?.charEnd === "number"
+      ? displayAnchor.charEnd
+      : metadata.highlightCharEnd;
+
+  if (!range && displayCharStart >= 0) {
     const metaEnd =
-      metadata.highlightCharEnd > metadata.highlightCharStart
-        ? metadata.highlightCharEnd
-        : metadata.highlightCharStart + 1;
+      displayCharEnd > displayCharStart ? displayCharEnd : displayCharStart + 1;
     range = await getRangeForCharacterSpan(
       context,
       paragraph,
       anchorsEntry?.originalText ?? paragraph.text ?? corrected,
-      metadata.highlightCharStart,
+      displayCharStart,
       metaEnd,
       "highlight-insert-anchor",
       metadata.highlightText
@@ -828,17 +840,17 @@ async function highlightInsertSuggestion(
     if (range) {
       log("highlight insert: range via char-span metadata", {
         paragraphIndex,
-        highlightStart: metadata.highlightCharStart,
+        highlightStart: displayCharStart,
         highlightEnd: metaEnd,
         highlightText: metadata.highlightText,
       });
     } else {
       log("highlight insert: char-span metadata lookup failed", {
         paragraphIndex,
-        highlightStart: metadata.highlightCharStart,
+        highlightStart: displayCharStart,
         highlightEnd: metaEnd,
         highlightText: metadata.highlightText,
-        anchorSource: metadata.highlightAnchorTarget,
+        anchorSource: displayAnchor,
       });
     }
   }
@@ -898,16 +910,16 @@ async function highlightInsertSuggestion(
       context,
       paragraph,
       anchorsEntry?.originalText ?? corrected,
-      metadata.highlightCharStart,
-      metadata.highlightCharEnd,
+      displayCharStart,
+      displayCharEnd,
       "highlight-insert",
       metadata.highlightText
     );
     if (range) {
       log("highlight insert: range via metadata", {
         paragraphIndex,
-        highlightStart: metadata.highlightCharStart,
-        highlightEnd: metadata.highlightCharEnd,
+        highlightStart: displayCharStart,
+        highlightEnd: displayCharEnd,
         highlightText: metadata.highlightText,
       });
     }
