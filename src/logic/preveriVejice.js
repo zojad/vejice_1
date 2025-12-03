@@ -34,6 +34,12 @@ const CHUNK_API_ERROR_MESSAGE =
   "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
 const PARAGRAPH_NON_COMMA_MESSAGE =
   "API je spremenil več kot vejice. Preglejte odstavek ročno.";
+const TRACKED_CHANGES_PRESENT_MESSAGE =
+  "Najprej sprejmite ali zavrnite obstoječe spremembe (Track Changes), nato ponovno zaženite preverjanje.";
+const API_UNAVAILABLE_MESSAGE =
+  "Storitev CJVT Vejice trenutno ni na voljo. Znova poskusite kasneje.";
+let longSentenceNotified = false;
+let chunkApiFailureNotified = false;
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -130,6 +136,8 @@ function notifySentenceTooLong(paragraphIndex, length) {
   const label = paragraphIndex + 1;
   const msg = `Odstavek ${label}: ${LONG_SENTENCE_MESSAGE} (${length} znakov).`;
   warn("Sentence too long – skipped", { paragraphIndex, length });
+  if (longSentenceNotified) return;
+  longSentenceNotified = true;
   showToastNotification(msg);
 }
 
@@ -138,6 +146,8 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
   const chunkLabel = chunkIndex + 1;
   const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_API_ERROR_MESSAGE}`;
   warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
+  if (chunkApiFailureNotified) return;
+  chunkApiFailureNotified = true;
   showToastNotification(msg);
 }
 
@@ -153,6 +163,33 @@ function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
   const label = paragraphIndex + 1;
   warn("Paragraph skipped due to non-comma changes", { paragraphIndex, original, corrected });
   showToastNotification(`Odstavek ${label}: ${PARAGRAPH_NON_COMMA_MESSAGE}`);
+}
+
+function notifyTrackedChangesPresent() {
+  warn("Tracked changes present – aborting check");
+  showToastNotification(TRACKED_CHANGES_PRESENT_MESSAGE);
+}
+
+let apiFailureNotified = false;
+function notifyApiUnavailable() {
+  if (apiFailureNotified) return;
+  apiFailureNotified = true;
+  warn("API unavailable – notifying toast");
+  showToastNotification(API_UNAVAILABLE_MESSAGE);
+}
+
+function resetNotificationFlags() {
+  apiFailureNotified = false;
+  longSentenceNotified = false;
+  chunkApiFailureNotified = false;
+}
+
+async function documentHasTrackedChanges(context) {
+  if (!context?.document) return false;
+  const revisions = context.document.revisions;
+  revisions.load("items");
+  await context.sync();
+  return revisions.items.length > 0;
 }
 
 const paragraphTokenAnchorsOnline = [];
@@ -1296,6 +1333,7 @@ export async function rejectAllSuggestionsOnline() {
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih
  *  ───────────────────────────────────────────────────────── */
 export async function checkDocumentText() {
+  resetNotificationFlags();
   if (isWordOnline()) {
     return checkDocumentTextOnline();
   }
@@ -1311,6 +1349,10 @@ async function checkDocumentTextDesktop() {
 
   try {
     await Word.run(async (context) => {
+      if (await documentHasTrackedChanges(context)) {
+        notifyTrackedChangesPresent();
+        return;
+      }
       // naloži in začasno vključi sledenje spremembam
       const doc = context.document;
       let trackToggleSupported = false;
@@ -1355,6 +1397,7 @@ async function checkDocumentTextDesktop() {
             } catch (apiErr) {
               apiErrors++;
               warn(`P${idx} pass ${pass}: API call failed -> stop paragraph`, apiErr);
+              notifyApiUnavailable();
               break;
             }
             log(`P${idx} pass ${pass}: corrected -> "${SNIP(corrected)}"`);
@@ -1428,6 +1471,10 @@ async function checkDocumentTextOnline() {
 
   try {
     await Word.run(async (context) => {
+      if (await documentHasTrackedChanges(context)) {
+        notifyTrackedChangesPresent();
+        return;
+      }
       const paras = context.document.body.paragraphs;
       paras.load("items/text");
       await context.sync();
@@ -1484,6 +1531,7 @@ async function checkDocumentTextOnline() {
         } catch (apiErr) {
           apiErrors++;
           warn(`P${idx}: API call failed -> fallback to chunking`, apiErr);
+          notifyApiUnavailable();
           const chunkResult = await processLongParagraphOnline({
             context,
             paragraph: p,
