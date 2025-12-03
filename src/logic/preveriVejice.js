@@ -186,10 +186,25 @@ function resetNotificationFlags() {
 
 async function documentHasTrackedChanges(context) {
   if (!context?.document) return false;
+  if (isWordOnline()) {
+    // Word Online does not expose revisions; assume no tracked changes to avoid ApiNotFound.
+    return false;
+  }
   const revisions = context.document.revisions;
-  revisions.load("items");
-  await context.sync();
-  return revisions.items.length > 0;
+  if (!revisions || typeof revisions.load !== "function") {
+    return false;
+  }
+  try {
+    revisions.load("items");
+    await context.sync();
+    return revisions.items.length > 0;
+  } catch (err) {
+    if (err?.code === "ApiNotFound") {
+      warn("Revisions API unavailable on this host – skipping tracked changes guard");
+      return false;
+    }
+    throw err;
+  }
 }
 
 const paragraphTokenAnchorsOnline = [];
