@@ -33,7 +33,7 @@ const LONG_SENTENCE_MESSAGE =
 const CHUNK_API_ERROR_MESSAGE =
   "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
 const PARAGRAPH_NON_COMMA_MESSAGE =
-  "API je spremenil več kot vejice. Preglejte odstavek ročno.";
+  "API je spremenil več kot vejice. Preglejte odstavek.";
 const TRACKED_CHANGES_PRESENT_MESSAGE =
   "Najprej sprejmite ali zavrnite obstoječe spremembe (Track Changes), nato ponovno zaženite preverjanje.";
 const API_UNAVAILABLE_MESSAGE =
