@@ -602,6 +602,22 @@ function onlyCommasChanged(original, corrected) {
   return normalizeForComparison(original) === normalizeForComparison(corrected);
 }
 
+function findCommaAfterWhitespace(text, startIndex) {
+  if (typeof text !== "string" || startIndex < 0 || startIndex >= text.length) {
+    return -1;
+  }
+  let idx = startIndex;
+  let sawWhitespace = false;
+  while (idx < text.length && /\s/.test(text[idx])) {
+    sawWhitespace = true;
+    idx++;
+  }
+  if (!sawWhitespace || idx >= text.length) {
+    return -1;
+  }
+  return text[idx] === "," ? idx : -1;
+}
+
 /** Minimalni diff: samo operacije z vejicami */
 function diffCommasOnly(original, corrected) {
   const ops = [];
@@ -616,11 +632,25 @@ function diffCommasOnly(original, corrected) {
       continue;
     }
     if (c === "," && o !== ",") {
+      if (/\s/.test(o)) {
+        const relocateIdx = findCommaAfterWhitespace(original, i);
+        if (relocateIdx >= 0) {
+          i = relocateIdx;
+          continue;
+        }
+      }
       ops.push({ kind: "insert", pos: j, originalPos: i, correctedPos: j });
       j++;
       continue;
     }
     if (o === "," && c !== ",") {
+      if (/\s/.test(c)) {
+        const relocateIdx = findCommaAfterWhitespace(corrected, j);
+        if (relocateIdx >= 0) {
+          j = relocateIdx;
+          continue;
+        }
+      }
       ops.push({ kind: "delete", pos: i, originalPos: i, correctedPos: j });
       i++;
       continue;
