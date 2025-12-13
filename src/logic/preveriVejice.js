@@ -1718,14 +1718,16 @@ async function checkDocumentTextOnline() {
         }
 
         const correctionOps = collectCommaOpsFromCorrections(detail, paragraphAnchors, idx);
-        const diffOps = filterCommaOps(
-          normalizedOriginal,
-          corrected,
-          diffCommasOnly(normalizedOriginal, corrected)
-        );
-        const seenKeys = new Set((correctionOps || []).map((op) => operationKey(op)));
-        const extraOps = diffOps.filter((op) => !seenKeys.has(operationKey(op)));
-        const ops = (correctionOps.length ? correctionOps : []).concat(extraOps);
+        let ops = [];
+        if (correctionOps.length) {
+          ops = correctionOps;
+        } else {
+          ops = filterCommaOps(
+            normalizedOriginal,
+            corrected,
+            diffCommasOnly(normalizedOriginal, corrected)
+          );
+        }
         if (!ops.length) continue;
 
         for (const op of ops) {
