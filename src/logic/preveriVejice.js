@@ -776,6 +776,23 @@ function filterCommaOps(original, corrected, ops) {
   });
 }
 
+function collapseDuplicateDiffOps(ops) {
+  if (!Array.isArray(ops) || ops.length < 2) return ops;
+  const deletePositions = ops
+    .filter((op) => op?.kind === "delete")
+    .map((op) => (typeof op.originalPos === "number" ? op.originalPos : op.pos))
+    .filter((pos) => typeof pos === "number");
+  if (!deletePositions.length) return ops;
+  const shouldDropInsert = (pos) =>
+    deletePositions.some((delPos) => typeof delPos === "number" && Math.abs(delPos - pos) <= 1);
+  return ops.filter((op) => {
+    if (op?.kind !== "insert") return true;
+    const pos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    if (typeof pos !== "number") return true;
+    return !shouldDropInsert(pos);
+  });
+}
+
 /** Anchor-based mikro urejanje (ohrani formatiranje) */
 function makeAnchor(text, idx, span = 16) {
   const left = text.slice(Math.max(0, idx - span), idx);
@@ -1722,10 +1739,12 @@ async function checkDocumentTextOnline() {
         if (correctionOps.length) {
           ops = correctionOps;
         } else {
-          ops = filterCommaOps(
-            normalizedOriginal,
-            corrected,
-            diffCommasOnly(normalizedOriginal, corrected)
+          ops = collapseDuplicateDiffOps(
+            filterCommaOps(
+              normalizedOriginal,
+              corrected,
+              diffCommasOnly(normalizedOriginal, corrected)
+            )
           );
         }
         if (!ops.length) continue;
@@ -1984,7 +2003,9 @@ async function processLongParagraphOnline({
     meta.correctedText = correctedChunk;
 
     const baseForDiff = chunk.normalizedText || chunk.text;
-    const diffOps = filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk));
+    const diffOps = collapseDuplicateDiffOps(
+      filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
+    );
     if (!meta.detail && !diffOps.length) continue;
     chunkDetails.push({
       chunk,
