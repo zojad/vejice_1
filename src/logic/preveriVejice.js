@@ -1837,17 +1837,62 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
   return chunks;
 }
 
-function rekeyTokens(tokens, prefix) {
-  if (!Array.isArray(tokens)) return [];
-  return tokens.map((token, idx) => {
+function rekeyTokensInternal(tokens, prefix) {
+  if (!Array.isArray(tokens)) {
+    return { tokens: [], map: new Map() };
+  }
+  const idMap = new Map();
+  const rekeyed = tokens.map((token, idx) => {
     if (token && typeof token === "object") {
-      return { ...token, token_id: `${prefix}${idx + 1}` };
+      const newToken = { ...token, token_id: `${prefix}${idx + 1}` };
+      if (typeof token.token_id === "string") {
+        idMap.set(token.token_id, newToken.token_id);
+      }
+      return newToken;
     }
     return {
       token_id: `${prefix}${idx + 1}`,
       token: typeof token === "string" ? token : "",
     };
   });
+  return { tokens: rekeyed, map: idMap };
+}
+
+function rekeyTokens(tokens, prefix) {
+  return rekeyTokensInternal(tokens, prefix).tokens;
+}
+
+function rekeyTokensWithMap(tokens, prefix) {
+  return rekeyTokensInternal(tokens, prefix);
+}
+
+function remapCorrections(corrections, idMap) {
+  if (!corrections || !idMap?.size) return corrections;
+  const remapGroup = (group) => {
+    if (!group) return group;
+    const remapped = { ...group };
+    const mappedStart = idMap.get(group.source_start) ?? group.source_start;
+    remapped.source_start = mappedStart;
+    if (Array.isArray(group.corrections)) {
+      remapped.corrections = group.corrections.map((corr) => {
+        if (!corr) return corr;
+        const mappedId = idMap.get(corr.source_id) ?? corr.source_id;
+        return { ...corr, source_id: mappedId };
+      });
+    }
+    return remapped;
+  };
+  if (Array.isArray(corrections)) {
+    return corrections.map(remapGroup);
+  }
+  if (typeof corrections === "object") {
+    const remapped = {};
+    for (const [key, group] of Object.entries(corrections)) {
+      remapped[key] = remapGroup(group);
+    }
+    return remapped;
+  }
+  return corrections;
 }
 
 function tokenizeForAnchoring(text = "", prefix = "syn") {
@@ -1939,11 +1984,14 @@ async function processLongParagraphOnline({
     meta.correctedText = correctedChunk;
 
     const baseForDiff = chunk.normalizedText || chunk.text;
-    const ops = filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk));
-    if (!ops.length) continue;
+    const diffOps = filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk));
+    if (!meta.detail && !diffOps.length) continue;
     chunkDetails.push({
       chunk,
-      ops,
+      metaRef: meta,
+      baseForDiff,
+      correctedChunk,
+      diffOps,
     });
   }
 
@@ -1958,8 +2006,14 @@ async function processLongParagraphOnline({
   processedMeta.forEach((meta) => {
     const basePrefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
     if (meta.detail) {
-      sourceTokens.push(...rekeyTokens(meta.detail.sourceTokens, `${basePrefix}s`));
-      targetTokens.push(...rekeyTokens(meta.detail.targetTokens, `${basePrefix}t`));
+      const { tokens: rekeyedSource, map: sourceMap } = rekeyTokensWithMap(
+        meta.detail.sourceTokens,
+        `${basePrefix}s`
+      );
+      sourceTokens.push(...rekeyedSource);
+      const { tokens: rekeyedTarget } = rekeyTokensWithMap(meta.detail.targetTokens, `${basePrefix}t`);
+      targetTokens.push(...rekeyedTarget);
+      meta.remappedCorrections = remapCorrections(meta.detail.corrections, sourceMap);
     } else if (meta.syntheticTokens && meta.syntheticTokens.length) {
       const rekeyed = rekeyTokens(meta.syntheticTokens, `${basePrefix}syn_`);
       sourceTokens.push(...rekeyed);
@@ -1977,7 +2031,33 @@ async function processLongParagraphOnline({
   });
 
   for (const entry of chunkDetails) {
-    for (const op of entry.ops) {
+    const detailRef = entry.metaRef?.detail
+      ? {
+          ...entry.metaRef.detail,
+          corrections: entry.metaRef.remappedCorrections ?? entry.metaRef.detail.corrections,
+        }
+      : null;
+    let ops = [];
+    if (detailRef?.corrections) {
+      ops = collectCommaOpsFromCorrections(detailRef, paragraphAnchors, paragraphIndex);
+    }
+    if (ops.length) {
+      for (const op of ops) {
+        const marked = await highlightSuggestionOnline(
+          context,
+          paragraph,
+          originalText,
+          correctedParagraph,
+          op,
+          paragraphIndex,
+          paragraphAnchors
+        );
+        if (marked) suggestionsAdded++;
+      }
+      continue;
+    }
+    const fallbackOps = entry.diffOps || [];
+    for (const op of fallbackOps) {
       const offset = entry.chunk.start;
       const adjustedOp = {
         ...op,
