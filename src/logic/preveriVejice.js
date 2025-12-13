@@ -23,6 +23,12 @@ const MAX_AUTOFIX_PASSES =
 
 const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
+const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
+
+function normalizeParagraphWhitespace(text) {
+  if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
+  return text.replace(SPACE_EQUIVALENTS_REGEX, " ");
+}
 
 const pendingSuggestionsOnline = [];
 const MAX_PARAGRAPH_CHARS = 3000;
@@ -315,6 +321,7 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
     return { byId, ordered };
   }
   const safeParagraph = typeof paragraphText === "string" ? paragraphText : "";
+  const searchableParagraph = normalizeParagraphWhitespace(safeParagraph);
   const textOccurrences = Object.create(null);
   const trimmedOccurrences = Object.create(null);
   let cursor = 0;
@@ -324,7 +331,7 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
     const tokenText = token?.text ?? "";
     const tokenId = token?.id ?? `tok${i + 1}`;
     const tokenLength = tokenText.length;
-    const charStart = resolveTokenPosition(safeParagraph, tokenText, cursor);
+    const charStart = resolveTokenPosition(searchableParagraph, tokenText, cursor);
     const charEnd = charStart >= 0 ? charStart + tokenLength : -1;
 
     if (charStart >= 0) {
@@ -1533,7 +1540,8 @@ async function checkDocumentTextOnline() {
       for (let idx = 0; idx < paras.items.length; idx++) {
         const p = paras.items[idx];
         const original = p.text || "";
-        const trimmed = original.trim();
+        const normalizedOriginal = normalizeParagraphWhitespace(original);
+        const trimmed = normalizedOriginal.trim();
         const paragraphDocOffset = documentCharOffset;
         documentCharOffset += original.length + 1;
         let paragraphAnchors = null;
@@ -1556,6 +1564,7 @@ async function checkDocumentTextOnline() {
             paragraph: p,
             paragraphIndex: idx,
             originalText: original,
+            normalizedOriginalText: normalizedOriginal,
             paragraphDocOffset,
           });
           suggestions += chunkResult.suggestionsAdded;
@@ -1572,7 +1581,7 @@ async function checkDocumentTextOnline() {
 
         let detail;
         try {
-          detail = await popraviPovedDetailed(original);
+          detail = await popraviPovedDetailed(normalizedOriginal);
         } catch (apiErr) {
           apiErrors++;
           warn(`P${idx}: API call failed -> fallback to chunking`, apiErr);
@@ -1582,6 +1591,7 @@ async function checkDocumentTextOnline() {
             paragraph: p,
             paragraphIndex: idx,
             originalText: original,
+            normalizedOriginalText: normalizedOriginal,
             paragraphDocOffset,
           });
           suggestions += chunkResult.suggestionsAdded;
@@ -1610,12 +1620,16 @@ async function checkDocumentTextOnline() {
           documentOffset: paragraphDocOffset,
         });
 
-        if (!onlyCommasChanged(original, corrected)) {
+        if (!onlyCommasChanged(normalizedOriginal, corrected)) {
           notifyParagraphNonCommaChanges(idx, original, corrected);
           continue;
         }
 
-        const ops = filterCommaOps(original, corrected, diffCommasOnly(original, corrected));
+        const ops = filterCommaOps(
+          normalizedOriginal,
+          corrected,
+          diffCommasOnly(normalizedOriginal, corrected)
+        );
         if (!ops.length) continue;
 
         for (const op of ops) {
@@ -1760,11 +1774,19 @@ async function processLongParagraphOnline({
   paragraph,
   paragraphIndex,
   originalText,
+  normalizedOriginalText,
   paragraphDocOffset,
 }) {
   const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS);
   if (!chunks.length) {
     return { suggestionsAdded: 0, apiErrors: 0, processedAny: false };
+  }
+  const normalizedSource =
+    typeof normalizedOriginalText === "string"
+      ? normalizedOriginalText
+      : normalizeParagraphWhitespace(originalText);
+  for (const chunk of chunks) {
+    chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
   }
 
   const chunkDetails = [];
@@ -1775,7 +1797,7 @@ async function processLongParagraphOnline({
   for (const chunk of chunks) {
     const meta = {
       chunk,
-      correctedText: chunk.text,
+      correctedText: chunk.normalizedText,
       detail: null,
       syntheticTokens: null,
     };
@@ -1791,7 +1813,7 @@ async function processLongParagraphOnline({
     }
     let detail = null;
     try {
-      detail = await popraviPovedDetailed(chunk.text);
+      detail = await popraviPovedDetailed(chunk.normalizedText || chunk.text);
     } catch (apiErr) {
       apiErrors++;
       warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
@@ -1803,7 +1825,7 @@ async function processLongParagraphOnline({
       continue;
     }
     const correctedChunk = detail.correctedText;
-    if (!onlyCommasChanged(chunk.text, correctedChunk)) {
+    if (!onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
       notifyChunkNonCommaChanges(paragraphIndex, chunk.index, chunk.text, correctedChunk);
       log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`, {
         original: chunk.text,
@@ -1818,7 +1840,8 @@ async function processLongParagraphOnline({
     meta.detail = detail;
     meta.correctedText = correctedChunk;
 
-    const ops = filterCommaOps(chunk.text, correctedChunk, diffCommasOnly(chunk.text, correctedChunk));
+    const baseForDiff = chunk.normalizedText || chunk.text;
+    const ops = filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk));
     if (!ops.length) continue;
     chunkDetails.push({
       chunk,
