@@ -24,6 +24,7 @@ const MAX_AUTOFIX_PASSES =
 const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
+const TRAILING_COMMA_REGEX = /[,\s]+$/;
 
 function normalizeParagraphWhitespace(text) {
   if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
@@ -623,6 +624,97 @@ function findCommaAfterWhitespace(text, startIndex) {
     return -1;
   }
   return text[idx] === "," ? idx : -1;
+}
+
+function stripTrailingCommaAndSpace(text) {
+  const safe = typeof text === "string" ? text : "";
+  const match = safe.match(TRAILING_COMMA_REGEX);
+  const trailing = match ? match[0] : "";
+  const base = trailing ? safe.slice(0, -trailing.length) : safe;
+  return {
+    base,
+    trailing,
+    hasComma: trailing.includes(","),
+  };
+}
+
+function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegment = "") {
+  const orig = stripTrailingCommaAndSpace(originalSegment);
+  const corr = stripTrailingCommaAndSpace(correctedSegment);
+  if (orig.hasComma === corr.hasComma) return null;
+  return {
+    removeComma: orig.hasComma && !corr.hasComma,
+    addComma: !orig.hasComma && corr.hasComma,
+    originalSegment,
+    correctedSegment,
+    baseText: orig.base || corr.base,
+  };
+}
+
+function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex) {
+  if (!detail?.corrections || !anchorsEntry) return [];
+  const groups = Array.isArray(detail.corrections)
+    ? detail.corrections
+    : typeof detail.corrections === "object"
+      ? Object.values(detail.corrections)
+      : [];
+  if (!groups.length) return [];
+  const ops = [];
+  const seen = new Set();
+  for (const group of groups) {
+    const entries = Array.isArray(group?.corrections) ? group.corrections : [];
+    for (const entry of entries) {
+      const analysis = analyzeCommaChangeFromCorrections(entry?.source_text, entry?.text);
+      if (!analysis) continue;
+      const tokenId = entry?.source_id ?? group?.source_start;
+      if (!tokenId) continue;
+      const anchor = anchorsEntry?.sourceAnchors?.byId?.[tokenId];
+      if (!anchor || !anchor.matched || anchor.charStart < 0) continue;
+      const tokenText = anchor.tokenText ?? "";
+      if (entry?.source_text && tokenText && entry.source_text !== tokenText) {
+        continue;
+      }
+      const baseText = entry?.source_text ?? tokenText;
+      if (!baseText) continue;
+      if (analysis.removeComma) {
+        const localIndex = baseText.lastIndexOf(",");
+        if (localIndex < 0) continue;
+        const absolutePos = anchor.charStart + localIndex;
+        const key = `del-${absolutePos}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        ops.push({
+          kind: "delete",
+          pos: absolutePos,
+          originalPos: absolutePos,
+          correctedPos: absolutePos,
+          paragraphIndex,
+          fromCorrections: true,
+        });
+      } else if (analysis.addComma) {
+        const insertBase = baseText.replace(TRAILING_COMMA_REGEX, "");
+        const relative = insertBase.length;
+        const absolutePos = anchor.charStart + relative;
+        const key = `ins-${absolutePos}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        ops.push({
+          kind: "insert",
+          pos: absolutePos,
+          originalPos: absolutePos,
+          correctedPos: absolutePos,
+          paragraphIndex,
+          fromCorrections: true,
+        });
+      }
+    }
+  }
+  return ops;
+}
+
+function operationKey(op) {
+  const idx = typeof op?.originalPos === "number" ? op.originalPos : op?.pos;
+  return `${op?.kind ?? "op"}-${idx}`;
 }
 
 /** Minimalni diff: samo operacije z vejicami */
@@ -1625,11 +1717,15 @@ async function checkDocumentTextOnline() {
           continue;
         }
 
-        const ops = filterCommaOps(
+        const correctionOps = collectCommaOpsFromCorrections(detail, paragraphAnchors, idx);
+        const diffOps = filterCommaOps(
           normalizedOriginal,
           corrected,
           diffCommasOnly(normalizedOriginal, corrected)
         );
+        const seenKeys = new Set((correctionOps || []).map((op) => operationKey(op)));
+        const extraOps = diffOps.filter((op) => !seenKeys.has(operationKey(op)));
+        const ops = (correctionOps.length ? correctionOps : []).concat(extraOps);
         if (!ops.length) continue;
 
         for (const op of ops) {
