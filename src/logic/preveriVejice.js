@@ -425,6 +425,19 @@ function annotateRepeatKeyTotals(list) {
   }
 }
 
+function findPreviousNonWhitespaceAnchor(list, tokenId) {
+  if (!Array.isArray(list) || !tokenId) return null;
+  const startIndex = list.findIndex((anchor) => anchor?.tokenId === tokenId);
+  if (startIndex <= 0) return null;
+  for (let i = startIndex - 1; i >= 0; i--) {
+    const anchor = list[i];
+    if (anchor?.tokenText && anchor.tokenText.trim()) {
+      return anchor;
+    }
+  }
+  return null;
+}
+
 function resolveTokenPosition(text, tokenText, fromIndex) {
   if (!tokenText || typeof text !== "string") return -1;
   const textLength = text.length;
@@ -756,7 +769,22 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           continue;
         }
       }
-      const baseText = (entrySource && entrySource.length ? entrySource : tokenText) || "";
+      let baseText = (entrySource && entrySource.length ? entrySource : tokenText) || "";
+      let placementAnchor = anchor;
+      if (
+        analysis.addComma &&
+        (!baseText || !baseText.trim()) &&
+        anchorsEntry?.sourceAnchors?.ordered?.length
+      ) {
+        const coerced = findPreviousNonWhitespaceAnchor(
+          anchorsEntry.sourceAnchors.ordered,
+          anchor.tokenId
+        );
+        if (coerced) {
+          placementAnchor = coerced;
+          baseText = coerced.tokenText ?? baseText;
+        }
+      }
       if (!baseText) {
         if (tracking?.unmatchedTokenIds) {
           tracking.unmatchedTokenIds.add(tokenId);
@@ -764,7 +792,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         continue;
       }
       if (tracking?.intents) {
-        tracking.intents.push({ tokenId, anchor, analysis });
+        tracking.intents.push({ tokenId, anchor: placementAnchor, analysis, baseText });
       }
       if (analysis.removeComma) {
         const localIndex = baseText.lastIndexOf(",");
@@ -774,7 +802,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           }
           continue;
         }
-        const absolutePos = anchor.charStart + localIndex;
+        const absolutePos = placementAnchor.charStart + localIndex;
         const key = `del-${absolutePos}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -789,7 +817,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
       } else if (analysis.addComma) {
         const insertBase = baseText.replace(TRAILING_COMMA_REGEX, "");
         const relative = insertBase.length;
-        const absolutePos = anchor.charStart + relative;
+        const absolutePos = placementAnchor.charStart + relative;
         const key = `ins-${absolutePos}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -811,7 +839,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     for (const intent of tracking.intents) {
       const anchor = intent?.anchor;
       if (!anchor) continue;
-      const baseText = intent.analysis?.baseText ?? anchor.tokenText ?? "";
+      const baseText = intent.baseText ?? intent.analysis?.baseText ?? anchor.tokenText ?? "";
       const charStart = anchor.charStart;
       if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
       const deleteIndex = baseText.lastIndexOf(",");
