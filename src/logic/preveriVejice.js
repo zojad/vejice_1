@@ -651,7 +651,15 @@ function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegmen
   };
 }
 
-function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex) {
+function createCorrectionTracking() {
+  return {
+    tokenIds: new Set(),
+    unmatchedTokenIds: new Set(),
+    intents: [],
+  };
+}
+
+function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
   if (!detail?.corrections || !anchorsEntry) return [];
   const groups = Array.isArray(detail.corrections)
     ? detail.corrections
@@ -668,17 +676,38 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex) {
       if (!analysis) continue;
       const tokenId = entry?.source_id ?? group?.source_start;
       if (!tokenId) continue;
+      if (tracking?.tokenIds) {
+        tracking.tokenIds.add(tokenId);
+      }
       const anchor = anchorsEntry?.sourceAnchors?.byId?.[tokenId];
-      if (!anchor || !anchor.matched || anchor.charStart < 0) continue;
-      const tokenText = anchor.tokenText ?? "";
-      if (entry?.source_text && tokenText && entry.source_text !== tokenText) {
+      if (!anchor || !anchor.matched || anchor.charStart < 0) {
+        if (tracking?.unmatchedTokenIds) {
+          tracking.unmatchedTokenIds.add(tokenId);
+        }
         continue;
       }
-      const baseText = entry?.source_text ?? tokenText;
-      if (!baseText) continue;
+      const tokenText = anchor.tokenText ?? "";
+      const baseText =
+        (typeof entry?.source_text === "string" && entry.source_text.length
+          ? entry.source_text
+          : tokenText) || "";
+      if (!baseText) {
+        if (tracking?.unmatchedTokenIds) {
+          tracking.unmatchedTokenIds.add(tokenId);
+        }
+        continue;
+      }
+      if (tracking?.intents) {
+        tracking.intents.push({ tokenId, anchor, analysis });
+      }
       if (analysis.removeComma) {
         const localIndex = baseText.lastIndexOf(",");
-        if (localIndex < 0) continue;
+        if (localIndex < 0) {
+          if (tracking?.unmatchedTokenIds) {
+            tracking.unmatchedTokenIds.add(tokenId);
+          }
+          continue;
+        }
         const absolutePos = anchor.charStart + localIndex;
         const key = `del-${absolutePos}`;
         if (seen.has(key)) continue;
@@ -707,6 +736,24 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex) {
           fromCorrections: true,
         });
       }
+    }
+  }
+
+  if (tracking && tracking.intents?.length) {
+    tracking.blockedOriginalPositions = new Set(tracking.blockedOriginalPositions || []);
+    tracking.blockedCorrectedPositions = new Set(tracking.blockedCorrectedPositions || []);
+    for (const intent of tracking.intents) {
+      const anchor = intent?.anchor;
+      if (!anchor) continue;
+      const baseText = intent.analysis?.baseText ?? anchor.tokenText ?? "";
+      const charStart = anchor.charStart;
+      if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
+      const deleteIndex = baseText.lastIndexOf(",");
+      if (deleteIndex >= 0) {
+        tracking.blockedOriginalPositions.add(charStart + deleteIndex);
+      }
+      const insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
+      tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
     }
   }
   return ops;
@@ -790,6 +837,20 @@ function collapseDuplicateDiffOps(ops) {
     const pos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
     if (typeof pos !== "number") return true;
     return !shouldDropInsert(pos);
+  });
+}
+
+function filterDiffOpsAgainstCorrections(ops, tracking) {
+  if (!tracking || !Array.isArray(ops) || !ops.length) return ops;
+  const blockedOriginal = tracking.blockedOriginalPositions;
+  const blockedCorrected = tracking.blockedCorrectedPositions;
+  if (!blockedOriginal?.size && !blockedCorrected?.size) return ops;
+  return ops.filter((op) => {
+    const originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    const correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    if (op.kind === "delete" && blockedOriginal?.has(originalPos)) return false;
+    if (op.kind === "insert" && blockedCorrected?.has(correctedPos)) return false;
+    return true;
   });
 }
 
@@ -1734,18 +1795,25 @@ async function checkDocumentTextOnline() {
           continue;
         }
 
-        const correctionOps = collectCommaOpsFromCorrections(detail, paragraphAnchors, idx);
+        const correctionTracking = createCorrectionTracking();
+        const correctionOps = collectCommaOpsFromCorrections(
+          detail,
+          paragraphAnchors,
+          idx,
+          correctionTracking
+        );
         let ops = [];
         if (correctionOps.length) {
           ops = correctionOps;
         } else {
-          ops = collapseDuplicateDiffOps(
+          const diffOps = collapseDuplicateDiffOps(
             filterCommaOps(
               normalizedOriginal,
               corrected,
               diffCommasOnly(normalizedOriginal, corrected)
             )
           );
+          ops = filterDiffOpsAgainstCorrections(diffOps, correctionTracking);
         }
         if (!ops.length) continue;
 
@@ -2059,8 +2127,14 @@ async function processLongParagraphOnline({
         }
       : null;
     let ops = [];
+    const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
     if (detailRef?.corrections) {
-      ops = collectCommaOpsFromCorrections(detailRef, paragraphAnchors, paragraphIndex);
+      ops = collectCommaOpsFromCorrections(
+        detailRef,
+        paragraphAnchors,
+        paragraphIndex,
+        correctionTracking
+      );
     }
     if (ops.length) {
       for (const op of ops) {
@@ -2077,7 +2151,10 @@ async function processLongParagraphOnline({
       }
       continue;
     }
-    const fallbackOps = entry.diffOps || [];
+    let fallbackOps = entry.diffOps || [];
+    if (fallbackOps.length) {
+      fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+    }
     for (const op of fallbackOps) {
       const offset = entry.chunk.start;
       const adjustedOp = {
