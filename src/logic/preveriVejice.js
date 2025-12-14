@@ -762,15 +762,25 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
       }
       const tokenText = anchor.tokenText ?? "";
       const entrySource = typeof entry?.source_text === "string" ? entry.source_text : "";
+
+      let placementAnchor = anchor;
       if (entrySource && tokenText) {
         const normEntry = normalizeTokenForComparison(entrySource);
         const normToken = normalizeTokenForComparison(tokenText);
         if (normEntry !== normToken) {
-          continue;
+          const merged = mergeAnchorsToMatchSourceText(
+            entrySource,
+            anchor,
+            anchorsEntry?.sourceAnchors?.ordered
+          );
+          if (merged) {
+            placementAnchor = merged;
+          } else {
+            continue;
+          }
         }
       }
       let baseText = (entrySource && entrySource.length ? entrySource : tokenText) || "";
-      let placementAnchor = anchor;
       if (
         analysis.addComma &&
         (!baseText || !baseText.trim()) &&
@@ -851,6 +861,59 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     }
   }
   return ops;
+}
+
+function mergeAnchorsToMatchSourceText(entrySource, baseAnchor, orderedAnchors) {
+  if (!entrySource || !baseAnchor || !orderedAnchors?.length) return null;
+  const targetNormalized = normalizeTokenForComparison(entrySource);
+  if (!targetNormalized) return null;
+  let combinedText = baseAnchor.tokenText ?? "";
+  let normalizedCombined = normalizeTokenForComparison(combinedText);
+  if (normalizedCombined === targetNormalized) return baseAnchor;
+
+  let leftIndex = baseAnchor.tokenIndex - 1;
+  let rightIndex = baseAnchor.tokenIndex + 1;
+  let leftAnchor = baseAnchor;
+  let rightAnchor = baseAnchor;
+  const maxLength = entrySource.length + 20;
+
+  while (combinedText.length <= maxLength) {
+    let expanded = false;
+    if (leftIndex >= 0) {
+      const candidate = orderedAnchors[leftIndex];
+      leftIndex--;
+      if (candidate?.tokenText != null) {
+        combinedText = (candidate.tokenText ?? "") + combinedText;
+        leftAnchor = candidate;
+        normalizedCombined = normalizeTokenForComparison(combinedText);
+        expanded = true;
+        if (normalizedCombined === targetNormalized) break;
+      }
+    }
+    if (normalizedCombined === targetNormalized) break;
+    if (rightIndex < orderedAnchors.length) {
+      const candidate = orderedAnchors[rightIndex];
+      rightIndex++;
+      if (candidate?.tokenText != null) {
+        combinedText += candidate.tokenText ?? "";
+        rightAnchor = candidate;
+        normalizedCombined = normalizeTokenForComparison(combinedText);
+        expanded = true;
+        if (normalizedCombined === targetNormalized) break;
+      }
+    }
+    if (!expanded) break;
+  }
+
+  if (normalizedCombined !== targetNormalized) return null;
+  if (typeof leftAnchor?.charStart !== "number" || leftAnchor.charStart < 0) return null;
+
+  return {
+    ...baseAnchor,
+    charStart: leftAnchor.charStart,
+    tokenIndex: leftAnchor.tokenIndex,
+    tokenText: combinedText,
+  };
 }
 
 function operationKey(op) {
