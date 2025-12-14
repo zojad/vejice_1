@@ -1806,9 +1806,8 @@ async function checkDocumentTextOnline() {
         const trimmed = normalizedOriginal.trim();
         const paragraphDocOffset = documentCharOffset;
         documentCharOffset += original.length + 1;
-        let paragraphAnchors = null;
         if (!trimmed) {
-          paragraphAnchors = createParagraphTokenAnchors({
+          createParagraphTokenAnchors({
             paragraphIndex: idx,
             originalText: original,
             correctedText: original,
@@ -1820,111 +1819,18 @@ async function checkDocumentTextOnline() {
         }
 
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
-        if (trimmed.length > MAX_PARAGRAPH_CHARS) {
-          const chunkResult = await processLongParagraphOnline({
-            context,
-            paragraph: p,
-            paragraphIndex: idx,
-            originalText: original,
-            normalizedOriginalText: normalizedOriginal,
-            paragraphDocOffset,
-          });
-          suggestions += chunkResult.suggestionsAdded;
-          apiErrors += chunkResult.apiErrors;
-          if (chunkResult.processedAny) {
-            paragraphsProcessed++;
-          } else {
-            notifyParagraphTooLong(idx, trimmed.length);
-          }
-          continue;
-        }
-
         paragraphsProcessed++;
 
-        let detail;
-        try {
-          detail = await popraviPovedDetailed(normalizedOriginal);
-          if (typeof window !== "undefined") {
-            window.__LAST_DETAIL__ = detail;
-          }
-        } catch (apiErr) {
-          apiErrors++;
-          warn(`P${idx}: API call failed -> fallback to chunking`, apiErr);
-          notifyApiUnavailable();
-          const chunkResult = await processLongParagraphOnline({
-            context,
-            paragraph: p,
-            paragraphIndex: idx,
-            originalText: original,
-            normalizedOriginalText: normalizedOriginal,
-            paragraphDocOffset,
-          });
-          suggestions += chunkResult.suggestionsAdded;
-          apiErrors += chunkResult.apiErrors;
-          if (chunkResult.processedAny) {
-            continue;
-          }
-          paragraphAnchors = createParagraphTokenAnchors({
-            paragraphIndex: idx,
-            originalText: original,
-            correctedText: original,
-            sourceTokens: [],
-            targetTokens: [],
-            documentOffset: paragraphDocOffset,
-          });
-          continue;
-        }
-        const corrected = detail.correctedText;
-
-        paragraphAnchors = createParagraphTokenAnchors({
+        const chunkResult = await processLongParagraphOnline({
+          context,
+          paragraph: p,
           paragraphIndex: idx,
           originalText: original,
-          correctedText: corrected,
-          sourceTokens: detail.sourceTokens,
-          targetTokens: detail.targetTokens,
-          documentOffset: paragraphDocOffset,
+          normalizedOriginalText: normalizedOriginal,
+          paragraphDocOffset,
         });
-
-        if (!onlyCommasChanged(normalizedOriginal, corrected)) {
-          notifyParagraphNonCommaChanges(idx, original, corrected);
-          continue;
-        }
-
-        const correctionTracking = createCorrectionTracking();
-        const correctionOps = collectCommaOpsFromCorrections(
-          detail,
-          paragraphAnchors,
-          idx,
-          correctionTracking
-        );
-        let ops = [];
-        if (correctionOps.length) {
-          ops = correctionOps;
-        } else {
-          const diffOps = collapseDuplicateDiffOps(
-            filterCommaOps(
-              normalizedOriginal,
-              corrected,
-              diffCommasOnly(normalizedOriginal, corrected)
-            )
-          );
-          ops = filterDiffOpsAgainstCorrections(diffOps, correctionTracking);
-          ops = filterDiffOpsForRepeatedTokens(ops, paragraphAnchors);
-        }
-        if (!ops.length) continue;
-
-        for (const op of ops) {
-          const marked = await highlightSuggestionOnline(
-            context,
-            p,
-            original,
-            corrected,
-            op,
-            idx,
-            paragraphAnchors
-          );
-          if (marked) suggestions++;
-        }
+        suggestions += chunkResult.suggestionsAdded;
+        apiErrors += chunkResult.apiErrors;
       }
 
       await context.sync();
@@ -1973,51 +1879,17 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
     sentences.push({ start, end: safeText.length });
   }
 
-  const chunks = [];
-  let current = null;
-  let chunkIndex = 0;
-
-  const finalizeCurrent = () => {
-    if (!current) return;
-    chunks.push({
-      index: current.index,
-      start: current.start,
-      end: current.end,
-      length: current.end - current.start,
-      text: safeText.slice(current.start, current.end),
-      tooLong: false,
-    });
-    current = null;
-  };
-
-  sentences.forEach((sentence) => {
-    const sentenceLength = sentence.end - sentence.start;
-    if (sentenceLength > maxLen) {
-      finalizeCurrent();
-      chunks.push({
-        index: chunkIndex++,
-        start: sentence.start,
-        end: sentence.end,
-        length: sentenceLength,
-        text: safeText.slice(sentence.start, sentence.end),
-        tooLong: true,
-      });
-      return;
-    }
-    if (!current) {
-      current = { start: sentence.start, end: sentence.end, index: chunkIndex++ };
-      return;
-    }
-    if (sentence.end - current.start <= maxLen) {
-      current.end = sentence.end;
-      return;
-    }
-    finalizeCurrent();
-    current = { start: sentence.start, end: sentence.end, index: chunkIndex++ };
+  return sentences.map((sentence, index) => {
+    const length = sentence.end - sentence.start;
+    return {
+      index,
+      start: sentence.start,
+      end: sentence.end,
+      length,
+      text: safeText.slice(sentence.start, sentence.end),
+      tooLong: length > maxLen,
+    };
   });
-
-  finalizeCurrent();
-  return chunks;
 }
 
 function rekeyTokensInternal(tokens, prefix) {
@@ -2140,6 +2012,9 @@ async function processLongParagraphOnline({
     let detail = null;
     try {
       detail = await popraviPovedDetailed(chunk.normalizedText || chunk.text);
+      if (typeof window !== "undefined") {
+        window.__LAST_DETAIL__ = detail;
+      }
     } catch (apiErr) {
       apiErrors++;
       warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
