@@ -1860,31 +1860,44 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
   const sentences = [];
   let start = 0;
 
-  const pushSentence = (end) => {
-    if (end <= start) return;
-    sentences.push({ start, end });
-    start = end;
+  const pushSentence = (contentEnd, gapEnd = contentEnd) => {
+    if (typeof contentEnd !== "number" || contentEnd <= start) {
+      start = Math.max(start, gapEnd ?? contentEnd ?? start);
+      return;
+    }
+    sentences.push({ start, end: contentEnd, gapEnd: gapEnd ?? contentEnd });
+    start = gapEnd ?? contentEnd;
   };
 
   for (let i = 0; i < protectedText.length; i++) {
     const ch = protectedText[i];
     if (ch === "\n") {
-      pushSentence(i + 1);
+      pushSentence(i + 1, i + 1);
       continue;
     }
     if (/[.!?]/.test(ch)) {
-      let end = i + 1;
-      while (end < protectedText.length && /[\])"'»”’]+/.test(protectedText[end])) end++;
-      while (end < protectedText.length && /\s/.test(protectedText[end])) end++;
-      pushSentence(end);
-      i = end - 1;
+      let contentEnd = i + 1;
+      while (contentEnd < protectedText.length && /[\])"'»”’]+/.test(protectedText[contentEnd])) {
+        contentEnd++;
+      }
+      let gapEnd = contentEnd;
+      while (gapEnd < protectedText.length && /\s/.test(protectedText[gapEnd])) {
+        gapEnd++;
+      }
+      pushSentence(contentEnd, gapEnd);
+      i = gapEnd - 1;
     }
   }
   if (start < protectedText.length) {
-    sentences.push({ start, end: protectedText.length });
+    sentences.push({
+      start,
+      end: protectedText.length,
+      gapEnd: protectedText.length,
+    });
   }
 
   return sentences.map((sentence, index) => {
+    const gapEnd = sentence.gapEnd ?? sentence.end;
     const length = sentence.end - sentence.start;
     return {
       index,
@@ -1894,7 +1907,7 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
       text: safeText
         .slice(sentence.start, sentence.end)
         .replace(new RegExp(placeholder, "g"), "."),
-      trailing: safeText.slice(sentence.end, sentences[index + 1]?.start ?? sentence.end),
+      trailing: safeText.slice(sentence.end, gapEnd),
       tooLong: length > maxLen,
     };
   });
