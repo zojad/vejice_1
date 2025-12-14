@@ -25,10 +25,21 @@ const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
 const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
+const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'“”„()«»]+/g;
+const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?'"“”„()«»]+$/g;
 
 function normalizeParagraphWhitespace(text) {
   if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
   return text.replace(SPACE_EQUIVALENTS_REGEX, " ");
+}
+
+function normalizeTokenRepeatKey(text) {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(TOKEN_REPEAT_LEADING_REGEX, "")
+    .replace(TOKEN_REPEAT_TRAILING_REGEX, "")
+    .trim()
+    .toLowerCase();
 }
 
 const pendingSuggestionsOnline = [];
@@ -364,12 +375,29 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
       documentCharStart: charStart >= 0 ? documentOffset + charStart : -1,
       documentCharEnd: charEnd >= 0 ? documentOffset + charEnd : -1,
       matched: charStart >= 0,
+      repeatKey: normalizeTokenRepeatKey(tokenText),
     };
     byId[tokenId] = anchor;
     ordered.push(anchor);
   }
 
+  annotateRepeatKeyTotals(ordered);
   return { byId, ordered };
+}
+
+function annotateRepeatKeyTotals(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  const totals = Object.create(null);
+  for (const anchor of list) {
+    const key = anchor?.repeatKey;
+    if (!key) continue;
+    totals[key] = (totals[key] ?? 0) + 1;
+  }
+  for (const anchor of list) {
+    if (!anchor) continue;
+    const key = anchor.repeatKey;
+    anchor.repeatKeyTotal = key ? totals[key] ?? 0 : 0;
+  }
 }
 
 function resolveTokenPosition(text, tokenText, fromIndex) {
@@ -416,6 +444,8 @@ function snapshotAnchor(anchor) {
     documentCharEnd: anchor.documentCharEnd,
     length: anchor.length,
     matched: anchor.matched,
+    repeatKey: anchor.repeatKey,
+    repeatKeyTotal: anchor.repeatKeyTotal,
   };
 }
 
@@ -852,6 +882,30 @@ function filterDiffOpsAgainstCorrections(ops, tracking) {
     if (op.kind === "insert" && blockedCorrected?.has(correctedPos)) return false;
     return true;
   });
+}
+
+function filterDiffOpsForRepeatedTokens(ops, anchorsEntry) {
+  if (!Array.isArray(ops) || !ops.length) return ops;
+  return ops.filter((op) => !shouldSuppressDueToRepeatedToken(anchorsEntry, op));
+}
+
+function findAnchorForDiffOp(anchorsEntry, op) {
+  if (!anchorsEntry || !op) return null;
+  const isDelete = op.kind === "delete";
+  const charIndex = isDelete ? op.originalPos ?? op.pos : op.correctedPos ?? op.pos;
+  if (typeof charIndex !== "number" || charIndex < 0) return null;
+  const around = findAnchorsNearChar(anchorsEntry, isDelete ? "source" : "target", charIndex);
+  return around?.at ?? null;
+}
+
+function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
+  const anchor = findAnchorForDiffOp(anchorsEntry, op);
+  if (!anchor) return false;
+  const repeatKey = anchor.repeatKey;
+  const repeatTotal = anchor.repeatKeyTotal ?? 0;
+  if (!repeatKey || repeatTotal <= 1) return false;
+  if (!/[\p{L}\d]+/u.test(repeatKey)) return false;
+  return true;
 }
 
 /** Anchor-based mikro urejanje (ohrani formatiranje) */
@@ -1814,6 +1868,7 @@ async function checkDocumentTextOnline() {
             )
           );
           ops = filterDiffOpsAgainstCorrections(diffOps, correctionTracking);
+          ops = filterDiffOpsForRepeatedTokens(ops, paragraphAnchors);
         }
         if (!ops.length) continue;
 
@@ -2163,6 +2218,9 @@ async function processLongParagraphOnline({
         originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
         correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
       };
+      if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
+        continue;
+      }
       const marked = await highlightSuggestionOnline(
         context,
         paragraph,
