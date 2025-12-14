@@ -715,6 +715,11 @@ function createCorrectionTracking() {
   };
 }
 
+function normalizeTokenForComparison(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/\s+$/u, "");
+}
+
 function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
   if (!detail?.corrections || !anchorsEntry) return [];
   const groups = Array.isArray(detail.corrections)
@@ -743,10 +748,15 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         continue;
       }
       const tokenText = anchor.tokenText ?? "";
-      const baseText =
-        (typeof entry?.source_text === "string" && entry.source_text.length
-          ? entry.source_text
-          : tokenText) || "";
+      const entrySource = typeof entry?.source_text === "string" ? entry.source_text : "";
+      if (entrySource && tokenText) {
+        const normEntry = normalizeTokenForComparison(entrySource);
+        const normToken = normalizeTokenForComparison(tokenText);
+        if (normEntry !== normToken) {
+          continue;
+        }
+      }
+      const baseText = (entrySource && entrySource.length ? entrySource : tokenText) || "";
       if (!baseText) {
         if (tracking?.unmatchedTokenIds) {
           tracking.unmatchedTokenIds.add(tokenId);
@@ -1131,7 +1141,23 @@ async function highlightInsertSuggestion(
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (lastWord) {
+  if (metadata.highlightCharStart >= 0) {
+    const metaEnd =
+      metadata.highlightCharEnd > metadata.highlightCharStart
+        ? metadata.highlightCharEnd
+        : metadata.highlightCharStart + 1;
+    range = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      anchorsEntry?.originalText ?? paragraph.text ?? corrected,
+      metadata.highlightCharStart,
+      metaEnd,
+      "highlight-insert-meta",
+      metadata.highlightText
+    );
+  }
+
+  if (!range && lastWord) {
     const wordSearch = paragraph.getRange().search(lastWord, {
       matchCase: false,
       matchWholeWord: true,
@@ -1163,22 +1189,6 @@ async function highlightInsertSuggestion(
         range = rightSearch.items[0];
       }
     }
-  }
-
-  if (!range && metadata.highlightCharStart >= 0) {
-    const metaEnd =
-      metadata.highlightCharEnd > metadata.highlightCharStart
-        ? metadata.highlightCharEnd
-        : metadata.highlightCharStart + 1;
-    range = await getRangeForCharacterSpan(
-      context,
-      paragraph,
-      anchorsEntry?.originalText ?? paragraph.text ?? corrected,
-      metadata.highlightCharStart,
-      metaEnd,
-      "highlight-insert",
-      metadata.highlightText
-    );
   }
 
   if (!range) return false;
