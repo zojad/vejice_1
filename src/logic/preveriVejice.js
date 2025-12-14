@@ -27,6 +27,7 @@ const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'“”„()«»]+/g;
 const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?'"“”„()«»]+$/g;
+const REPEAT_SUPPRESSION_MAX_DISTANCE = 80;
 
 function normalizeParagraphWhitespace(text) {
   if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
@@ -388,15 +389,39 @@ function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documen
 function annotateRepeatKeyTotals(list) {
   if (!Array.isArray(list) || !list.length) return;
   const totals = Object.create(null);
+  const positions = Object.create(null);
   for (const anchor of list) {
     const key = anchor?.repeatKey;
     if (!key) continue;
     totals[key] = (totals[key] ?? 0) + 1;
+    positions[key] = positions[key] || [];
+    if (typeof anchor.charStart === "number" && anchor.charStart >= 0) {
+      positions[key].push(anchor.charStart);
+    }
+  }
+  const nearestGap = Object.create(null);
+  for (const [key, coords] of Object.entries(positions)) {
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const sorted = coords.slice().sort((a, b) => a - b);
+    const gaps = new Map();
+    for (let i = 0; i < sorted.length; i++) {
+      let gap = Infinity;
+      if (i > 0) gap = Math.min(gap, sorted[i] - sorted[i - 1]);
+      if (i < sorted.length - 1) gap = Math.min(gap, sorted[i + 1] - sorted[i]);
+      gaps.set(sorted[i], gap);
+    }
+    nearestGap[key] = gaps;
   }
   for (const anchor of list) {
     if (!anchor) continue;
     const key = anchor.repeatKey;
     anchor.repeatKeyTotal = key ? totals[key] ?? 0 : 0;
+    if (key && nearestGap[key] && typeof anchor.charStart === "number") {
+      const gap = nearestGap[key].get(anchor.charStart);
+      anchor.repeatKeyNearestGap = typeof gap === "number" ? gap : Infinity;
+    } else {
+      anchor.repeatKeyNearestGap = Infinity;
+    }
   }
 }
 
@@ -446,6 +471,7 @@ function snapshotAnchor(anchor) {
     matched: anchor.matched,
     repeatKey: anchor.repeatKey,
     repeatKeyTotal: anchor.repeatKeyTotal,
+    repeatKeyNearestGap: anchor.repeatKeyNearestGap,
   };
 }
 
@@ -905,6 +931,8 @@ function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
   const repeatTotal = anchor.repeatKeyTotal ?? 0;
   if (!repeatKey || repeatTotal <= 1) return false;
   if (!/[\p{L}\d]+/u.test(repeatKey)) return false;
+  const gap = anchor.repeatKeyNearestGap ?? Infinity;
+  if (gap > REPEAT_SUPPRESSION_MAX_DISTANCE) return false;
   return true;
 }
 
