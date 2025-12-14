@@ -1894,6 +1894,7 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
       text: safeText
         .slice(sentence.start, sentence.end)
         .replace(new RegExp(placeholder, "g"), "."),
+      trailing: safeText.slice(sentence.end, sentences[index + 1]?.start ?? sentence.end),
       tooLong: length > maxLen,
     };
   });
@@ -1990,17 +1991,9 @@ async function processLongParagraphOnline({
     typeof normalizedOriginalText === "string"
       ? normalizedOriginalText
       : normalizeParagraphWhitespace(originalText);
-  const chunkCount = chunks.length;
-  for (let idx = 0; idx < chunkCount; idx++) {
-    const chunk = chunks[idx];
+  chunks.forEach((chunk) => {
     chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
-    if (idx < chunkCount - 1 && normalizedSource[chunk.end] === " ") {
-      chunk.normalizedText += " ";
-      chunk.trailingSpace = true;
-    } else {
-      chunk.trailingSpace = false;
-    }
-  }
+  });
 
   const chunkDetails = [];
   const processedMeta = [];
@@ -2054,7 +2047,7 @@ async function processLongParagraphOnline({
       continue;
     }
     meta.detail = detail;
-    meta.correctedText = chunk.trailingSpace ? `${correctedChunk} ` : correctedChunk;
+    meta.correctedText = correctedChunk;
 
     const baseForDiff = chunk.normalizedText || chunk.text;
     const diffOps = collapseDuplicateDiffOps(
@@ -2074,7 +2067,9 @@ async function processLongParagraphOnline({
     return { suggestionsAdded: 0, apiErrors, processedAny: false };
   }
 
-  const correctedParagraph = processedMeta.map((meta) => meta.correctedText).join("");
+  const correctedParagraph = processedMeta
+    .map((meta) => meta.correctedText + (meta.chunk.trailing ?? ""))
+    .join("");
   const sourceTokens = [];
   const targetTokens = [];
 
