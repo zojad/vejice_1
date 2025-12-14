@@ -1844,6 +1844,9 @@ async function checkDocumentTextOnline() {
         let detail;
         try {
           detail = await popraviPovedDetailed(normalizedOriginal);
+          if (typeof window !== "undefined") {
+            window.__LAST_DETAIL__ = detail;
+          }
         } catch (apiErr) {
           apiErrors++;
           warn(`P${idx}: API call failed -> fallback to chunking`, apiErr);
