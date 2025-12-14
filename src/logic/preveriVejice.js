@@ -2236,7 +2236,9 @@ async function processLongParagraphOnline({
     }
     let fallbackOps = entry.diffOps || [];
     if (fallbackOps.length) {
-      fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+      if (!detailRef?.corrections || ops.length) {
+        fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+      }
       if (!ops.length && detailRef?.corrections) {
         fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
       }
