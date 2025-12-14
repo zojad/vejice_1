@@ -1990,8 +1990,16 @@ async function processLongParagraphOnline({
     typeof normalizedOriginalText === "string"
       ? normalizedOriginalText
       : normalizeParagraphWhitespace(originalText);
-  for (const chunk of chunks) {
+  const chunkCount = chunks.length;
+  for (let idx = 0; idx < chunkCount; idx++) {
+    const chunk = chunks[idx];
     chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
+    if (idx < chunkCount - 1 && normalizedSource[chunk.end] === " ") {
+      chunk.normalizedText += " ";
+      chunk.trailingSpace = true;
+    } else {
+      chunk.trailingSpace = false;
+    }
   }
 
   const chunkDetails = [];
@@ -2046,7 +2054,7 @@ async function processLongParagraphOnline({
       continue;
     }
     meta.detail = detail;
-    meta.correctedText = correctedChunk;
+    meta.correctedText = chunk.trailingSpace ? `${correctedChunk} ` : correctedChunk;
 
     const baseForDiff = chunk.normalizedText || chunk.text;
     const diffOps = collapseDuplicateDiffOps(
