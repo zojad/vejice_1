@@ -1852,6 +1852,11 @@ async function checkDocumentTextOnline() {
 function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
   const safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
+  const placeholder = "\uE000";
+  const protectedText = safeText.replace(
+    /(?:\b(?:tj|npr|ipd|itd)\.|[A-ZČŠŽ]\.)+(?:\s+[A-ZČŠŽ]\.)*|\b\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}/g,
+    (match) => match.replace(/\./g, placeholder)
+  );
   const sentences = [];
   let start = 0;
 
@@ -1861,22 +1866,22 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
     start = end;
   };
 
-  for (let i = 0; i < safeText.length; i++) {
-    const ch = safeText[i];
+  for (let i = 0; i < protectedText.length; i++) {
+    const ch = protectedText[i];
     if (ch === "\n") {
       pushSentence(i + 1);
       continue;
     }
     if (/[.!?]/.test(ch)) {
       let end = i + 1;
-      while (end < safeText.length && /[\])"'»”’]+/.test(safeText[end])) end++;
-      while (end < safeText.length && /\s/.test(safeText[end])) end++;
+      while (end < protectedText.length && /[\])"'»”’]+/.test(protectedText[end])) end++;
+      while (end < protectedText.length && /\s/.test(protectedText[end])) end++;
       pushSentence(end);
       i = end - 1;
     }
   }
-  if (start < safeText.length) {
-    sentences.push({ start, end: safeText.length });
+  if (start < protectedText.length) {
+    sentences.push({ start, end: protectedText.length });
   }
 
   return sentences.map((sentence, index) => {
@@ -1886,7 +1891,9 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
       start: sentence.start,
       end: sentence.end,
       length,
-      text: safeText.slice(sentence.start, sentence.end),
+      text: safeText
+        .slice(sentence.start, sentence.end)
+        .replace(new RegExp(placeholder, "g"), "."),
       tooLong: length > maxLen,
     };
   });
