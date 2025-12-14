@@ -963,6 +963,7 @@ function findAnchorForDiffOp(anchorsEntry, op) {
 }
 
 function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
+  if (op?.fromCorrections) return false;
   const anchor = findAnchorForDiffOp(anchorsEntry, op);
   if (!anchor) return false;
   const repeatKey = anchor.repeatKey;
@@ -1881,10 +1882,7 @@ function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
   const safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
   const placeholder = "\uE000";
-  const protectedText = safeText.replace(
-    /(?:\b(?:tj|npr|ipd|itd)\.|[A-ZČŠŽ]\.)+(?:\s+[A-ZČŠŽ]\.)*|\b\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}/g,
-    (match) => match.replace(/\./g, placeholder)
-  );
+  const protectedText = safeText;
   const sentences = [];
   let start = 0;
 
