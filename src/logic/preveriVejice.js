@@ -2284,7 +2284,8 @@ async function processLongParagraphOnline({
         fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
       }
     }
-    const allOps = ops.length ? ops : fallbackOps;
+    const usingFallbackOnly = !ops.length;
+    const allOps = usingFallbackOnly ? fallbackOps : ops;
     if (!allOps.length) continue;
     for (const op of allOps) {
       if (!ops.includes(op) && op.kind === "insert") {
@@ -2331,27 +2332,29 @@ async function processLongParagraphOnline({
         if (marked) suggestionsAdded++;
       }
     }
-    for (const op of fallbackOps) {
-      const offset = entry.chunk.start;
-      const adjustedOp = {
-        ...op,
-        pos: op.pos + offset,
-        originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
-        correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
-      };
-      if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
-        continue;
+    if (!ops.length && fallbackOps.length) {
+      for (const op of fallbackOps) {
+        const offset = entry.chunk.start;
+        const adjustedOp = {
+          ...op,
+          pos: op.pos + offset,
+          originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
+          correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
+        };
+        if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
+          continue;
+        }
+        const marked = await highlightSuggestionOnline(
+          context,
+          paragraph,
+          originalText,
+          correctedParagraph,
+          adjustedOp,
+          paragraphIndex,
+          paragraphAnchors
+        );
+        if (marked) suggestionsAdded++;
       }
-      const marked = await highlightSuggestionOnline(
-        context,
-        paragraph,
-        originalText,
-        correctedParagraph,
-        adjustedOp,
-        paragraphIndex,
-        paragraphAnchors
-      );
-      if (marked) suggestionsAdded++;
     }
   }
 
