@@ -2079,6 +2079,19 @@ function remapCorrections(corrections, idMap) {
   return corrections;
 }
 
+function correctionsHaveEntries(corrections) {
+  if (!corrections) return false;
+  if (Array.isArray(corrections)) {
+    return corrections.some((group) => Array.isArray(group?.corrections) && group.corrections.length);
+  }
+  if (typeof corrections === "object") {
+    return Object.values(corrections).some(
+      (group) => Array.isArray(group?.corrections) && group.corrections.length
+    );
+  }
+  return false;
+}
+
 function tokenizeForAnchoring(text = "", prefix = "syn") {
   if (typeof text !== "string" || !text.length) return [];
   const tokens = [];
@@ -2170,7 +2183,7 @@ async function processLongParagraphOnline({
     meta.detail = detail;
     meta.correctedText = correctedChunk;
 
-    const baseForDiff = chunk.normalizedText || chunk.text;
+    const baseForDiff = chunk.text || chunk.normalizedText || "";
     const diffOps = collapseDuplicateDiffOps(
       filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
     );
@@ -2230,7 +2243,8 @@ async function processLongParagraphOnline({
       : null;
     let ops = [];
     const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
-    if (detailRef?.corrections) {
+    const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
+    if (correctionsPresent) {
       ops = collectCommaOpsFromCorrections(
         detailRef,
         paragraphAnchors,
@@ -2240,10 +2254,13 @@ async function processLongParagraphOnline({
     }
     let fallbackOps = entry.diffOps || [];
     if (fallbackOps.length) {
-      if (!detailRef?.corrections || ops.length) {
+      if (!correctionsPresent || ops.length) {
         fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
       }
-      if (!ops.length && detailRef?.corrections) {
+      if (!correctionsPresent && detailRef && !ops.length) {
+        ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
+        fallbackOps = [];
+      } else if (!ops.length && correctionsPresent) {
         fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
       }
     }
