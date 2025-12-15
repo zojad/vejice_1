@@ -236,6 +236,11 @@ function setParagraphTokenAnchorsOnline(paragraphIndex, anchors) {
 function getParagraphTokenAnchorsOnline(paragraphIndex) {
   return paragraphTokenAnchorsOnline[paragraphIndex];
 }
+function deleteParagraphTokenAnchorsOnline(paragraphIndex) {
+  if (typeof paragraphIndex === "number" && paragraphIndex >= 0) {
+    delete paragraphTokenAnchorsOnline[paragraphIndex];
+  }
+}
 
 function createParagraphTokenAnchors({
   paragraphIndex,
@@ -1892,67 +1897,64 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
 
 export async function applyAllSuggestionsOnline() {
   if (!pendingSuggestionsOnline.length) return;
+  const suggestionsByParagraph = new Map();
+  for (const sug of pendingSuggestionsOnline) {
+    if (typeof sug?.paragraphIndex !== "number" || sug.paragraphIndex < 0) continue;
+    if (!suggestionsByParagraph.has(sug.paragraphIndex)) {
+      suggestionsByParagraph.set(sug.paragraphIndex, []);
+    }
+    suggestionsByParagraph.get(sug.paragraphIndex).push(sug);
+  }
+  if (!suggestionsByParagraph.size) return;
   await Word.run(async (context) => {
     const paras = context.document.body.paragraphs;
     paras.load("items/text");
     await context.sync();
-    const paragraphTexts = paras.items.map((p) => p?.text ?? "");
-    const touchedIndexes = new Set(paragraphsTouchedOnline);
+    const touchedIndexes = new Set();
     const processedSuggestions = [];
     const failedSuggestions = [];
 
-    const sortable = (sug) => {
-      if (!sug) return -1;
-      if (Number.isFinite(sug.originalPos)) return sug.originalPos;
-      if (Number.isFinite(sug.metadata?.originalPos)) return sug.metadata.originalPos;
-      if (Number.isFinite(sug.metadata?.charStart)) return sug.metadata.charStart;
-      if (Number.isFinite(sug.metadata?.targetCharStart)) return sug.metadata.targetCharStart;
-      if (Number.isFinite(sug.metadata?.highlightCharStart)) return sug.metadata.highlightCharStart;
-      return -1;
-    };
-    const suggestionsToApply = pendingSuggestionsOnline
-      .slice()
-      .sort((a, b) => {
-        if ((a?.paragraphIndex ?? 0) !== (b?.paragraphIndex ?? 0)) {
-          return (a?.paragraphIndex ?? 0) - (b?.paragraphIndex ?? 0);
-        }
-        return (sortable(b) ?? -1) - (sortable(a) ?? -1);
-      });
-
-    for (const sug of suggestionsToApply) {
-      const p = paras.items[sug.paragraphIndex];
-      if (!p) continue;
+    for (const [paragraphIndex, suggestions] of suggestionsByParagraph.entries()) {
+      const paragraph = paras.items[paragraphIndex];
+      if (!paragraph) {
+        failedSuggestions.push(...suggestions);
+        continue;
+      }
+      const entry = getParagraphTokenAnchorsOnline(paragraphIndex);
+      if (!entry?.correctedText) {
+        failedSuggestions.push(...suggestions);
+        continue;
+      }
+      const originalText = entry.originalText ?? "";
+      const liveText = paragraph.text ?? "";
+      if (normalizeParagraphWhitespace(liveText) !== normalizeParagraphWhitespace(originalText)) {
+        failedSuggestions.push(...suggestions);
+        continue;
+      }
       try {
-        const applied =
-          sug.kind === "delete"
-            ? await applyDeleteSuggestion(context, p, sug)
-            : await applyInsertSuggestion(context, p, sug);
-        if (!applied) {
-          failedSuggestions.push(sug);
-          continue;
-        }
-        p.load("text");
-        // Keep paragraph.text up-to-date for subsequent metadata lookups.
+        paragraph.insertText(entry.correctedText, Word.InsertLocation.replace);
+        paragraph.load("text");
         // eslint-disable-next-line office-addins/no-context-sync-in-loop
         await context.sync();
-        const newText = p.text || "";
-        if (newText === paragraphTexts[sug.paragraphIndex]) {
-          failedSuggestions.push(sug);
-          continue;
-        }
-        paragraphTexts[sug.paragraphIndex] = newText;
-        processedSuggestions.push({ suggestion: sug, paragraph: p });
+        touchedIndexes.add(paragraphIndex);
+        processedSuggestions.push(
+          ...suggestions.map((sug) => ({
+            suggestion: sug,
+            paragraph,
+          }))
+        );
       } catch (err) {
-        warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
-        failedSuggestions.push(sug);
+        warn("applyAllSuggestionsOnline: failed to replace paragraph", err);
+        failedSuggestions.push(...suggestions);
       }
     }
-    await context.sync();
     await clearOnlineSuggestionMarkers(context, processedSuggestions);
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
+    for (const idx of touchedIndexes) {
+      deleteParagraphTokenAnchorsOnline(idx);
+    }
     resetParagraphsTouchedOnline();
-    resetParagraphTokenAnchorsOnline();
-    resetPendingSuggestionsOnline();
+    pendingSuggestionsOnline.length = 0;
     if (failedSuggestions.length) {
       pendingSuggestionsOnline.push(...failedSuggestions);
     } else {
