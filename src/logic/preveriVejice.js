@@ -2204,9 +2204,11 @@ async function processLongParagraphOnline({
     meta.correctedText = correctedChunk;
 
     const baseForDiff = chunk.text || chunk.normalizedText || "";
-    const diffOps = collapseDuplicateDiffOps(
-      filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
-    );
+    const diffOps = correctionsHaveEntries(detail?.corrections)
+      ? []
+      : collapseDuplicateDiffOps(
+          filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
+        );
     if (!meta.detail && !diffOps.length) continue;
     chunkDetails.push({
       chunk,
