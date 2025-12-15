@@ -580,6 +580,45 @@ async function getRangeForCharacterSpan(
   return null;
 }
 
+async function getRangeForAnchorSpan(
+  context,
+  paragraph,
+  anchorsEntry,
+  charStart,
+  charEnd,
+  reason = "span",
+  fallbackSnippet
+) {
+  const candidates = [];
+  if (anchorsEntry?.originalText) {
+    candidates.push({ text: anchorsEntry.originalText, label: "orig" });
+  }
+  const liveText = paragraph?.text;
+  if (liveText && (!candidates.length || liveText !== candidates[0].text)) {
+    candidates.push({ text: liveText, label: "live" });
+  }
+  if (!candidates.length) {
+    candidates.push({ text: "", label: "empty" });
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.text) continue;
+    const range = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      candidate.text,
+      charStart,
+      charEnd,
+      `${reason}-${candidate.label}`,
+      fallbackSnippet
+    );
+    if (range) {
+      return range;
+    }
+  }
+  return null;
+}
+
 async function searchParagraphForSnippet(context, paragraph, snippet) {
   const range = paragraph.getRange();
   const matches = range.search(snippet, {
@@ -1396,10 +1435,10 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
 
   if (Number.isFinite(meta.charStart) && meta.charStart >= 0) {
-    const range = await getRangeForCharacterSpan(
+    const range = await getRangeForAnchorSpan(
       context,
       paragraph,
-      entry?.originalText ?? paragraph.text ?? "",
+      entry,
       meta.charStart,
       Number.isFinite(meta.charEnd) && meta.charEnd > meta.charStart
         ? meta.charEnd
@@ -1445,7 +1484,6 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
 async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
-  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const tryByRange = async (range) => {
     if (!range) return false;
     try {
@@ -1475,10 +1513,10 @@ async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
         : candidate.start + 1;
     let span = null;
     try {
-      span = await getRangeForCharacterSpan(
+      span = await getRangeForAnchorSpan(
         context,
         paragraph,
-        paragraphText,
+        entry,
         candidate.start,
         safeEnd,
         `apply-delete-highlight-${i}`,
@@ -1590,10 +1628,10 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const anchorInfo = selectInsertAnchor(meta);
   if (!anchorInfo) return false;
   const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
-  const range = await getRangeForCharacterSpan(
+  const range = await getRangeForAnchorSpan(
     context,
     paragraph,
-    entry?.originalText ?? paragraph.text ?? "",
+    entry,
     anchorInfo.anchor.charStart,
     anchorInfo.anchor.charEnd,
     "apply-insert-anchor",
@@ -1645,10 +1683,10 @@ async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
         : candidate.start + 1;
     let span = null;
     try {
-      span = await getRangeForCharacterSpan(
+      span = await getRangeForAnchorSpan(
         context,
         paragraph,
-        paragraphText,
+        entry,
         candidate.start,
         safeEnd,
         `apply-insert-highlight-${i}`,
@@ -1797,15 +1835,14 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
   const meta = suggestion.metadata;
   if (!meta) return;
   const entry = paragraphTokenAnchorsOnline[suggestion.paragraphIndex];
-  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const charStart =
     typeof meta.highlightCharStart === "number" ? meta.highlightCharStart : meta.charStart;
   const charEnd = typeof meta.highlightCharEnd === "number" ? meta.highlightCharEnd : meta.charEnd;
-  if (!paragraph || !paragraphText || !Number.isFinite(charStart)) return;
-  const range = await getRangeForCharacterSpan(
+  if (!paragraph || !Number.isFinite(charStart)) return;
+  const range = await getRangeForAnchorSpan(
     context,
     paragraph,
-    paragraphText,
+    entry,
     charStart,
     charEnd,
     "clear-highlight",
