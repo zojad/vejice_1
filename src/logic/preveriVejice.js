@@ -34,6 +34,15 @@ function normalizeParagraphWhitespace(text) {
   return text.replace(SPACE_EQUIVALENTS_REGEX, " ");
 }
 
+function normalizeParagraphForEquality(text) {
+  if (typeof text !== "string") return "";
+  let normalized = normalizeParagraphWhitespace(text);
+  normalized = normalized.replace(/\s+/g, " ");
+  normalized = normalized.replace(/\s+,/g, ",");
+  normalized = normalized.replace(/,\s*(?=\S)/g, ", ");
+  return normalized.trim();
+}
+
 function normalizeTokenRepeatKey(text) {
   if (typeof text !== "string") return "";
   return text
@@ -1927,7 +1936,7 @@ export async function applyAllSuggestionsOnline() {
       }
       const originalText = entry.originalText ?? "";
       const liveText = paragraph.text ?? "";
-      if (normalizeParagraphWhitespace(liveText) !== normalizeParagraphWhitespace(originalText)) {
+      if (normalizeParagraphForEquality(liveText) !== normalizeParagraphForEquality(originalText)) {
         failedSuggestions.push(...suggestions);
         continue;
       }
