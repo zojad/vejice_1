@@ -1399,15 +1399,49 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   return false;
 }
 
-async function tryApplyDeleteUsingHighlight(suggestion) {
-  if (!suggestion?.highlightRange) return false;
-  try {
-    suggestion.highlightRange.insertText("", Word.InsertLocation.replace);
-    return true;
-  } catch (err) {
-    warn("apply delete: highlight range removal failed", err);
-    return false;
+async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
+  const meta = suggestion?.metadata;
+  const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const tryByRange = async (range) => {
+    if (!range) return false;
+    try {
+      range.insertText("", Word.InsertLocation.replace);
+      return true;
+    } catch (err) {
+      warn("apply delete: highlight span removal failed", err);
+      return false;
+    }
+  };
+
+  if (suggestion?.highlightRange) {
+    if (await tryByRange(suggestion.highlightRange)) {
+      return true;
+    }
   }
+
+  const charStart =
+    Number.isFinite(meta?.highlightCharStart) && meta.highlightCharStart >= 0
+      ? meta.highlightCharStart
+      : Number.isFinite(meta?.charStart) && meta.charStart >= 0
+        ? meta.charStart
+        : -1;
+  if (charStart < 0) return false;
+  const charEndCandidate =
+    Number.isFinite(meta?.highlightCharEnd) && meta.highlightCharEnd > charStart
+      ? meta.highlightCharEnd
+      : Number.isFinite(meta?.charEnd) && meta.charEnd > charStart
+        ? meta.charEnd
+        : charStart + 1;
+  const range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    entry?.originalText ?? paragraph?.text,
+    charStart,
+    charEndCandidate,
+    "apply-delete-highlight-fallback",
+    meta?.highlightText
+  );
+  return await tryByRange(range);
 }
 
 async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
@@ -1428,7 +1462,7 @@ async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
 }
 
 async function applyDeleteSuggestion(context, paragraph, suggestion) {
-  if (await tryApplyDeleteUsingHighlight(suggestion)) return;
+  if (await tryApplyDeleteUsingHighlight(context, paragraph, suggestion)) return;
   if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
   await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
 }
@@ -1526,17 +1560,52 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   return true;
 }
 
-async function tryApplyInsertUsingHighlight(context, suggestion) {
-  const highlightRange = suggestion?.highlightRange;
-  if (!highlightRange) return false;
-  try {
-    const insertionPoint = highlightRange.getRange("After");
-    insertionPoint.insertText(",", Word.InsertLocation.before);
-    return true;
-  } catch (err) {
-    warn("apply insert highlight: failed to reuse highlight range", err);
-    return false;
+async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
+  const meta = suggestion?.metadata;
+  const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const useRange = async (range) => {
+    if (!range) return false;
+    try {
+      const insertionPoint = range.getRange("After");
+      insertionPoint.insertText(",", Word.InsertLocation.before);
+      return true;
+    } catch (err) {
+      warn("apply insert highlight: failed to reuse range", err);
+      return false;
+    }
+  };
+
+  if (suggestion?.highlightRange) {
+    if (await useRange(suggestion.highlightRange)) {
+      return true;
+    }
   }
+
+  const fallbackStart =
+    Number.isFinite(meta?.highlightCharStart) && meta.highlightCharStart >= 0
+      ? meta.highlightCharStart
+      : Number.isFinite(meta?.targetCharStart) && meta.targetCharStart >= 0
+        ? meta.targetCharStart
+        : Number.isFinite(meta?.charStart) && meta.charStart >= 0
+          ? meta.charStart
+          : -1;
+  if (fallbackStart < 0) return false;
+  const fallbackEnd =
+    Number.isFinite(meta?.highlightCharEnd) && meta.highlightCharEnd > fallbackStart
+      ? meta.highlightCharEnd
+      : Number.isFinite(meta?.targetCharEnd) && meta.targetCharEnd > fallbackStart
+        ? meta.targetCharEnd
+        : fallbackStart + 1;
+  const range = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    entry?.originalText ?? paragraph?.text,
+    fallbackStart,
+    fallbackEnd,
+    "apply-insert-highlight-fallback",
+    meta?.highlightText
+  );
+  return await useRange(range);
 }
 
 async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
@@ -1550,8 +1619,8 @@ async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
 }
 
 async function applyInsertSuggestion(context, paragraph, suggestion) {
+  if (await tryApplyInsertUsingHighlight(context, paragraph, suggestion)) return;
   if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return;
-  if (await tryApplyInsertUsingHighlight(context, suggestion)) return;
   await applyInsertSuggestionLegacy(context, paragraph, suggestion);
 }
 
@@ -1752,11 +1821,10 @@ export async function applyAllSuggestionsOnline() {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
       }
     }
-    // Flush any pending highlight removals before running formatting cleanup.
     await context.sync();
+    await clearOnlineSuggestionMarkers(context, processedSuggestions);
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
     resetParagraphsTouchedOnline();
-    await clearOnlineSuggestionMarkers(context, processedSuggestions);
     resetParagraphTokenAnchorsOnline();
     resetPendingSuggestionsOnline();
     context.document.body.font.highlightColor = null;
