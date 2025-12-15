@@ -1350,6 +1350,25 @@ function extractLastWord(text) {
 async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   if (!meta) return false;
+  const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
+
+  if (Number.isFinite(meta.charStart) && meta.charStart >= 0) {
+    const range = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      entry?.originalText ?? paragraph.text,
+      meta.charStart,
+      Number.isFinite(meta.charEnd) && meta.charEnd > meta.charStart
+        ? meta.charEnd
+        : meta.charStart + 1,
+      "apply-delete-char",
+      meta.highlightText
+    );
+    if (range) {
+      range.insertText("", Word.InsertLocation.replace);
+      return true;
+    }
+  }
 
   const commaAnchor =
     (meta.sourceTokenAt?.tokenText?.includes(",") && meta.sourceTokenAt) ||
@@ -1377,20 +1396,7 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
     }
   }
 
-  if (!Number.isFinite(meta.charStart) || meta.charStart < 0) return false;
-  const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
-  const range = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    entry?.originalText ?? paragraph.text,
-    meta.charStart,
-    meta.charEnd,
-    "apply-delete",
-    meta.highlightText
-  );
-  if (!range) return false;
-  range.insertText("", Word.InsertLocation.replace);
-  return true;
+  return false;
 }
 
 async function tryApplyDeleteUsingHighlight(suggestion) {
