@@ -1859,6 +1859,7 @@ export async function applyAllSuggestionsOnline() {
     const paras = context.document.body.paragraphs;
     paras.load("items/text");
     await context.sync();
+    const paragraphTexts = paras.items.map((p) => p?.text ?? "");
     const touchedIndexes = new Set(paragraphsTouchedOnline);
     const processedSuggestions = [];
     const failedSuggestions = [];
@@ -1897,6 +1898,12 @@ export async function applyAllSuggestionsOnline() {
         // Keep paragraph.text up-to-date for subsequent metadata lookups.
         // eslint-disable-next-line office-addins/no-context-sync-in-loop
         await context.sync();
+        const newText = p.text || "";
+        if (newText === paragraphTexts[sug.paragraphIndex]) {
+          failedSuggestions.push(sug);
+          continue;
+        }
+        paragraphTexts[sug.paragraphIndex] = newText;
         processedSuggestions.push({ suggestion: sug, paragraph: p });
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
