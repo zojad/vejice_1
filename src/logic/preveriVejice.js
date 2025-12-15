@@ -1473,15 +1473,21 @@ async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
       Number.isFinite(candidate.end) && candidate.end > candidate.start
         ? candidate.end
         : candidate.start + 1;
-    const span = await getRangeForCharacterSpan(
-      context,
-      paragraph,
-      paragraphText,
-      candidate.start,
-      safeEnd,
-      `apply-delete-highlight-${i}`,
-      candidate.snippet
-    );
+    let span = null;
+    try {
+      span = await getRangeForCharacterSpan(
+        context,
+        paragraph,
+        paragraphText,
+        candidate.start,
+        safeEnd,
+        `apply-delete-highlight-${i}`,
+        candidate.snippet
+      );
+    } catch (err) {
+      warn("apply delete: candidate span lookup failed", err);
+      continue;
+    }
     if (await tryByRange(span)) {
       return true;
     }
@@ -1636,15 +1642,21 @@ async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
       Number.isFinite(candidate.end) && candidate.end > candidate.start
         ? candidate.end
         : candidate.start + 1;
-    const span = await getRangeForCharacterSpan(
-      context,
-      paragraph,
-      paragraphText,
-      candidate.start,
-      safeEnd,
-      `apply-insert-highlight-${i}`,
-      candidate.snippet
-    );
+    let span = null;
+    try {
+      span = await getRangeForCharacterSpan(
+        context,
+        paragraph,
+        paragraphText,
+        candidate.start,
+        safeEnd,
+        `apply-insert-highlight-${i}`,
+        candidate.snippet
+      );
+    } catch (err) {
+      warn("apply insert: candidate span lookup failed", err);
+      continue;
+    }
     if (await useRange(span)) {
       return true;
     }
