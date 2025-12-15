@@ -1399,7 +1399,7 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
     const range = await getRangeForCharacterSpan(
       context,
       paragraph,
-      paragraph.text ?? entry?.originalText ?? "",
+      entry?.originalText ?? paragraph.text ?? "",
       meta.charStart,
       Number.isFinite(meta.charEnd) && meta.charEnd > meta.charStart
         ? meta.charEnd
@@ -1445,7 +1445,7 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
 async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
-  const paragraphText = paragraph?.text ?? entry?.originalText ?? "";
+  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const tryByRange = async (range) => {
     if (!range) return false;
     try {
@@ -1593,7 +1593,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const range = await getRangeForCharacterSpan(
     context,
     paragraph,
-    paragraph.text ?? entry?.originalText ?? "",
+    entry?.originalText ?? paragraph.text ?? "",
     anchorInfo.anchor.charStart,
     anchorInfo.anchor.charEnd,
     "apply-insert-anchor",
@@ -1616,7 +1616,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
 async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
-  const paragraphText = paragraph?.text ?? entry?.originalText ?? "";
+  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const useRange = async (range) => {
     if (!range) return false;
     try {
@@ -1797,7 +1797,7 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
   const meta = suggestion.metadata;
   if (!meta) return;
   const entry = paragraphTokenAnchorsOnline[suggestion.paragraphIndex];
-  const paragraphText = paragraph?.text ?? entry?.originalText ?? "";
+  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const charStart =
     typeof meta.highlightCharStart === "number" ? meta.highlightCharStart : meta.charStart;
   const charEnd = typeof meta.highlightCharEnd === "number" ? meta.highlightCharEnd : meta.charEnd;
