@@ -825,7 +825,9 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           fromCorrections: true,
         });
       } else if (analysis.addComma) {
-        const insertBase = baseText.replace(TRAILING_COMMA_REGEX, "");
+        const insertBase = (analysis.baseText ?? "").length
+          ? analysis.baseText
+          : baseText.replace(TRAILING_COMMA_REGEX, "");
         const relative = insertBase.length;
         const absolutePos = placementAnchor.charStart + relative;
         const key = `ins-${absolutePos}`;
