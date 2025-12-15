@@ -1520,6 +1520,19 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   return true;
 }
 
+async function tryApplyInsertUsingHighlight(context, suggestion) {
+  const highlightRange = suggestion?.highlightRange;
+  if (!highlightRange) return false;
+  try {
+    const insertionPoint = highlightRange.getRange("After");
+    insertionPoint.insertText(",", Word.InsertLocation.before);
+    return true;
+  } catch (err) {
+    warn("apply insert highlight: failed to reuse highlight range", err);
+    return false;
+  }
+}
+
 async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
   const range = await findRangeForInsert(context, paragraph, suggestion);
   if (!range) {
@@ -1532,6 +1545,7 @@ async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
 
 async function applyInsertSuggestion(context, paragraph, suggestion) {
   if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return;
+  if (await tryApplyInsertUsingHighlight(context, suggestion)) return;
   await applyInsertSuggestionLegacy(context, paragraph, suggestion);
 }
 
