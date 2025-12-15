@@ -1428,8 +1428,8 @@ async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
 }
 
 async function applyDeleteSuggestion(context, paragraph, suggestion) {
-  if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
   if (await tryApplyDeleteUsingHighlight(suggestion)) return;
+  if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
   await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
 }
 
