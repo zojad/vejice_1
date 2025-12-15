@@ -1500,7 +1500,7 @@ async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
   const ordinal = countCommasUpTo(paragraph.text || "", suggestion.originalPos);
   if (ordinal <= 0) {
     warn("apply delete: no ordinal");
-    return;
+    return false;
   }
   const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
   commaSearch.load("items");
@@ -1508,15 +1508,16 @@ async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
   const idx = ordinal - 1;
   if (!commaSearch.items.length || idx >= commaSearch.items.length) {
     warn("apply delete: ordinal out of range");
-    return;
+    return false;
   }
   commaSearch.items[idx].insertText("", Word.InsertLocation.replace);
+  return true;
 }
 
 async function applyDeleteSuggestion(context, paragraph, suggestion) {
-  if (await tryApplyDeleteUsingHighlight(context, paragraph, suggestion)) return;
-  if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return;
-  await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
+  if (await tryApplyDeleteUsingHighlight(context, paragraph, suggestion)) return true;
+  if (await tryApplyDeleteUsingMetadata(context, paragraph, suggestion)) return true;
+  return await applyDeleteSuggestionLegacy(context, paragraph, suggestion);
 }
 
 async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot) {
@@ -1669,16 +1670,17 @@ async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
   const range = await findRangeForInsert(context, paragraph, suggestion);
   if (!range) {
     warn("apply insert: unable to locate range");
-    return;
+    return false;
   }
   const after = range.getRange("After");
   after.insertText(",", Word.InsertLocation.before);
+  return true;
 }
 
 async function applyInsertSuggestion(context, paragraph, suggestion) {
-  if (await tryApplyInsertUsingHighlight(context, paragraph, suggestion)) return;
-  if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return;
-  await applyInsertSuggestionLegacy(context, paragraph, suggestion);
+  if (await tryApplyInsertUsingHighlight(context, paragraph, suggestion)) return true;
+  if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return true;
+  return await applyInsertSuggestionLegacy(context, paragraph, suggestion);
 }
 
 async function normalizeCommaSpacingInParagraph(context, paragraph) {
@@ -1883,10 +1885,13 @@ export async function applyAllSuggestionsOnline() {
       const p = paras.items[sug.paragraphIndex];
       if (!p) continue;
       try {
-        if (sug.kind === "delete") {
-          await applyDeleteSuggestion(context, p, sug);
-        } else {
-          await applyInsertSuggestion(context, p, sug);
+        const applied =
+          sug.kind === "delete"
+            ? await applyDeleteSuggestion(context, p, sug)
+            : await applyInsertSuggestion(context, p, sug);
+        if (!applied) {
+          failedSuggestions.push(sug);
+          continue;
         }
         p.load("text");
         // Keep paragraph.text up-to-date for subsequent metadata lookups.
