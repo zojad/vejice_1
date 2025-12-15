@@ -658,6 +658,49 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   };
 }
 
+function buildDeleteRangeCandidates(meta) {
+  const ranges = [];
+  if (!meta) return ranges;
+  const addRange = (start, end, snippet) => {
+    if (!Number.isFinite(start) || start < 0) return;
+    const safeEnd = Number.isFinite(end) && end > start ? end : start + 1;
+    ranges.push({ start, end: safeEnd, snippet });
+  };
+  addRange(meta.highlightCharStart, meta.highlightCharEnd, meta.highlightText);
+  addRange(meta.charStart, meta.charEnd, meta.highlightText);
+  if (meta.highlightAnchorTarget) {
+    addRange(
+      meta.highlightAnchorTarget.charStart,
+      meta.highlightAnchorTarget.charEnd,
+      meta.highlightAnchorTarget.tokenText
+    );
+  }
+  return ranges;
+}
+
+function buildInsertRangeCandidates(meta) {
+  const ranges = [];
+  if (!meta) return ranges;
+  const addRange = (start, end, snippet) => {
+    if (!Number.isFinite(start) || start < 0) return;
+    const safeEnd = Number.isFinite(end) && end > start ? end : start + 1;
+    ranges.push({ start, end: safeEnd, snippet });
+  };
+  const addAnchor = (anchor) => {
+    if (!anchor) return;
+    addRange(anchor.charStart, anchor.charEnd, anchor.tokenText);
+  };
+  addRange(meta.highlightCharStart, meta.highlightCharEnd, meta.highlightText);
+  addRange(meta.targetCharStart, meta.targetCharEnd, meta.highlightText);
+  addRange(meta.charStart, meta.charEnd, meta.highlightText);
+  addAnchor(meta.highlightAnchorTarget);
+  addAnchor(meta.sourceTokenAt);
+  addAnchor(meta.targetTokenAt);
+  addAnchor(meta.sourceTokenBefore);
+  addAnchor(meta.targetTokenBefore);
+  return ranges;
+}
+
 /** ─────────────────────────────────────────────────────────
  *  Helpers: znaki & pravila
  *  ───────────────────────────────────────────────────────── */
@@ -1402,6 +1445,7 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
 async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const tryByRange = async (range) => {
     if (!range) return false;
     try {
@@ -1419,29 +1463,31 @@ async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
     }
   }
 
-  const charStart =
-    Number.isFinite(meta?.highlightCharStart) && meta.highlightCharStart >= 0
-      ? meta.highlightCharStart
-      : Number.isFinite(meta?.charStart) && meta.charStart >= 0
-        ? meta.charStart
-        : -1;
-  if (charStart < 0) return false;
-  const charEndCandidate =
-    Number.isFinite(meta?.highlightCharEnd) && meta.highlightCharEnd > charStart
-      ? meta.highlightCharEnd
-      : Number.isFinite(meta?.charEnd) && meta.charEnd > charStart
-        ? meta.charEnd
-        : charStart + 1;
-  const range = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    entry?.originalText ?? paragraph?.text,
-    charStart,
-    charEndCandidate,
-    "apply-delete-highlight-fallback",
-    meta?.highlightText
-  );
-  return await tryByRange(range);
+  const candidates = buildDeleteRangeCandidates(meta);
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (!Number.isFinite(candidate.start) || candidate.start < 0) {
+      continue;
+    }
+    const safeEnd =
+      Number.isFinite(candidate.end) && candidate.end > candidate.start
+        ? candidate.end
+        : candidate.start + 1;
+    const span = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      paragraphText,
+      candidate.start,
+      safeEnd,
+      `apply-delete-highlight-${i}`,
+      candidate.snippet
+    );
+    if (await tryByRange(span)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
@@ -1563,6 +1609,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
 async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
   const meta = suggestion?.metadata;
   const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const useRange = async (range) => {
     if (!range) return false;
     try {
@@ -1581,31 +1628,29 @@ async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
     }
   }
 
-  const fallbackStart =
-    Number.isFinite(meta?.highlightCharStart) && meta.highlightCharStart >= 0
-      ? meta.highlightCharStart
-      : Number.isFinite(meta?.targetCharStart) && meta.targetCharStart >= 0
-        ? meta.targetCharStart
-        : Number.isFinite(meta?.charStart) && meta.charStart >= 0
-          ? meta.charStart
-          : -1;
-  if (fallbackStart < 0) return false;
-  const fallbackEnd =
-    Number.isFinite(meta?.highlightCharEnd) && meta.highlightCharEnd > fallbackStart
-      ? meta.highlightCharEnd
-      : Number.isFinite(meta?.targetCharEnd) && meta.targetCharEnd > fallbackStart
-        ? meta.targetCharEnd
-        : fallbackStart + 1;
-  const range = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    entry?.originalText ?? paragraph?.text,
-    fallbackStart,
-    fallbackEnd,
-    "apply-insert-highlight-fallback",
-    meta?.highlightText
-  );
-  return await useRange(range);
+  const candidates = buildInsertRangeCandidates(meta);
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (!Number.isFinite(candidate.start) || candidate.start < 0) continue;
+    const safeEnd =
+      Number.isFinite(candidate.end) && candidate.end > candidate.start
+        ? candidate.end
+        : candidate.start + 1;
+    const span = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      paragraphText,
+      candidate.start,
+      safeEnd,
+      `apply-insert-highlight-${i}`,
+      candidate.snippet
+    );
+    if (await useRange(span)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
