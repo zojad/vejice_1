@@ -1007,7 +1007,7 @@ function collapseDuplicateDiffOps(ops) {
     .filter((pos) => typeof pos === "number");
   if (!deletePositions.length) return ops;
   const shouldDropInsert = (pos) =>
-    deletePositions.some((delPos) => typeof delPos === "number" && Math.abs(delPos - pos) <= 1);
+    deletePositions.some((delPos) => typeof delPos === "number" && Math.abs(delPos - pos) <= 0);
   return ops.filter((op) => {
     if (op?.kind !== "insert") return true;
     const pos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
