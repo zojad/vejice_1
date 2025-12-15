@@ -1803,7 +1803,25 @@ export async function applyAllSuggestionsOnline() {
     const touchedIndexes = new Set(paragraphsTouchedOnline);
     const processedSuggestions = [];
 
-    for (const sug of pendingSuggestionsOnline) {
+    const sortable = (sug) => {
+      if (!sug) return -1;
+      if (Number.isFinite(sug.originalPos)) return sug.originalPos;
+      if (Number.isFinite(sug.metadata?.originalPos)) return sug.metadata.originalPos;
+      if (Number.isFinite(sug.metadata?.charStart)) return sug.metadata.charStart;
+      if (Number.isFinite(sug.metadata?.targetCharStart)) return sug.metadata.targetCharStart;
+      if (Number.isFinite(sug.metadata?.highlightCharStart)) return sug.metadata.highlightCharStart;
+      return -1;
+    };
+    const suggestionsToApply = pendingSuggestionsOnline
+      .slice()
+      .sort((a, b) => {
+        if ((a?.paragraphIndex ?? 0) !== (b?.paragraphIndex ?? 0)) {
+          return (a?.paragraphIndex ?? 0) - (b?.paragraphIndex ?? 0);
+        }
+        return (sortable(b) ?? -1) - (sortable(a) ?? -1);
+      });
+
+    for (const sug of suggestionsToApply) {
       const p = paras.items[sug.paragraphIndex];
       if (!p) continue;
       try {
