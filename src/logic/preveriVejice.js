@@ -741,7 +741,10 @@ function createCorrectionTracking() {
 
 function normalizeTokenForComparison(text) {
   if (typeof text !== "string") return "";
-  return text.replace(/\s+/g, " ").trim();
+  return text
+    .replace(/[.,!?;:“”„'"«»]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
