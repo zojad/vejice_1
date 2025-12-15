@@ -561,15 +561,13 @@ async function getRangeForCharacterSpan(
   if (!snippet) return null;
 
   try {
-    const matches = paragraph.getRange().search(snippet, {
-      matchCase: true,
-      matchWholeWord: false,
-      ignoreSpace: false,
-      ignorePunct: false,
-    });
-    matches.load("items");
-    await context.sync();
-    if (!matches.items.length) {
+    let searchSnippet = snippet;
+    let matches = await searchParagraphForSnippet(context, paragraph, searchSnippet);
+    if ((!matches?.items?.length) && snippet.trim() && snippet.trim() !== snippet) {
+      searchSnippet = snippet.trim();
+      matches = await searchParagraphForSnippet(context, paragraph, searchSnippet);
+    }
+    if (!matches?.items?.length) {
       warn(`getRangeForCharacterSpan(${reason}): snippet not found`, { snippet, safeStart });
       return null;
     }
@@ -580,6 +578,19 @@ async function getRangeForCharacterSpan(
     warn(`getRangeForCharacterSpan(${reason}) failed`, err);
   }
   return null;
+}
+
+async function searchParagraphForSnippet(context, paragraph, snippet) {
+  const range = paragraph.getRange();
+  const matches = range.search(snippet, {
+    matchCase: true,
+    matchWholeWord: false,
+    ignoreSpace: false,
+    ignorePunct: false,
+  });
+  matches.load("items");
+  await context.sync();
+  return matches;
 }
 
 function buildDeleteSuggestionMetadata(entry, charIndex) {
