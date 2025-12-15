@@ -825,9 +825,12 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           fromCorrections: true,
         });
       } else if (analysis.addComma) {
-        const insertBase = (analysis.baseText ?? "").length
-          ? analysis.baseText
-          : baseText.replace(TRAILING_COMMA_REGEX, "");
+        const analysisBase =
+          typeof analysis.baseText === "string" && normalizeTokenForComparison(analysis.baseText)
+            ? analysis.baseText
+            : null;
+        const effectiveBase = analysisBase ?? baseText;
+        const insertBase = effectiveBase.replace(TRAILING_COMMA_REGEX, "");
         const relative = insertBase.length;
         const absolutePos = placementAnchor.charStart + relative;
         const key = `ins-${absolutePos}`;
