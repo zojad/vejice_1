@@ -1814,10 +1814,8 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
   }
 }
 async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs) {
-  const source =
-    Array.isArray(suggestionsOverride) && suggestionsOverride.length
-      ? suggestionsOverride
-      : pendingSuggestionsOnline;
+  const usingOverride = Array.isArray(suggestionsOverride);
+  const source = usingOverride ? suggestionsOverride : pendingSuggestionsOnline;
   const clearHighlight = (sug) => {
     if (!sug?.highlightRange) return;
     try {
@@ -1831,8 +1829,10 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
   };
 
   if (!source.length) {
-    context.document.body.font.highlightColor = null;
-    await context.sync();
+    if (!usingOverride) {
+      context.document.body.font.highlightColor = null;
+      await context.sync();
+    }
     return;
   }
   for (const item of source) {
@@ -1859,6 +1859,7 @@ export async function applyAllSuggestionsOnline() {
     await context.sync();
     const touchedIndexes = new Set(paragraphsTouchedOnline);
     const processedSuggestions = [];
+    const failedSuggestions = [];
 
     const sortable = (sug) => {
       if (!sug) return -1;
@@ -1894,6 +1895,7 @@ export async function applyAllSuggestionsOnline() {
         processedSuggestions.push({ suggestion: sug, paragraph: p });
       } catch (err) {
         warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
+        failedSuggestions.push(sug);
       }
     }
     await context.sync();
@@ -1902,7 +1904,11 @@ export async function applyAllSuggestionsOnline() {
     resetParagraphsTouchedOnline();
     resetParagraphTokenAnchorsOnline();
     resetPendingSuggestionsOnline();
-    context.document.body.font.highlightColor = null;
+    if (failedSuggestions.length) {
+      pendingSuggestionsOnline.push(...failedSuggestions);
+    } else {
+      context.document.body.font.highlightColor = null;
+    }
     await context.sync();
   });
 }
