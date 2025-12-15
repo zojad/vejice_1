@@ -2238,21 +2238,6 @@ async function processLongParagraphOnline({
         correctionTracking
       );
     }
-    if (ops.length) {
-      for (const op of ops) {
-        const marked = await highlightSuggestionOnline(
-          context,
-          paragraph,
-          originalText,
-          correctedParagraph,
-          op,
-          paragraphIndex,
-          paragraphAnchors
-        );
-        if (marked) suggestionsAdded++;
-      }
-      continue;
-    }
     let fallbackOps = entry.diffOps || [];
     if (fallbackOps.length) {
       if (!detailRef?.corrections || ops.length) {
@@ -2260,6 +2245,53 @@ async function processLongParagraphOnline({
       }
       if (!ops.length && detailRef?.corrections) {
         fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
+      }
+    }
+    const allOps = ops.length ? ops : fallbackOps;
+    if (!allOps.length) continue;
+    for (const op of allOps) {
+      if (!ops.includes(op) && op.kind === "insert") {
+        const seenInsert = ops.some(
+          (existing) => existing.kind === "insert" && existing.pos === op.pos
+        );
+        if (seenInsert) continue;
+      }
+      const opSource = ops.includes(op) ? op : null;
+      const offset = entry.chunk.start;
+      const baseOp = opSource || op;
+      const adjustedOp = {
+        ...baseOp,
+        pos: baseOp.pos + offset,
+        originalPos:
+          (typeof baseOp.originalPos === "number" ? baseOp.originalPos : baseOp.pos) + offset,
+        correctedPos:
+          (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset,
+      };
+      if (opSource) {
+        const marked = await highlightSuggestionOnline(
+          context,
+          paragraph,
+          originalText,
+          correctedParagraph,
+          adjustedOp,
+          paragraphIndex,
+          paragraphAnchors
+        );
+        if (marked) suggestionsAdded++;
+      } else {
+        if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
+          continue;
+        }
+        const marked = await highlightSuggestionOnline(
+          context,
+          paragraph,
+          originalText,
+          correctedParagraph,
+          adjustedOp,
+          paragraphIndex,
+          paragraphAnchors
+        );
+        if (marked) suggestionsAdded++;
       }
     }
     for (const op of fallbackOps) {
