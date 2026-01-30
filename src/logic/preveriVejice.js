@@ -1,6 +1,19 @@
 /* global Word, window, process, performance, console, Office, URL */
 import { popraviPoved, popraviPovedDetailed } from "../api/apiVejice.js";
 import { isWordOnline } from "../utils/host.js";
+import { CommaSuggestionEngine } from "./engine/CommaSuggestionEngine.js";
+import { SyntheticAnchorProvider } from "./anchoring/SyntheticAnchorProvider.js";
+import { WordOnlineAdapter } from "./adapters/wordOnlineAdapter.js";
+import { WordDesktopAdapter } from "./adapters/wordDesktopAdapter.js";
+import {
+  normalizeParagraphWhitespace,
+  normalizeParagraphForEquality,
+  QUOTES,
+  charAtSafe,
+  isDigit,
+  makeAnchor,
+  normalizeTokenRepeatKey,
+} from "./engine/textUtils.js";
 
 /** ─────────────────────────────────────────────────────────
  *  DEBUG helpers (flip DEBUG=false to silence logs)
@@ -23,34 +36,7 @@ const MAX_AUTOFIX_PASSES =
 
 const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
-const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
-const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'“”„()«»]+/g;
-const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?'"“”„()«»]+$/g;
-const REPEAT_SUPPRESSION_MAX_DISTANCE = 80;
-
-function normalizeParagraphWhitespace(text) {
-  if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
-  return text.replace(SPACE_EQUIVALENTS_REGEX, " ");
-}
-
-function normalizeParagraphForEquality(text) {
-  if (typeof text !== "string") return "";
-  let normalized = normalizeParagraphWhitespace(text);
-  normalized = normalized.replace(/\s+/g, " ");
-  normalized = normalized.replace(/\s+,/g, ",");
-  normalized = normalized.replace(/,\s*(?=\S)/g, ", ");
-  return normalized.trim();
-}
-
-function normalizeTokenRepeatKey(text) {
-  if (typeof text !== "string") return "";
-  return text
-    .replace(TOKEN_REPEAT_LEADING_REGEX, "")
-    .replace(TOKEN_REPEAT_TRAILING_REGEX, "")
-    .trim()
-    .toLowerCase();
-}
 
 const pendingSuggestionsOnline = [];
 const MAX_PARAGRAPH_CHARS = 3000; //???
@@ -80,30 +66,18 @@ export function getPendingSuggestionsOnline(debugSnapshot = false) {
     id: sug?.id,
     kind: sug?.kind,
     paragraphIndex: sug?.paragraphIndex,
-    metadata: sug?.metadata,
+    meta: sug?.meta,
     originalPos: sug?.originalPos,
-    leftWord: sug?.leftWord,
-    leftSnippet: sug?.leftSnippet,
-    rightSnippet: sug?.rightSnippet,
+    snippets: sug?.snippets,
   }));
 }
 
 if (typeof window !== "undefined") {
   window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
   window.__VEJICE_DEBUG_STATE__.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
-  window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = () => paragraphTokenAnchorsOnline;
+  window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = () => anchorProvider.paragraphAnchors;
   window.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.getPendingSuggestionsSnapshot = () => getPendingSuggestionsOnline(true);
-}
-
-const paragraphsTouchedOnline = new Set();
-function resetParagraphsTouchedOnline() {
-  paragraphsTouchedOnline.clear();
-}
-function markParagraphTouched(paragraphIndex) {
-  if (typeof paragraphIndex === "number" && paragraphIndex >= 0) {
-    paragraphsTouchedOnline.add(paragraphIndex);
-  }
 }
 
 let toastDialog = null;
@@ -187,6 +161,33 @@ function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, correc
   showToastNotification(msg);
 }
 
+const anchorProvider = new SyntheticAnchorProvider();
+const commaEngine = new CommaSuggestionEngine({
+  anchorProvider,
+  apiClient: {
+    popraviPoved,
+    popraviPovedDetailed,
+  },
+  notifiers: {
+    onParagraphTooLong: notifyParagraphTooLong,
+    onSentenceTooLong: notifySentenceTooLong,
+    onChunkApiFailure: notifyChunkApiFailure,
+    onChunkNonCommaChanges: notifyChunkNonCommaChanges,
+  },
+});
+
+const wordOnlineAdapter = new WordOnlineAdapter({
+  highlightSuggestion: highlightSuggestionOnline,
+  applyInsertSuggestion,
+  applyDeleteSuggestion,
+  clearSuggestionMarkers: clearOnlineSuggestionMarkers,
+});
+
+const wordDesktopAdapter = new WordDesktopAdapter({
+  applyInsertSuggestion,
+  applyDeleteSuggestion,
+});
+
 function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
   const label = paragraphIndex + 1;
   warn("Paragraph skipped due to non-comma changes", { paragraphIndex, original, corrected });
@@ -235,309 +236,7 @@ async function documentHasTrackedChanges(context) {
   }
 }
 
-const paragraphTokenAnchorsOnline = [];
-function resetParagraphTokenAnchorsOnline() {
-  paragraphTokenAnchorsOnline.length = 0;
-}
-function setParagraphTokenAnchorsOnline(paragraphIndex, anchors) {
-  paragraphTokenAnchorsOnline[paragraphIndex] = anchors;
-}
-function getParagraphTokenAnchorsOnline(paragraphIndex) {
-  return paragraphTokenAnchorsOnline[paragraphIndex];
-}
-function deleteParagraphTokenAnchorsOnline(paragraphIndex) {
-  if (typeof paragraphIndex === "number" && paragraphIndex >= 0) {
-    delete paragraphTokenAnchorsOnline[paragraphIndex];
-  }
-}
 
-function createParagraphTokenAnchors({
-  paragraphIndex,
-  originalText = "",
-  correctedText = "",
-  sourceTokens = [],
-  targetTokens = [],
-  documentOffset = 0,
-}) {
-  const safeOriginal = typeof originalText === "string" ? originalText : "";
-  const safeCorrected = typeof correctedText === "string" ? correctedText : "";
-  const normalizedSource = normalizeTokenList(sourceTokens, "s");
-  const normalizedTarget = normalizeTokenList(targetTokens, "t");
-  const entry = {
-    paragraphIndex,
-    documentOffset,
-    originalText: safeOriginal,
-    correctedText: safeCorrected,
-    sourceTokens: normalizedSource,
-    targetTokens: normalizedTarget,
-    sourceAnchors: mapTokensToParagraphText(
-      paragraphIndex,
-      safeOriginal,
-      normalizedSource,
-      documentOffset
-    ),
-    targetAnchors: mapTokensToParagraphText(
-      paragraphIndex,
-      safeCorrected,
-      normalizedTarget,
-      documentOffset
-    ),
-  };
-  setParagraphTokenAnchorsOnline(paragraphIndex, entry);
-  return entry;
-}
-
-function normalizeTokenList(tokens, prefix) {
-  if (!Array.isArray(tokens)) return [];
-  const normalized = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = normalizeToken(tokens[i], prefix, i);
-    if (token) normalized.push(token);
-  }
-  return normalized;
-}
-
-function normalizeToken(rawToken, prefix, index) {
-  if (rawToken === null || typeof rawToken === "undefined") return null;
-  if (typeof rawToken === "string") {
-    return {
-      id: `${prefix}${index + 1}`,
-      text: rawToken,
-      raw: rawToken,
-    };
-  }
-  if (typeof rawToken === "object") {
-    const idCandidate =
-      rawToken.token_id ??
-      rawToken.tokenId ??
-      rawToken.id ??
-      rawToken.ID ??
-      rawToken.name ??
-      rawToken.key;
-    const textCandidate =
-      rawToken.token ??
-      rawToken.text ??
-      rawToken.form ??
-      rawToken.value ??
-      rawToken.surface ??
-      rawToken.word;
-    const trailing =
-      rawToken.whitespace ??
-      rawToken.trailing_ws ??
-      rawToken.trailingWhitespace ??
-      rawToken.after ??
-      rawToken.space ??
-      "";
-    const leading =
-      rawToken.leading_ws ?? rawToken.leadingWhitespace ?? rawToken.before ?? rawToken.prefix ?? "";
-    return {
-      id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
-      text: typeof textCandidate === "string" ? textCandidate : "",
-      trailingWhitespace: typeof trailing === "string" ? trailing : "",
-      leadingWhitespace: typeof leading === "string" ? leading : "",
-      raw: rawToken,
-    };
-  }
-  return null;
-}
-
-function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documentOffset = 0) {
-  const byId = Object.create(null);
-  const ordered = [];
-  if (!Array.isArray(tokens) || !tokens.length) {
-    return { byId, ordered };
-  }
-  const safeParagraph = typeof paragraphText === "string" ? paragraphText : "";
-  const searchableParagraph = normalizeParagraphWhitespace(safeParagraph);
-  const textOccurrences = Object.create(null);
-  const trimmedOccurrences = Object.create(null);
-  let cursor = 0;
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    const tokenText = token?.text ?? "";
-    const tokenId = token?.id ?? `tok${i + 1}`;
-    const tokenLength = tokenText.length;
-    const charStart = resolveTokenPosition(searchableParagraph, tokenText, cursor);
-    const charEnd = charStart >= 0 ? charStart + tokenLength : -1;
-
-    if (charStart >= 0) {
-      cursor = charEnd;
-    } else if (tokenText) {
-      warn("Token mapping failed", { paragraphIndex, tokenId, tokenText, cursor });
-    }
-
-    const textKey = tokenText || "";
-    const trimmedKey = textKey.trim();
-    const occurrence = textOccurrences[textKey] ?? 0;
-    textOccurrences[textKey] = occurrence + 1;
-    const trimmedOccurrence =
-      trimmedKey && trimmedKey !== textKey ? (trimmedOccurrences[trimmedKey] ?? 0) : occurrence;
-    if (trimmedKey && trimmedKey !== textKey) {
-      trimmedOccurrences[trimmedKey] = trimmedOccurrence + 1;
-    }
-
-    const anchor = {
-      paragraphIndex,
-      tokenId,
-      tokenIndex: i,
-      tokenText,
-      length: tokenLength,
-      textOccurrence: occurrence,
-      trimmedTextOccurrence: trimmedKey ? trimmedOccurrence : occurrence,
-      charStart,
-      charEnd,
-      documentCharStart: charStart >= 0 ? documentOffset + charStart : -1,
-      documentCharEnd: charEnd >= 0 ? documentOffset + charEnd : -1,
-      matched: charStart >= 0,
-      repeatKey: normalizeTokenRepeatKey(tokenText),
-    };
-    byId[tokenId] = anchor;
-    ordered.push(anchor);
-  }
-
-  annotateRepeatKeyTotals(ordered);
-  return { byId, ordered };
-}
-
-function annotateRepeatKeyTotals(list) {
-  if (!Array.isArray(list) || !list.length) return;
-  const totals = Object.create(null);
-  const positions = Object.create(null);
-  for (const anchor of list) {
-    const key = anchor?.repeatKey;
-    if (!key) continue;
-    totals[key] = (totals[key] ?? 0) + 1;
-    positions[key] = positions[key] || [];
-    if (typeof anchor.charStart === "number" && anchor.charStart >= 0) {
-      positions[key].push(anchor.charStart);
-    }
-  }
-  const nearestGap = Object.create(null);
-  for (const [key, coords] of Object.entries(positions)) {
-    if (!Array.isArray(coords) || coords.length < 2) continue;
-    const sorted = coords.slice().sort((a, b) => a - b);
-    const gaps = new Map();
-    for (let i = 0; i < sorted.length; i++) {
-      let gap = Infinity;
-      if (i > 0) gap = Math.min(gap, sorted[i] - sorted[i - 1]);
-      if (i < sorted.length - 1) gap = Math.min(gap, sorted[i + 1] - sorted[i]);
-      gaps.set(sorted[i], gap);
-    }
-    nearestGap[key] = gaps;
-  }
-  for (const anchor of list) {
-    if (!anchor) continue;
-    const key = anchor.repeatKey;
-    anchor.repeatKeyTotal = key ? totals[key] ?? 0 : 0;
-    if (key && nearestGap[key] && typeof anchor.charStart === "number") {
-      const gap = nearestGap[key].get(anchor.charStart);
-      anchor.repeatKeyNearestGap = typeof gap === "number" ? gap : Infinity;
-    } else {
-      anchor.repeatKeyNearestGap = Infinity;
-    }
-  }
-}
-
-function findPreviousNonWhitespaceAnchor(list, tokenId) {
-  if (!Array.isArray(list) || !tokenId) return null;
-  const startIndex = list.findIndex((anchor) => anchor?.tokenId === tokenId);
-  if (startIndex <= 0) return null;
-  for (let i = startIndex - 1; i >= 0; i--) {
-    const anchor = list[i];
-    if (anchor?.tokenText && anchor.tokenText.trim()) {
-      return anchor;
-    }
-  }
-  return null;
-}
-
-function resolveTokenPosition(text, tokenText, fromIndex) {
-  if (!tokenText || typeof text !== "string") return -1;
-  const textLength = text.length;
-  if (!textLength) return -1;
-  let searchStart = fromIndex;
-  if (searchStart < 0) searchStart = 0;
-  if (searchStart > textLength) searchStart = textLength;
-
-  let idx = text.indexOf(tokenText, searchStart);
-  if (idx !== -1) return idx;
-
-  const trimmed = tokenText.trim();
-  if (trimmed && trimmed !== tokenText) {
-    idx = text.indexOf(trimmed, searchStart);
-    if (idx !== -1) return idx;
-  }
-
-  if (searchStart > 0) {
-    const retryStart = Math.max(0, searchStart - tokenText.length - 1);
-    idx = text.indexOf(tokenText, retryStart);
-    if (idx !== -1) return idx;
-  }
-  return text.indexOf(tokenText);
-}
-
-function selectTokenAnchors(entry, type) {
-  if (!entry) return null;
-  return type === "target" ? entry.targetAnchors : entry.sourceAnchors;
-}
-
-function snapshotAnchor(anchor) {
-  if (!anchor) return undefined;
-  return {
-    tokenId: anchor.tokenId,
-    tokenIndex: anchor.tokenIndex,
-    tokenText: anchor.tokenText,
-    textOccurrence: anchor.textOccurrence,
-    trimmedTextOccurrence: anchor.trimmedTextOccurrence,
-    charStart: anchor.charStart,
-    charEnd: anchor.charEnd,
-    documentCharStart: anchor.documentCharStart,
-    documentCharEnd: anchor.documentCharEnd,
-    length: anchor.length,
-    matched: anchor.matched,
-    repeatKey: anchor.repeatKey,
-    repeatKeyTotal: anchor.repeatKeyTotal,
-    repeatKeyNearestGap: anchor.repeatKeyNearestGap,
-  };
-}
-
-function findAnchorsNearChar(entry, type, charIndex) {
-  const collection = selectTokenAnchors(entry, type);
-  if (!collection?.ordered?.length || typeof charIndex !== "number" || charIndex < 0) {
-    return { before: null, at: null, after: null };
-  }
-  let before = null;
-  for (let i = 0; i < collection.ordered.length; i++) {
-    const anchor = collection.ordered[i];
-    if (!anchor || anchor.charStart < 0) continue;
-    if (charIndex >= anchor.charStart && charIndex <= anchor.charEnd) {
-      return {
-        before: before ?? anchor,
-        at: anchor,
-        after: findNextAnchorWithPosition(collection.ordered, i + 1),
-      };
-    }
-    if (anchor.charStart > charIndex) {
-      return {
-        before,
-        at: null,
-        after: anchor,
-      };
-    }
-    before = anchor;
-  }
-  return { before, at: null, after: null };
-}
-
-function findNextAnchorWithPosition(list, startIndex) {
-  if (!Array.isArray(list)) return null;
-  for (let i = startIndex; i < list.length; i++) {
-    const anchor = list[i];
-    if (anchor && anchor.charStart >= 0) return anchor;
-  }
-  return null;
-}
 
 function countSnippetOccurrencesBefore(text, snippet, limit) {
   if (!snippet) return 0;
@@ -711,8 +410,9 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   };
 }
 
-function buildDeleteRangeCandidates(meta) {
+function buildDeleteRangeCandidates(suggestion) {
   const ranges = [];
+  const meta = suggestion?.meta?.anchor;
   if (!meta) return ranges;
   const addRange = (start, end, snippet) => {
     if (!Number.isFinite(start) || start < 0) return;
@@ -728,11 +428,14 @@ function buildDeleteRangeCandidates(meta) {
       meta.highlightAnchorTarget.tokenText
     );
   }
+  const charHint = suggestion?.charHint;
+  addRange(charHint?.start, charHint?.end, meta.highlightText);
   return ranges;
 }
 
-function buildInsertRangeCandidates(meta) {
+function buildInsertRangeCandidates(suggestion) {
   const ranges = [];
+  const meta = suggestion?.meta?.anchor;
   if (!meta) return ranges;
   const addRange = (start, end, snippet) => {
     if (!Number.isFinite(start) || start < 0) return;
@@ -746,418 +449,14 @@ function buildInsertRangeCandidates(meta) {
   addRange(meta.highlightCharStart, meta.highlightCharEnd, meta.highlightText);
   addRange(meta.targetCharStart, meta.targetCharEnd, meta.highlightText);
   addRange(meta.charStart, meta.charEnd, meta.highlightText);
+  const charHint = suggestion?.charHint;
+  addRange(charHint?.start, charHint?.end, meta.highlightText);
   addAnchor(meta.highlightAnchorTarget);
   addAnchor(meta.sourceTokenAt);
   addAnchor(meta.targetTokenAt);
   addAnchor(meta.sourceTokenBefore);
   addAnchor(meta.targetTokenBefore);
   return ranges;
-}
-
-/** ─────────────────────────────────────────────────────────
- *  Helpers: znaki & pravila
- *  ───────────────────────────────────────────────────────── */
-const QUOTES = new Set(['"', "'", "“", "”", "„", "«", "»"]);
-const isDigit = (ch) => ch >= "0" && ch <= "9";
-const charAtSafe = (s, i) => (i >= 0 && i < s.length ? s[i] : "");
-
-/** Številčni vejici (decimalna ali tisočiška) */
-function isNumericComma(original, corrected, kind, pos) {
-  const s = kind === "delete" ? original : corrected;
-  const prev = charAtSafe(s, pos - 1);
-  const next = charAtSafe(s, pos + 1);
-  return isDigit(prev) && isDigit(next);
-}
-
-/**
- * Guard: ali so se spremenile samo vejice (in presledki okoli njih).
- * Nekateri API odzivi spreminjajo razmike, zato jih ignoriramo, da ne
- * preskočimo veljavnih predlogov.
- */
-function normalizeForComparison(text) {
-  if (typeof text !== "string") return "";
-  return text
-    .replace(/\s+/g, "")
-    .replace(/,/g, "")
-    .replace(/[()]/g, "");
-}
-
-function onlyCommasChanged(original, corrected) {
-  return normalizeForComparison(original) === normalizeForComparison(corrected);
-}
-
-function findCommaAfterWhitespace(text, startIndex) {
-  if (typeof text !== "string" || startIndex < 0 || startIndex >= text.length) {
-    return -1;
-  }
-  let idx = startIndex;
-  let sawWhitespace = false;
-  while (idx < text.length && /\s/.test(text[idx])) {
-    sawWhitespace = true;
-    idx++;
-  }
-  if (!sawWhitespace || idx >= text.length) {
-    return -1;
-  }
-  return text[idx] === "," ? idx : -1;
-}
-
-function stripTrailingCommaAndSpace(text) {
-  const safe = typeof text === "string" ? text : "";
-  const match = safe.match(TRAILING_COMMA_REGEX);
-  const trailing = match ? match[0] : "";
-  const base = trailing ? safe.slice(0, -trailing.length) : safe;
-  return {
-    base,
-    trailing,
-    hasComma: trailing.includes(","),
-  };
-}
-
-function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegment = "") {
-  const orig = stripTrailingCommaAndSpace(originalSegment);
-  const corr = stripTrailingCommaAndSpace(correctedSegment);
-  if (orig.hasComma === corr.hasComma) return null;
-  return {
-    removeComma: orig.hasComma && !corr.hasComma,
-    addComma: !orig.hasComma && corr.hasComma,
-    originalSegment,
-    correctedSegment,
-    baseText: orig.base || corr.base,
-  };
-}
-
-function createCorrectionTracking() {
-  return {
-    tokenIds: new Set(),
-    unmatchedTokenIds: new Set(),
-    intents: [],
-  };
-}
-
-function normalizeTokenForComparison(text) {
-  if (typeof text !== "string") return "";
-  return text
-    .replace(/[.,!?;:“”„'"«»]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
-  if (!detail?.corrections || !anchorsEntry) return [];
-  const groups = Array.isArray(detail.corrections)
-    ? detail.corrections
-    : typeof detail.corrections === "object"
-      ? Object.values(detail.corrections)
-      : [];
-  if (!groups.length) return [];
-  const ops = [];
-  const seen = new Set();
-  for (const group of groups) {
-    const entries = Array.isArray(group?.corrections) ? group.corrections : [];
-    for (const entry of entries) {
-      const analysis = analyzeCommaChangeFromCorrections(entry?.source_text, entry?.text);
-      if (!analysis) continue;
-      const tokenId = entry?.source_id ?? group?.source_start;
-      if (!tokenId) continue;
-      if (tracking?.tokenIds) {
-        tracking.tokenIds.add(tokenId);
-      }
-      const anchor = anchorsEntry?.sourceAnchors?.byId?.[tokenId];
-      if (!anchor || !anchor.matched || anchor.charStart < 0) {
-        if (tracking?.unmatchedTokenIds) {
-          tracking.unmatchedTokenIds.add(tokenId);
-        }
-        continue;
-      }
-      const tokenText = anchor.tokenText ?? "";
-      const entrySource = typeof entry?.source_text === "string" ? entry.source_text : "";
-
-      let placementAnchor = anchor;
-      if (entrySource && tokenText) {
-        const normEntry = normalizeTokenForComparison(entrySource);
-        const normToken = normalizeTokenForComparison(tokenText);
-        if (normEntry !== normToken) {
-          const merged = mergeAnchorsToMatchSourceText(
-            entrySource,
-            anchor,
-            anchorsEntry?.sourceAnchors?.ordered
-          );
-          if (merged) {
-            placementAnchor = merged;
-          } else {
-            continue;
-          }
-        }
-      }
-      let baseText = (entrySource && entrySource.length ? entrySource : tokenText) || "";
-      if (
-        analysis.addComma &&
-        (!baseText || !baseText.trim()) &&
-        anchorsEntry?.sourceAnchors?.ordered?.length
-      ) {
-        const coerced = findPreviousNonWhitespaceAnchor(
-          anchorsEntry.sourceAnchors.ordered,
-          anchor.tokenId
-        );
-        if (coerced) {
-          placementAnchor = coerced;
-          baseText = coerced.tokenText ?? baseText;
-        }
-      }
-      if (!baseText) {
-        if (tracking?.unmatchedTokenIds) {
-          tracking.unmatchedTokenIds.add(tokenId);
-        }
-        continue;
-      }
-      if (tracking?.intents) {
-        tracking.intents.push({ tokenId, anchor: placementAnchor, analysis, baseText });
-      }
-      if (analysis.removeComma) {
-        const localIndex = baseText.lastIndexOf(",");
-        if (localIndex < 0) {
-          if (tracking?.unmatchedTokenIds) {
-            tracking.unmatchedTokenIds.add(tokenId);
-          }
-          continue;
-        }
-        const absolutePos = placementAnchor.charStart + localIndex;
-        const key = `del-${absolutePos}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        ops.push({
-          kind: "delete",
-          pos: absolutePos,
-          originalPos: absolutePos,
-          correctedPos: absolutePos,
-          paragraphIndex,
-          fromCorrections: true,
-        });
-      } else if (analysis.addComma) {
-        const analysisBase =
-          typeof analysis.baseText === "string" && normalizeTokenForComparison(analysis.baseText)
-            ? analysis.baseText
-            : null;
-        const effectiveBase = analysisBase ?? baseText;
-        const insertBase = effectiveBase.replace(TRAILING_COMMA_REGEX, "");
-        const relative = insertBase.length;
-        const absolutePos = placementAnchor.charStart + relative;
-        const key = `ins-${absolutePos}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        ops.push({
-          kind: "insert",
-          pos: absolutePos,
-          originalPos: absolutePos,
-          correctedPos: absolutePos,
-          paragraphIndex,
-          fromCorrections: true,
-        });
-      }
-    }
-  }
-
-  if (tracking && tracking.intents?.length) {
-    tracking.blockedOriginalPositions = new Set(tracking.blockedOriginalPositions || []);
-    tracking.blockedCorrectedPositions = new Set(tracking.blockedCorrectedPositions || []);
-    for (const intent of tracking.intents) {
-      const anchor = intent?.anchor;
-      if (!anchor) continue;
-      const baseText = intent.baseText ?? intent.analysis?.baseText ?? anchor.tokenText ?? "";
-      const charStart = anchor.charStart;
-      if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
-      const deleteIndex = baseText.lastIndexOf(",");
-      if (deleteIndex >= 0) {
-        tracking.blockedOriginalPositions.add(charStart + deleteIndex);
-      }
-      const insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
-      tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
-    }
-  }
-  return ops;
-}
-
-function mergeAnchorsToMatchSourceText(entrySource, baseAnchor, orderedAnchors) {
-  if (!entrySource || !baseAnchor || !orderedAnchors?.length) return null;
-  const targetNormalized = normalizeTokenForComparison(entrySource);
-  if (!targetNormalized) return null;
-  let combinedText = baseAnchor.tokenText ?? "";
-  let normalizedCombined = normalizeTokenForComparison(combinedText);
-  if (normalizedCombined === targetNormalized) return baseAnchor;
-
-  let leftIndex = baseAnchor.tokenIndex - 1;
-  let rightIndex = baseAnchor.tokenIndex + 1;
-  let leftAnchor = baseAnchor;
-  let rightAnchor = baseAnchor;
-  const maxLength = entrySource.length + 20;
-
-  while (combinedText.length <= maxLength) {
-    let expanded = false;
-    if (leftIndex >= 0) {
-      const candidate = orderedAnchors[leftIndex];
-      leftIndex--;
-      if (candidate?.tokenText != null) {
-        combinedText = (candidate.tokenText ?? "") + combinedText;
-        leftAnchor = candidate;
-        normalizedCombined = normalizeTokenForComparison(combinedText);
-        expanded = true;
-        if (normalizedCombined === targetNormalized) break;
-      }
-    }
-    if (normalizedCombined === targetNormalized) break;
-    if (rightIndex < orderedAnchors.length) {
-      const candidate = orderedAnchors[rightIndex];
-      rightIndex++;
-      if (candidate?.tokenText != null) {
-        combinedText += candidate.tokenText ?? "";
-        rightAnchor = candidate;
-        normalizedCombined = normalizeTokenForComparison(combinedText);
-        expanded = true;
-        if (normalizedCombined === targetNormalized) break;
-      }
-    }
-    if (!expanded) break;
-  }
-
-  if (normalizedCombined !== targetNormalized) return null;
-  if (typeof leftAnchor?.charStart !== "number" || leftAnchor.charStart < 0) return null;
-
-  return {
-    ...baseAnchor,
-    charStart: leftAnchor.charStart,
-    tokenIndex: leftAnchor.tokenIndex,
-    tokenText: combinedText,
-  };
-}
-
-function operationKey(op) {
-  const idx = typeof op?.originalPos === "number" ? op.originalPos : op?.pos;
-  return `${op?.kind ?? "op"}-${idx}`;
-}
-
-/** Minimalni diff: samo operacije z vejicami */
-function diffCommasOnly(original, corrected) {
-  const ops = [];
-  let i = 0,
-    j = 0;
-  while (i < original.length || j < corrected.length) {
-    const o = original[i] ?? "";
-    const c = corrected[j] ?? "";
-    if (o === c) {
-      i++;
-      j++;
-      continue;
-    }
-    if (c === "," && o !== ",") {
-      if (/\s/.test(o)) {
-        const relocateIdx = findCommaAfterWhitespace(original, i);
-        if (relocateIdx >= 0) {
-          i = relocateIdx;
-          continue;
-        }
-      }
-      ops.push({ kind: "insert", pos: j, originalPos: i, correctedPos: j });
-      j++;
-      continue;
-    }
-    if (o === "," && c !== ",") {
-      if (/\s/.test(c)) {
-        const relocateIdx = findCommaAfterWhitespace(corrected, j);
-        if (relocateIdx >= 0) {
-          j = relocateIdx;
-          continue;
-        }
-      }
-      ops.push({ kind: "delete", pos: i, originalPos: i, correctedPos: j });
-      i++;
-      continue;
-    }
-    if (o) i++;
-    if (c) j++;
-  }
-  return ops;
-}
-
-/** Filtriraj operacije (izloči številčne vejice, dodaj presledek kasneje, če treba) */
-function filterCommaOps(original, corrected, ops) {
-  return ops.filter((op) => {
-    if (isNumericComma(original, corrected, op.kind, op.pos)) return false;
-    if (op.kind === "insert") {
-      const next = charAtSafe(corrected, op.pos + 1);
-      const noSpaceAfter = next && !/\s/.test(next);
-      if (noSpaceAfter && !QUOTES.has(next)) {
-        // dovolimo; presledek dodamo naknadno
-        return true;
-      }
-    }
-    return true;
-  });
-}
-
-function collapseDuplicateDiffOps(ops) {
-  if (!Array.isArray(ops) || ops.length < 2) return ops;
-  const deletePositions = ops
-    .filter((op) => op?.kind === "delete")
-    .map((op) => (typeof op.originalPos === "number" ? op.originalPos : op.pos))
-    .filter((pos) => typeof pos === "number");
-  if (!deletePositions.length) return ops;
-  const shouldDropInsert = (pos) =>
-    deletePositions.some((delPos) => typeof delPos === "number" && Math.abs(delPos - pos) <= 0);
-  return ops.filter((op) => {
-    if (op?.kind !== "insert") return true;
-    const pos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
-    if (typeof pos !== "number") return true;
-    return !shouldDropInsert(pos);
-  });
-}
-
-function filterDiffOpsAgainstCorrections(ops, tracking) {
-  if (!tracking || !Array.isArray(ops) || !ops.length) return ops;
-  const blockedOriginal = tracking.blockedOriginalPositions;
-  const blockedCorrected = tracking.blockedCorrectedPositions;
-  if (!blockedOriginal?.size && !blockedCorrected?.size) return ops;
-  return ops.filter((op) => {
-    const originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
-    const correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
-    if (op.kind === "delete" && blockedOriginal?.has(originalPos)) return false;
-    if (op.kind === "insert" && blockedCorrected?.has(correctedPos)) return false;
-    return true;
-  });
-}
-
-function filterDiffOpsForRepeatedTokens(ops, anchorsEntry) {
-  if (!Array.isArray(ops) || !ops.length) return ops;
-  return ops.filter((op) => !shouldSuppressDueToRepeatedToken(anchorsEntry, op));
-}
-
-function findAnchorForDiffOp(anchorsEntry, op) {
-  if (!anchorsEntry || !op) return null;
-  const isDelete = op.kind === "delete";
-  const charIndex = isDelete ? op.originalPos ?? op.pos : op.correctedPos ?? op.pos;
-  if (typeof charIndex !== "number" || charIndex < 0) return null;
-  const around = findAnchorsNearChar(anchorsEntry, isDelete ? "source" : "target", charIndex);
-  return around?.at ?? null;
-}
-
-function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
-  if (op?.fromCorrections) return false;
-  const anchor = findAnchorForDiffOp(anchorsEntry, op);
-  if (!anchor) return false;
-  const repeatKey = anchor.repeatKey;
-  const repeatTotal = anchor.repeatKeyTotal ?? 0;
-  if (!repeatKey || repeatTotal <= 1) return false;
-  if (!/[\p{L}\d]+/u.test(repeatKey)) return false;
-  const gap = anchor.repeatKeyNearestGap ?? Infinity;
-  if (gap > REPEAT_SUPPRESSION_MAX_DISTANCE) return false;
-  return true;
-}
-
-/** Anchor-based mikro urejanje (ohrani formatiranje) */
-function makeAnchor(text, idx, span = 16) {
-  const left = text.slice(Math.max(0, idx - span), idx);
-  const right = text.slice(idx, Math.min(text.length, idx + span));
-  return { left, right };
 }
 
 // Vstavi vejico na podlagi sidra
@@ -1245,37 +544,12 @@ async function deleteCommaAt(context, paragraph, original, atOriginalPos) {
   matches.items[idx].insertText("", Word.InsertLocation.replace);
 }
 
-function createSuggestionId(kind, paragraphIndex, pos) {
-  return `${kind}-${paragraphIndex}-${pos}-${pendingSuggestionsOnline.length}`;
-}
-
-async function highlightSuggestionOnline(
-  context,
-  paragraph,
-  original,
-  corrected,
-  op,
-  paragraphIndex,
-  paragraphAnchors
-) {
-  if (op.kind === "delete") {
-    return highlightDeleteSuggestion(
-      context,
-      paragraph,
-      original,
-      op,
-      paragraphIndex,
-      paragraphAnchors
-    );
+async function highlightSuggestionOnline(context, paragraph, suggestion) {
+  if (!suggestion) return false;
+  if (suggestion.kind === "delete") {
+    return highlightDeleteSuggestion(context, paragraph, suggestion);
   }
-  return highlightInsertSuggestion(
-    context,
-    paragraph,
-    corrected,
-    op,
-    paragraphIndex,
-    paragraphAnchors
-  );
+  return highlightInsertSuggestion(context, paragraph, suggestion);
 }
 
 function countCommasUpTo(text, pos) {
@@ -1286,81 +560,67 @@ function countCommasUpTo(text, pos) {
   return count;
 }
 
-async function highlightDeleteSuggestion(
-  context,
-  paragraph,
-  original,
-  op,
-  paragraphIndex,
-  anchorsEntry
-) {
-  const metadata = buildDeleteSuggestionMetadata(anchorsEntry, op.originalPos ?? op.pos);
-  let targetRange = await getRangeForCharacterSpan(
-    context,
-    paragraph,
-    original,
-    metadata.charStart,
-    metadata.charEnd,
-    "highlight-delete",
-    metadata.highlightText
-  );
+async function highlightDeleteSuggestion(context, paragraph, suggestion) {
+  const paragraphText = suggestion.meta?.originalText ?? paragraph.text ?? "";
+  const meta = suggestion.meta?.anchor || {};
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+  const charStart =
+    suggestion.charHint?.start ?? meta.charStart ?? suggestion.meta?.op?.originalPos ?? -1;
+  const charEnd =
+    suggestion.charHint?.end ??
+    meta.charEnd ??
+    (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
+  const highlightText = meta.highlightText ?? suggestion.meta?.highlightText ?? ",";
+  let targetRange = null;
+
+  if (Number.isFinite(charStart) && charStart >= 0) {
+    targetRange = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      entry,
+      charStart,
+      charEnd,
+      "highlight-delete",
+      highlightText
+    );
+  }
 
   if (!targetRange) {
-    targetRange = await findCommaRangeByOrdinal(context, paragraph, original, op);
+    targetRange = await findCommaRangeByOrdinal(context, paragraph, paragraphText, suggestion.meta?.op);
     if (!targetRange) return false;
   }
 
   targetRange.font.highlightColor = HIGHLIGHT_DELETE;
   context.trackedObjects.add(targetRange);
-  addPendingSuggestionOnline({
-    id: createSuggestionId("del", paragraphIndex, op.pos),
-    kind: "delete",
-    paragraphIndex,
-    originalPos: op.pos,
-    highlightRange: targetRange,
-    metadata,
-  });
-  markParagraphTouched(paragraphIndex);
+  suggestion.highlightRange = targetRange;
+  addPendingSuggestionOnline(suggestion);
   return true;
 }
 
-async function highlightInsertSuggestion(
-  context,
-  paragraph,
-  corrected,
-  op,
-  paragraphIndex,
-  anchorsEntry
-) {
-  const metadata = buildInsertSuggestionMetadata(anchorsEntry, {
-    originalCharIndex: op.originalPos ?? op.pos,
-    targetCharIndex: op.correctedPos ?? op.pos,
-  });
-
-  const anchor = makeAnchor(corrected, op.pos);
-  const rawLeft = anchor.left || "";
-  const rawRight = anchor.right || corrected.slice(op.pos, op.pos + 24);
-  const leftSnippetStored = rawLeft.slice(-40);
-  const rightSnippetStored = rawRight.slice(0, 40);
-
-  const lastWord = extractLastWord(rawLeft);
-  let leftContext = rawLeft.slice(-20).replace(/[\r\n]+/g, " ");
+async function highlightInsertSuggestion(context, paragraph, suggestion) {
+  const corrected = suggestion.meta?.correctedText ?? paragraph.text ?? "";
+  const anchor = suggestion.meta?.anchor || {};
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+  const rawLeft = suggestion.snippets?.leftSnippet ?? corrected.slice(0, suggestion.meta?.op?.pos ?? 0);
+  const rawRight = suggestion.snippets?.rightSnippet ?? corrected.slice(suggestion.meta?.op?.pos ?? 0);
+  const lastWord = extractLastWord(rawLeft || "");
+  let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (metadata.highlightCharStart >= 0) {
+  if (Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
     const metaEnd =
-      metadata.highlightCharEnd > metadata.highlightCharStart
-        ? metadata.highlightCharEnd
-        : metadata.highlightCharStart + 1;
-    range = await getRangeForCharacterSpan(
+      anchor.highlightCharEnd > anchor.highlightCharStart
+        ? anchor.highlightCharEnd
+        : anchor.highlightCharStart + 1;
+    range = await getRangeForAnchorSpan(
       context,
       paragraph,
-      anchorsEntry?.originalText ?? paragraph.text ?? corrected,
-      metadata.highlightCharStart,
+      entry,
+      anchor.highlightCharStart,
       metaEnd,
       "highlight-insert-meta",
-      metadata.highlightText
+      anchor.highlightText
     );
   }
 
@@ -1376,7 +636,7 @@ async function highlightInsertSuggestion(
     }
   }
 
-  if (!range && leftContext.trim()) {
+  if (!range && leftContext && leftContext.trim()) {
     const leftSearch = paragraph.getRange().search(leftContext.trim(), searchOpts);
     leftSearch.load("items");
     await context.sync();
@@ -1386,7 +646,7 @@ async function highlightInsertSuggestion(
   }
 
   if (!range) {
-    let rightSnippet = rightSnippetStored.replace(/,/g, "").trim();
+    let rightSnippet = (rawRight || "").replace(/,/g, "").trim();
     rightSnippet = rightSnippet.slice(0, 8);
     if (rightSnippet) {
       const rightSearch = paragraph.getRange().search(rightSnippet, searchOpts);
@@ -1408,17 +668,8 @@ async function highlightInsertSuggestion(
 
   range.font.highlightColor = HIGHLIGHT_INSERT;
   context.trackedObjects.add(range);
-  addPendingSuggestionOnline({
-    id: createSuggestionId("ins", paragraphIndex, op.pos),
-    kind: "insert",
-    paragraphIndex,
-    leftWord: lastWord,
-    leftSnippet: leftSnippetStored,
-    rightSnippet: rightSnippetStored,
-    highlightRange: range,
-    metadata,
-  });
-  markParagraphTouched(paragraphIndex);
+  suggestion.highlightRange = range;
+  addPendingSuggestionOnline(suggestion);
   return true;
 }
 
@@ -1444,19 +695,24 @@ function extractLastWord(text) {
 }
 
 async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
-  const meta = suggestion?.metadata;
+  const meta = suggestion?.meta?.anchor;
   if (!meta) return false;
-  const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
 
-  if (Number.isFinite(meta.charStart) && meta.charStart >= 0) {
+  const charStart =
+    suggestion.charHint?.start ?? meta.charStart ?? suggestion.meta?.op?.originalPos ?? -1;
+  const charEnd =
+    suggestion.charHint?.end ??
+    meta.charEnd ??
+    (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
+
+  if (Number.isFinite(charStart) && charStart >= 0) {
     const range = await getRangeForAnchorSpan(
       context,
       paragraph,
       entry,
-      meta.charStart,
-      Number.isFinite(meta.charEnd) && meta.charEnd > meta.charStart
-        ? meta.charEnd
-        : meta.charStart + 1,
+      charStart,
+      Number.isFinite(charEnd) && charEnd > charStart ? charEnd : charStart + 1,
       "apply-delete-char",
       meta.highlightText
     );
@@ -1496,8 +752,7 @@ async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
 }
 
 async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
-  const meta = suggestion?.metadata;
-  const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion?.paragraphIndex);
   const tryByRange = async (range) => {
     if (!range) return false;
     try {
@@ -1515,7 +770,7 @@ async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
     }
   }
 
-  const candidates = buildDeleteRangeCandidates(meta);
+  const candidates = buildDeleteRangeCandidates(suggestion);
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     if (!Number.isFinite(candidate.start) || candidate.start < 0) {
@@ -1549,7 +804,12 @@ async function tryApplyDeleteUsingHighlight(context, paragraph, suggestion) {
 }
 
 async function applyDeleteSuggestionLegacy(context, paragraph, suggestion) {
-  const ordinal = countCommasUpTo(paragraph.text || "", suggestion.originalPos);
+  const pos =
+    suggestion.meta?.op?.originalPos ??
+    suggestion.meta?.op?.pos ??
+    suggestion.charHint?.start ??
+    0;
+  const ordinal = countCommasUpTo(paragraph.text || "", pos);
   if (ordinal <= 0) {
     warn("apply delete: no ordinal");
     return false;
@@ -1637,11 +897,11 @@ function selectInsertAnchor(meta) {
 }
 
 async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
-  const meta = suggestion?.metadata;
+  const meta = suggestion?.meta?.anchor;
   if (!meta) return false;
   const anchorInfo = selectInsertAnchor(meta);
   if (!anchorInfo) return false;
-  const entry = getParagraphTokenAnchorsOnline(suggestion.paragraphIndex);
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
   const range = await getRangeForAnchorSpan(
     context,
     paragraph,
@@ -1666,8 +926,8 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
 }
 
 async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
-  const meta = suggestion?.metadata;
-  const entry = getParagraphTokenAnchorsOnline(suggestion?.paragraphIndex);
+  const meta = suggestion?.meta?.anchor;
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion?.paragraphIndex);
   const paragraphText = entry?.originalText ?? paragraph?.text ?? "";
   const useRange = async (range) => {
     if (!range) return false;
@@ -1794,8 +1054,9 @@ async function findRangeForInsert(context, paragraph, suggestion) {
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (suggestion.leftWord) {
-    const wordSearch = paragraph.getRange().search(suggestion.leftWord, {
+  const focusWord = suggestion.snippets?.focusWord;
+  if (focusWord) {
+    const wordSearch = paragraph.getRange().search(focusWord, {
       matchCase: false,
       matchWholeWord: true,
     });
@@ -1806,7 +1067,7 @@ async function findRangeForInsert(context, paragraph, suggestion) {
     }
   }
 
-  let leftFrag = (suggestion.leftSnippet || "").slice(-20).replace(/[\r\n]+/g, " ");
+  let leftFrag = (suggestion.snippets?.leftSnippet || "").slice(-20).replace(/[\r\n]+/g, " ");
 
   if (!range && leftFrag.trim()) {
     const leftSearch = paragraph.getRange().search(leftFrag.trim(), searchOpts);
@@ -1818,7 +1079,7 @@ async function findRangeForInsert(context, paragraph, suggestion) {
   }
 
   if (!range) {
-    let rightFrag = (suggestion.rightSnippet || "").replace(/,/g, "").trim();
+    let rightFrag = (suggestion.snippets?.rightSnippet || "").replace(/,/g, "").trim();
     rightFrag = rightFrag.slice(0, 8);
     if (rightFrag) {
       const rightSearch = paragraph.getRange().search(rightFrag, searchOpts);
@@ -1846,12 +1107,17 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
     }
     return;
   }
-  const meta = suggestion.metadata;
-  if (!meta) return;
-  const entry = paragraphTokenAnchorsOnline[suggestion.paragraphIndex];
+  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+  const metaAnchor = suggestion.meta?.anchor;
+  if (!metaAnchor) return;
   const charStart =
-    typeof meta.highlightCharStart === "number" ? meta.highlightCharStart : meta.charStart;
-  const charEnd = typeof meta.highlightCharEnd === "number" ? meta.highlightCharEnd : meta.charEnd;
+    suggestion.charHint?.start ??
+    (typeof metaAnchor.highlightCharStart === "number"
+      ? metaAnchor.highlightCharStart
+      : metaAnchor.charStart);
+  const charEnd =
+    suggestion.charHint?.end ??
+    (typeof metaAnchor.highlightCharEnd === "number" ? metaAnchor.highlightCharEnd : metaAnchor.charEnd);
   if (!paragraph || !Number.isFinite(charStart)) return;
   const range = await getRangeForAnchorSpan(
     context,
@@ -1860,7 +1126,7 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
     charStart,
     charEnd,
     "clear-highlight",
-    meta.highlightText || meta.highlightAnchorTarget?.tokenText
+    metaAnchor.highlightText || metaAnchor.highlightAnchorTarget?.tokenText
   );
   if (range) {
     range.font.highlightColor = null;
@@ -1916,9 +1182,7 @@ export async function applyAllSuggestionsOnline() {
   }
   if (!suggestionsByParagraph.size) return;
   await Word.run(async (context) => {
-    const paras = context.document.body.paragraphs;
-    paras.load("items/text");
-    await context.sync();
+    const paras = await wordOnlineAdapter.getParagraphs(context);
     const touchedIndexes = new Set();
     const processedSuggestions = [];
     const failedSuggestions = [];
@@ -1929,40 +1193,32 @@ export async function applyAllSuggestionsOnline() {
         failedSuggestions.push(...suggestions);
         continue;
       }
-      const entry = getParagraphTokenAnchorsOnline(paragraphIndex);
-      if (!entry?.correctedText) {
-        failedSuggestions.push(...suggestions);
-        continue;
+      const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+      let anyApplied = false;
+      for (const suggestion of suggestions) {
+        let applied = false;
+        try {
+          applied = await wordOnlineAdapter.applySuggestion(context, paragraph, suggestion);
+        } catch (err) {
+          warn("applyAllSuggestionsOnline: failed to apply suggestion", err);
+          applied = false;
+        }
+        if (applied) {
+          anyApplied = true;
+          processedSuggestions.push({ suggestion, paragraph });
+        } else {
+          failedSuggestions.push(suggestion);
+        }
       }
-      const originalText = entry.originalText ?? "";
-      const liveText = paragraph.text ?? "";
-      if (normalizeParagraphForEquality(liveText) !== normalizeParagraphForEquality(originalText)) {
-        failedSuggestions.push(...suggestions);
-        continue;
-      }
-      try {
-        paragraph.insertText(entry.correctedText, Word.InsertLocation.replace);
-        paragraph.load("text");
-        // eslint-disable-next-line office-addins/no-context-sync-in-loop
-        await context.sync();
+      if (anyApplied) {
         touchedIndexes.add(paragraphIndex);
-        processedSuggestions.push(
-          ...suggestions.map((sug) => ({
-            suggestion: sug,
-            paragraph,
-          }))
-        );
-      } catch (err) {
-        warn("applyAllSuggestionsOnline: failed to replace paragraph", err);
-        failedSuggestions.push(...suggestions);
       }
     }
-    await clearOnlineSuggestionMarkers(context, processedSuggestions);
+    await wordOnlineAdapter.clearHighlights(context, processedSuggestions);
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
     for (const idx of touchedIndexes) {
-      deleteParagraphTokenAnchorsOnline(idx);
+      anchorProvider.deleteAnchors(idx);
     }
-    resetParagraphsTouchedOnline();
     pendingSuggestionsOnline.length = 0;
     if (failedSuggestions.length) {
       pendingSuggestionsOnline.push(...failedSuggestions);
@@ -1978,7 +1234,7 @@ export async function rejectAllSuggestionsOnline() {
     const paras = context.document.body.paragraphs;
     paras.load("items/text");
     await context.sync();
-    await clearOnlineSuggestionMarkers(context, null, paras);
+    await wordOnlineAdapter.clearHighlights(context, null, paras);
     context.document.body.font.highlightColor = null;
     await context.sync();
   });
@@ -2023,17 +1279,29 @@ async function checkDocumentTextDesktop() {
       }
 
       try {
-        // pridobi odstavke
-        const paras = context.document.body.paragraphs;
-        paras.load("items/text");
-        await context.sync();
+        const paras = await wordDesktopAdapter.getParagraphs(context);
         log("Paragraphs found:", paras.items.length);
+        anchorProvider.reset();
+        let documentCharOffset = 0;
 
         for (let idx = 0; idx < paras.items.length; idx++) {
-          const p = paras.items[idx];
-          let sourceText = p.text || "";
-          const trimmed = sourceText.trim();
-          if (!trimmed) continue;
+          const paragraph = paras.items[idx];
+          const sourceText = paragraph.text || "";
+          const normalizedSource = normalizeParagraphWhitespace(sourceText);
+          const trimmed = normalizedSource.trim();
+          const paragraphDocOffset = documentCharOffset;
+          documentCharOffset += sourceText.length + 1;
+          if (!trimmed) {
+            await anchorProvider.getAnchors({
+              paragraphIndex: idx,
+              originalText: sourceText,
+              correctedText: sourceText,
+              sourceTokens: [],
+              targetTokens: [],
+              documentOffset: paragraphDocOffset,
+            });
+            continue;
+          }
           if (trimmed.length > MAX_PARAGRAPH_CHARS) {
             notifyParagraphTooLong(idx, trimmed.length);
             continue;
@@ -2042,55 +1310,49 @@ async function checkDocumentTextDesktop() {
           const pStart = tnow();
           paragraphsProcessed++;
           log(`P${idx}: len=${sourceText.length} | "${SNIP(trimmed)}"`);
-          let passText = sourceText;
 
-          for (let pass = 0; pass < MAX_AUTOFIX_PASSES; pass++) {
-            let corrected;
-            try {
-              corrected = await popraviPoved(passText);
-            } catch (apiErr) {
-              apiErrors++;
-              warn(`P${idx} pass ${pass}: API call failed -> stop paragraph`, apiErr);
-              notifyApiUnavailable();
-              break;
-            }
-            log(`P${idx} pass ${pass}: corrected -> "${SNIP(corrected)}"`);
-
-            const opsAll = diffCommasOnly(passText, corrected);
-            const ops = filterCommaOps(passText, corrected, opsAll);
-            log(`P${idx} pass ${pass}: ops candidate=${opsAll.length}, after filter=${ops.length}`);
-
-            if (!ops.length) {
-              if (pass === 0) log(`P${idx}: no applicable comma ops`);
-              break;
-            }
-
-            for (const op of ops) {
-              if (op.kind === "insert") {
-                await insertCommaAt(context, p, passText, corrected, op.pos);
-                await ensureSpaceAfterComma(context, p, corrected, op.pos);
-                totalInserted++;
-              } else {
-                await deleteCommaAt(context, p, passText, op.pos);
-                totalDeleted++;
-              }
-            }
-
-            // eslint-disable-next-line office-addins/no-context-sync-in-loop
-            await context.sync();
-            p.load("text");
-            // eslint-disable-next-line office-addins/no-context-sync-in-loop
-            await context.sync();
-            const updated = p.text || "";
-            if (!updated || updated === passText) break;
-            passText = updated;
+          let result;
+          try {
+            result = await commaEngine.analyzeParagraph({
+              paragraphIndex: idx,
+              originalText: sourceText,
+              normalizedOriginalText: normalizedSource,
+              paragraphDocOffset,
+            });
+          } catch (err) {
+            apiErrors++;
+            warn(`P${idx}: engine failed`, err);
+            notifyApiUnavailable();
+            continue;
           }
+          apiErrors += result.apiErrors;
+          const suggestions = result.suggestions || [];
+          if (!suggestions.length) continue;
 
-          log(
-            `P${idx}: applied (ins=${totalInserted}, del=${totalDeleted}) | ${Math.round(
-              tnow() - pStart
-            )} ms`
-          );
+          let appliedInParagraph = 0;
+          for (const suggestion of suggestions) {
+            let applied = false;
+            try {
+              applied = await wordDesktopAdapter.applySuggestion(context, paragraph, suggestion);
+            } catch (err) {
+              warn("Desktop adapter failed to apply suggestion", err);
+            }
+            if (!applied) continue;
+            appliedInParagraph++;
+            if (suggestion.kind === "insert") {
+              totalInserted++;
+            } else if (suggestion.kind === "delete") {
+              totalDeleted++;
+            }
+          }
+          if (appliedInParagraph) {
+            await normalizeCommaSpacingInParagraph(context, paragraph);
+            log(
+              `P${idx}: applied (ins=${totalInserted}, del=${totalDeleted}) | ${Math.round(
+                tnow() - pStart
+              )} ms`
+            );
+          }
         }
       } finally {
         // povrni sledenje spremembam
@@ -2129,13 +1391,10 @@ async function checkDocumentTextOnline() {
         notifyTrackedChangesPresent();
         return;
       }
-      const paras = context.document.body.paragraphs;
-      paras.load("items/text");
-      await context.sync();
-      await clearOnlineSuggestionMarkers(context, null, paras);
+      const paras = await wordOnlineAdapter.getParagraphs(context);
+      await wordOnlineAdapter.clearHighlights(context, null, paras);
       resetPendingSuggestionsOnline();
-      resetParagraphsTouchedOnline();
-      resetParagraphTokenAnchorsOnline();
+      anchorProvider.reset();
 
       let documentCharOffset = 0;
 
@@ -2147,7 +1406,7 @@ async function checkDocumentTextOnline() {
         const paragraphDocOffset = documentCharOffset;
         documentCharOffset += original.length + 1;
         if (!trimmed) {
-          createParagraphTokenAnchors({
+          await anchorProvider.getAnchors({
             paragraphIndex: idx,
             originalText: original,
             correctedText: original,
@@ -2161,16 +1420,20 @@ async function checkDocumentTextOnline() {
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
         paragraphsProcessed++;
 
-        const chunkResult = await processLongParagraphOnline({
-          context,
-          paragraph: p,
+        const result = await commaEngine.analyzeParagraph({
           paragraphIndex: idx,
           originalText: original,
-          normalizedOriginalText: normalizedOriginal,
+          normalizedOriginalText,
           paragraphDocOffset,
         });
-        suggestions += chunkResult.suggestionsAdded;
-        apiErrors += chunkResult.apiErrors;
+        apiErrors += result.apiErrors;
+        if (!result.suggestions?.length) continue;
+        for (const suggestionObj of result.suggestions) {
+          const highlighted = await wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
+          if (highlighted) {
+            suggestions++;
+          }
+        }
       }
 
       await context.sync();
@@ -2187,391 +1450,4 @@ async function checkDocumentTextOnline() {
   } catch (e) {
     errL("ERROR in checkDocumentTextOnline:", e);
   }
-}
-
-function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
-  const safeText = typeof text === "string" ? text : "";
-  if (!safeText) return [];
-  const placeholder = "\uE000";
-  const protectedText = safeText;
-  const sentences = [];
-  let start = 0;
-
-  const pushSentence = (contentEnd, gapEnd = contentEnd) => {
-    if (typeof contentEnd !== "number" || contentEnd <= start) {
-      start = Math.max(start, gapEnd ?? contentEnd ?? start);
-      return;
-    }
-    sentences.push({ start, end: contentEnd, gapEnd: gapEnd ?? contentEnd });
-    start = gapEnd ?? contentEnd;
-  };
-
-  for (let i = 0; i < protectedText.length; i++) {
-    const ch = protectedText[i];
-    if (ch === "\n") {
-      pushSentence(i + 1, i + 1);
-      continue;
-    }
-    if (/[.!?]/.test(ch)) {
-      let contentEnd = i + 1;
-      while (contentEnd < protectedText.length && /[\])"'»”’]+/.test(protectedText[contentEnd])) {
-        contentEnd++;
-      }
-      let gapEnd = contentEnd;
-      while (gapEnd < protectedText.length && /\s/.test(protectedText[gapEnd])) {
-        gapEnd++;
-      }
-      pushSentence(contentEnd, gapEnd);
-      i = gapEnd - 1;
-    }
-  }
-  if (start < protectedText.length) {
-    sentences.push({
-      start,
-      end: protectedText.length,
-      gapEnd: protectedText.length,
-    });
-  }
-
-  return sentences.map((sentence, index) => {
-    const gapEnd = sentence.gapEnd ?? sentence.end;
-    const length = sentence.end - sentence.start;
-    return {
-      index,
-      start: sentence.start,
-      end: sentence.end,
-      length,
-      text: safeText
-        .slice(sentence.start, sentence.end)
-        .replace(new RegExp(placeholder, "g"), "."),
-      trailing: safeText.slice(sentence.end, gapEnd),
-      tooLong: length > maxLen,
-    };
-  });
-}
-
-function rekeyTokensInternal(tokens, prefix) {
-  if (!Array.isArray(tokens)) {
-    return { tokens: [], map: new Map() };
-  }
-  const idMap = new Map();
-  const rekeyed = tokens.map((token, idx) => {
-    if (token && typeof token === "object") {
-      const newToken = { ...token, token_id: `${prefix}${idx + 1}` };
-      if (typeof token.token_id === "string") {
-        idMap.set(token.token_id, newToken.token_id);
-      }
-      return newToken;
-    }
-    return {
-      token_id: `${prefix}${idx + 1}`,
-      token: typeof token === "string" ? token : "",
-    };
-  });
-  return { tokens: rekeyed, map: idMap };
-}
-
-function rekeyTokens(tokens, prefix) {
-  return rekeyTokensInternal(tokens, prefix).tokens;
-}
-
-function rekeyTokensWithMap(tokens, prefix) {
-  return rekeyTokensInternal(tokens, prefix);
-}
-
-function remapCorrections(corrections, idMap) {
-  if (!corrections || !idMap?.size) return corrections;
-  const remapGroup = (group) => {
-    if (!group) return group;
-    const remapped = { ...group };
-    const mappedStart = idMap.get(group.source_start) ?? group.source_start;
-    remapped.source_start = mappedStart;
-    if (Array.isArray(group.corrections)) {
-      remapped.corrections = group.corrections.map((corr) => {
-        if (!corr) return corr;
-        const mappedId = idMap.get(corr.source_id) ?? corr.source_id;
-        return { ...corr, source_id: mappedId };
-      });
-    }
-    return remapped;
-  };
-  if (Array.isArray(corrections)) {
-    return corrections.map(remapGroup);
-  }
-  if (typeof corrections === "object") {
-    const remapped = {};
-    for (const [key, group] of Object.entries(corrections)) {
-      remapped[key] = remapGroup(group);
-    }
-    return remapped;
-  }
-  return corrections;
-}
-
-function correctionsHaveEntries(corrections) {
-  if (!corrections) return false;
-  if (Array.isArray(corrections)) {
-    return corrections.some((group) => Array.isArray(group?.corrections) && group.corrections.length);
-  }
-  if (typeof corrections === "object") {
-    return Object.values(corrections).some(
-      (group) => Array.isArray(group?.corrections) && group.corrections.length
-    );
-  }
-  return false;
-}
-
-function tokenizeForAnchoring(text = "", prefix = "syn") {
-  if (typeof text !== "string" || !text.length) return [];
-  const tokens = [];
-  const regex = /[^\s]+/g;
-  let match;
-  let idx = 1;
-  while ((match = regex.exec(text))) {
-    tokens.push({
-      token_id: `${prefix}${idx++}`,
-      token: match[0],
-      start_char: match.index,
-      end_char: match.index + match[0].length,
-    });
-  }
-  return tokens;
-}
-
-async function processLongParagraphOnline({
-  context,
-  paragraph,
-  paragraphIndex,
-  originalText,
-  normalizedOriginalText,
-  paragraphDocOffset,
-}) {
-  const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS);
-  if (!chunks.length) {
-    return { suggestionsAdded: 0, apiErrors: 0, processedAny: false };
-  }
-  const normalizedSource =
-    typeof normalizedOriginalText === "string"
-      ? normalizedOriginalText
-      : normalizeParagraphWhitespace(originalText);
-  chunks.forEach((chunk) => {
-    chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
-  });
-
-  const chunkDetails = [];
-  const processedMeta = [];
-  let suggestionsAdded = 0;
-  let apiErrors = 0;
-
-  for (const chunk of chunks) {
-    const meta = {
-      chunk,
-      correctedText: chunk.normalizedText,
-      detail: null,
-      syntheticTokens: null,
-    };
-    processedMeta.push(meta);
-
-    if (chunk.tooLong) {
-      notifySentenceTooLong(paragraphIndex, chunk.length);
-      meta.syntheticTokens = tokenizeForAnchoring(
-        chunk.text,
-        `p${paragraphIndex}_c${chunk.index}_syn_`
-      );
-      continue;
-    }
-    let detail = null;
-    try {
-      detail = await popraviPovedDetailed(chunk.normalizedText || chunk.text);
-      if (typeof window !== "undefined") {
-        window.__LAST_DETAIL__ = detail;
-      }
-    } catch (apiErr) {
-      apiErrors++;
-      warn(`P${paragraphIndex} chunk ${chunk.index}: API call failed`, apiErr);
-      notifyChunkApiFailure(paragraphIndex, chunk.index);
-      meta.syntheticTokens = tokenizeForAnchoring(
-        chunk.text,
-        `p${paragraphIndex}_c${chunk.index}_syn_`
-      );
-      continue;
-    }
-    const correctedChunk = detail.correctedText;
-    if (!onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
-      notifyChunkNonCommaChanges(paragraphIndex, chunk.index, chunk.text, correctedChunk);
-      log(`P${paragraphIndex} chunk ${chunk.index}: API changed more than commas -> SKIP`, {
-        original: chunk.text,
-        corrected: correctedChunk,
-      });
-      meta.syntheticTokens = tokenizeForAnchoring(
-        chunk.text,
-        `p${paragraphIndex}_c${chunk.index}_syn_`
-      );
-      continue;
-    }
-    meta.detail = detail;
-    meta.correctedText = correctedChunk;
-
-    const baseForDiff = chunk.text || chunk.normalizedText || "";
-    const diffOps = correctionsHaveEntries(detail?.corrections)
-      ? []
-      : collapseDuplicateDiffOps(
-          filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
-        );
-    if (!meta.detail && !diffOps.length) continue;
-    chunkDetails.push({
-      chunk,
-      metaRef: meta,
-      baseForDiff,
-      correctedChunk,
-      diffOps,
-    });
-  }
-
-  if (!processedMeta.some((meta) => meta.detail)) {
-    return { suggestionsAdded: 0, apiErrors, processedAny: false };
-  }
-
-  const correctedParagraph = processedMeta
-    .map((meta) => meta.correctedText + (meta.chunk.trailing ?? ""))
-    .join("");
-  const sourceTokens = [];
-  const targetTokens = [];
-
-  processedMeta.forEach((meta) => {
-    const basePrefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
-    if (meta.detail) {
-      const { tokens: rekeyedSource, map: sourceMap } = rekeyTokensWithMap(
-        meta.detail.sourceTokens,
-        `${basePrefix}s`
-      );
-      sourceTokens.push(...rekeyedSource);
-      const { tokens: rekeyedTarget } = rekeyTokensWithMap(meta.detail.targetTokens, `${basePrefix}t`);
-      targetTokens.push(...rekeyedTarget);
-      meta.remappedCorrections = remapCorrections(meta.detail.corrections, sourceMap);
-    } else if (meta.syntheticTokens && meta.syntheticTokens.length) {
-      const rekeyed = rekeyTokens(meta.syntheticTokens, `${basePrefix}syn_`);
-      sourceTokens.push(...rekeyed);
-      targetTokens.push(...rekeyed);
-    }
-  });
-
-  const paragraphAnchors = createParagraphTokenAnchors({
-    paragraphIndex,
-    originalText,
-    correctedText: correctedParagraph,
-    sourceTokens,
-    targetTokens,
-    documentOffset: paragraphDocOffset,
-  });
-
-  for (const entry of chunkDetails) {
-    const detailRef = entry.metaRef?.detail
-      ? {
-          ...entry.metaRef.detail,
-          corrections: entry.metaRef.remappedCorrections ?? entry.metaRef.detail.corrections,
-        }
-      : null;
-    let ops = [];
-    const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
-    const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
-    if (correctionsPresent) {
-      ops = collectCommaOpsFromCorrections(
-        detailRef,
-        paragraphAnchors,
-        paragraphIndex,
-        correctionTracking
-      );
-    }
-    let fallbackOps = entry.diffOps || [];
-    if (fallbackOps.length) {
-      if (!correctionsPresent || ops.length) {
-        fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
-      }
-      if (!correctionsPresent && detailRef && !ops.length) {
-        ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
-        fallbackOps = [];
-      } else if (!ops.length && correctionsPresent) {
-        fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
-      }
-    }
-    const usingFallbackOnly = !ops.length;
-    const allOps = usingFallbackOnly ? fallbackOps : ops;
-    if (!allOps.length) continue;
-    for (const op of allOps) {
-      if (!ops.includes(op) && op.kind === "insert") {
-        const seenInsert = ops.some(
-          (existing) => existing.kind === "insert" && existing.pos === op.pos
-        );
-        if (seenInsert) continue;
-      }
-      const opSource = ops.includes(op) ? op : null;
-      const offset = entry.chunk.start;
-      const baseOp = opSource || op;
-      const adjustedOp = {
-        ...baseOp,
-        pos: baseOp.pos + offset,
-        originalPos:
-          (typeof baseOp.originalPos === "number" ? baseOp.originalPos : baseOp.pos) + offset,
-        correctedPos:
-          (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset,
-      };
-      if (opSource) {
-        const marked = await highlightSuggestionOnline(
-          context,
-          paragraph,
-          originalText,
-          correctedParagraph,
-          adjustedOp,
-          paragraphIndex,
-          paragraphAnchors
-        );
-        if (marked) suggestionsAdded++;
-      } else {
-        if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
-          continue;
-        }
-        const marked = await highlightSuggestionOnline(
-          context,
-          paragraph,
-          originalText,
-          correctedParagraph,
-          adjustedOp,
-          paragraphIndex,
-          paragraphAnchors
-        );
-        if (marked) suggestionsAdded++;
-      }
-    }
-    if (!ops.length && fallbackOps.length) {
-      for (const op of fallbackOps) {
-        const offset = entry.chunk.start;
-        const adjustedOp = {
-          ...op,
-          pos: op.pos + offset,
-          originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
-          correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
-        };
-        if (shouldSuppressDueToRepeatedToken(paragraphAnchors, adjustedOp)) {
-          continue;
-        }
-        const marked = await highlightSuggestionOnline(
-          context,
-          paragraph,
-          originalText,
-          correctedParagraph,
-          adjustedOp,
-          paragraphIndex,
-          paragraphAnchors
-        );
-        if (marked) suggestionsAdded++;
-      }
-    }
-  }
-
-  return {
-    suggestionsAdded,
-    apiErrors,
-    processedAny: true,
-  };
 }
