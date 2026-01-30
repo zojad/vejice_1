@@ -1486,7 +1486,7 @@ async function checkDocumentTextOnline() {
         const result = await commaEngine.analyzeParagraph({
           paragraphIndex: idx,
           originalText: original,
-          normalizedOriginalText,
+          normalizedOriginalText: normalizedOriginal,
           paragraphDocOffset,
         });
         apiErrors += result.apiErrors;
