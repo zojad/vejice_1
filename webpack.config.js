@@ -59,6 +59,14 @@ module.exports = async (env, options) => {
       new webpack.DefinePlugin({
         "process.env.VEJICE_API_KEY": JSON.stringify(process.env.VEJICE_API_KEY || ""),
         "process.env.VEJICE_USE_MOCK": JSON.stringify(process.env.VEJICE_USE_MOCK || ""),
+        "process.env.VEJICE_USE_LEMMATIZER": JSON.stringify(process.env.VEJICE_USE_LEMMATIZER || ""),
+        "process.env.VEJICE_LEMMATIZER_ANCHORS": JSON.stringify(
+          process.env.VEJICE_LEMMATIZER_ANCHORS || ""
+        ),
+        "process.env.VEJICE_LEMMAS_URL": JSON.stringify(process.env.VEJICE_LEMMAS_URL || ""),
+        "process.env.VEJICE_LEMMAS_TIMEOUT_MS": JSON.stringify(
+          process.env.VEJICE_LEMMAS_TIMEOUT_MS || ""
+        ),
       }),
       new CopyWebpackPlugin({
         patterns: [

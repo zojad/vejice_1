@@ -3,6 +3,7 @@ import { popraviPoved, popraviPovedDetailed } from "../api/apiVejice.js";
 import { isWordOnline } from "../utils/host.js";
 import { CommaSuggestionEngine } from "./engine/CommaSuggestionEngine.js";
 import { SyntheticAnchorProvider } from "./anchoring/SyntheticAnchorProvider.js";
+import { LemmatizerAnchorProvider } from "./anchoring/LemmatizerAnchorProvider.js";
 import { WordOnlineAdapter } from "./adapters/wordOnlineAdapter.js";
 import { WordDesktopAdapter } from "./adapters/wordDesktopAdapter.js";
 import {
@@ -54,6 +55,59 @@ const API_UNAVAILABLE_MESSAGE =
   "Storitev CJVT Vejice trenutno ni na voljo. Znova poskusite kasneje.";
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
+const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
+const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
+
+function parseBooleanFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (BOOLEAN_TRUE.has(normalized)) return true;
+  if (BOOLEAN_FALSE.has(normalized)) return false;
+  return undefined;
+}
+
+function shouldUseLemmatizerAnchors() {
+  if (typeof window !== "undefined") {
+    if (typeof window.__VEJICE_LEMMAS_URL === "string" && window.__VEJICE_LEMMAS_URL) {
+      log("Lemmas endpoint override via window:", window.__VEJICE_LEMMAS_URL);
+    }
+    if (
+      typeof window.__VEJICE_LEMMAS_TIMEOUT_MS !== "undefined" &&
+      window.__VEJICE_LEMMAS_TIMEOUT_MS !== null
+    ) {
+      log("Lemmas timeout override via window:", window.__VEJICE_LEMMAS_TIMEOUT_MS);
+    }
+    const override = parseBooleanFlag(window.__VEJICE_USE_LEMMATIZER__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envValue =
+      parseBooleanFlag(process.env?.VEJICE_USE_LEMMATIZER) ??
+      parseBooleanFlag(process.env?.VEJICE_LEMMATIZER_ANCHORS);
+    if (typeof envValue === "boolean") return envValue;
+    if (process.env?.VEJICE_LEMMAS_URL) {
+      log("Lemmas endpoint override via env:", process.env.VEJICE_LEMMAS_URL);
+    }
+    if (process.env?.VEJICE_LEMMAS_TIMEOUT_MS) {
+      log("Lemmas timeout override via env:", process.env.VEJICE_LEMMAS_TIMEOUT_MS);
+    }
+  }
+  return true;
+}
+
+function createAnchorProvider() {
+  if (shouldUseLemmatizerAnchors()) {
+    try {
+      log("Lemmatizer anchor provider enabled");
+      return new LemmatizerAnchorProvider();
+    } catch (error) {
+      errL("Failed to initialize LemmatizerAnchorProvider, falling back to synthetic", error);
+    }
+  }
+  return new SyntheticAnchorProvider();
+}
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
 }
@@ -161,7 +215,12 @@ function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, correc
   showToastNotification(msg);
 }
 
-const anchorProvider = new SyntheticAnchorProvider();
+const anchorProvider = createAnchorProvider();
+const anchorProviderSupportsCharHints =
+  typeof anchorProvider.supportsCharHints === "function" ? anchorProvider.supportsCharHints() : false;
+if (anchorProviderSupportsCharHints) {
+  log("Anchor provider supports char hints; snippet fallback cleanup disabled");
+}
 const commaEngine = new CommaSuggestionEngine({
   anchorProvider,
   apiClient: {
@@ -1038,6 +1097,10 @@ async function normalizeCommaSpacingInParagraph(context, paragraph) {
 }
 
 async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes) {
+  if (anchorProviderSupportsCharHints) {
+    log("Skipping comma spacing cleanup – lemmatizer anchors already normalized.");
+    return;
+  }
   if (!indexes?.size) return;
   for (const idx of indexes) {
     const paragraph = paragraphs.items[idx];
