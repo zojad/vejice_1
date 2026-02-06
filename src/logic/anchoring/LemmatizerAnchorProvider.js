@@ -31,7 +31,7 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     const defaultEndpoint =
       (typeof process !== "undefined" && process.env?.VEJICE_LEMMAS_URL) ||
       (typeof window !== "undefined" && window.__VEJICE_LEMMAS_URL) ||
-      "https://ronin-jubilatory-celsa.ngrok-free.dev/lemmas";
+      "https://lemmas-vejice.com/lemmas";
     const resolvedTimeout =
       typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
         ? timeoutMs
