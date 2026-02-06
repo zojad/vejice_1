@@ -1,1 +1,28 @@
-<!doctype html><html lang="sl"><head><meta charset="utf-8"/><meta http-equiv="X-UA-Compatible" content="IE=Edge"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Vejice – Commands</title><script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script><link rel="icon" href="assets/icon-32.png"/></head><body><script id="vejice-key-script">window.__VEJICE_API_KEY="vejice_API_beta"</script><script defer="defer" src="polyfill.js"></script><script defer="defer" src="commands.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="sl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="X-UA-Compatible"
+      content="IE=Edge"
+    />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1"
+    />
+    <title>Vejice – Commands</title>
+
+    <!-- Office.js (hosted by Microsoft) -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <!-- optional: avoid favicon 404 -->
+    <link rel="icon" href="assets/icon-32.png" />
+  </head>
+  <body>
+    <script id="vejice-key-script">
+      window.__VEJICE_API_KEY = "vejice_API_beta";
+    </script>
+    <!-- No script tags for ../logic/*.js or ../api/*.js !!!
+         Webpack will inject polyfill.js and commands.js for you. -->
+  <script defer src="polyfill.js"></script><script defer src="commands.js"></script></body>
+</html>
