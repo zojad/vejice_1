@@ -667,7 +667,32 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
 
-  if (Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
+  const highlightAnchorCandidate = [
+    anchor.sourceTokenAt,
+    anchor.sourceTokenBefore,
+    anchor.highlightAnchorTarget,
+    anchor.targetTokenBefore,
+    anchor.targetTokenAt,
+  ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
+
+  if (highlightAnchorCandidate) {
+    const anchorEnd =
+      Number.isFinite(highlightAnchorCandidate.charEnd) &&
+      highlightAnchorCandidate.charEnd > highlightAnchorCandidate.charStart
+        ? highlightAnchorCandidate.charEnd
+        : highlightAnchorCandidate.charStart + 1;
+    range = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      entry,
+      highlightAnchorCandidate.charStart,
+      anchorEnd,
+      "highlight-insert-anchor",
+      highlightAnchorCandidate.tokenText || anchor.highlightText
+    );
+  }
+
+  if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
     const metaEnd =
       anchor.highlightCharEnd > anchor.highlightCharStart
         ? anchor.highlightCharEnd
@@ -1006,7 +1031,7 @@ async function tryApplyInsertUsingHighlight(context, paragraph, suggestion) {
     }
   }
 
-  const candidates = buildInsertRangeCandidates(meta);
+  const candidates = buildInsertRangeCandidates(suggestion);
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     if (!Number.isFinite(candidate.start) || candidate.start < 0) continue;
@@ -1049,8 +1074,8 @@ async function applyInsertSuggestionLegacy(context, paragraph, suggestion) {
 }
 
 async function applyInsertSuggestion(context, paragraph, suggestion) {
-  if (await tryApplyInsertUsingHighlight(context, paragraph, suggestion)) return true;
   if (await tryApplyInsertUsingMetadata(context, paragraph, suggestion)) return true;
+  if (await tryApplyInsertUsingHighlight(context, paragraph, suggestion)) return true;
   return await applyInsertSuggestionLegacy(context, paragraph, suggestion);
 }
 
@@ -1096,8 +1121,8 @@ async function normalizeCommaSpacingInParagraph(context, paragraph) {
   }
 }
 
-async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes) {
-  if (anchorProviderSupportsCharHints) {
+async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes, { force = false } = {}) {
+  if (anchorProviderSupportsCharHints && !force) {
     log("Skipping comma spacing cleanup – lemmatizer anchors already normalized.");
     return;
   }
@@ -1258,7 +1283,25 @@ export async function applyAllSuggestionsOnline() {
       }
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
       let anyApplied = false;
-      for (const suggestion of suggestions) {
+      const orderedSuggestions = [...suggestions].sort((a, b) => {
+        const kindRank = (s) => (s?.kind === "delete" ? 0 : 1);
+        const rankDiff = kindRank(a) - kindRank(b);
+        if (rankDiff !== 0) return rankDiff;
+        const posA =
+          a?.meta?.op?.originalPos ??
+          a?.meta?.op?.correctedPos ??
+          a?.meta?.op?.pos ??
+          a?.charHint?.start ??
+          -1;
+        const posB =
+          b?.meta?.op?.originalPos ??
+          b?.meta?.op?.correctedPos ??
+          b?.meta?.op?.pos ??
+          b?.charHint?.start ??
+          -1;
+        return posB - posA;
+      });
+      for (const suggestion of orderedSuggestions) {
         let applied = false;
         try {
           applied = await wordOnlineAdapter.applySuggestion(context, paragraph, suggestion);
@@ -1278,7 +1321,8 @@ export async function applyAllSuggestionsOnline() {
       }
     }
     await wordOnlineAdapter.clearHighlights(context, processedSuggestions);
-    await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
+    // In online flow we mutate live paragraph text, so normalize spacing even with lemma anchors.
+    await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, { force: true });
     for (const idx of touchedIndexes) {
       anchorProvider.deleteAnchors(idx);
     }

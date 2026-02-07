@@ -21,6 +21,31 @@ const logWarn = (...args) => {
   }
 };
 
+function resolveDefaultEndpoint() {
+  const windowEndpoint =
+    typeof window !== "undefined" && typeof window.__VEJICE_LEMMAS_URL === "string"
+      ? window.__VEJICE_LEMMAS_URL.trim()
+      : "";
+  if (windowEndpoint) return windowEndpoint;
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    const isLocalDevOrigin =
+      window.location.origin === "https://127.0.0.1:4001" ||
+      window.location.origin === "https://localhost:4001";
+    if (isLocalDevOrigin) {
+      return `${window.location.origin}/lemmas`;
+    }
+  }
+
+  const envEndpoint =
+    typeof process !== "undefined" && typeof process.env?.VEJICE_LEMMAS_URL === "string"
+      ? process.env.VEJICE_LEMMAS_URL.trim()
+      : "";
+  if (envEndpoint) return envEndpoint;
+
+  return "https://lemmas-vejice.com/lemmas";
+}
+
 /**
  * Anchor provider that prefers real offsets from a lemmatizer service.
  * Falls back to SyntheticAnchorProvider when the service is unavailable.
@@ -28,10 +53,7 @@ const logWarn = (...args) => {
 export class LemmatizerAnchorProvider extends AnchorProvider {
   constructor({ client, endpoint, timeoutMs } = {}) {
     super("LemmatizerAnchorProvider");
-    const defaultEndpoint =
-      (typeof process !== "undefined" && process.env?.VEJICE_LEMMAS_URL) ||
-      (typeof window !== "undefined" && window.__VEJICE_LEMMAS_URL) ||
-      "https://lemmas-vejice.com/lemmas";
+    const defaultEndpoint = resolveDefaultEndpoint();
     const resolvedTimeout =
       typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
         ? timeoutMs

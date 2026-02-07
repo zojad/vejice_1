@@ -249,7 +249,12 @@ export function findAnchorsNearChar(entry, type, charIndex) {
   for (let i = 0; i < collection.ordered.length; i++) {
     const anchor = collection.ordered[i];
     if (!anchor || anchor.charStart < 0) continue;
-    if (charIndex >= anchor.charStart && charIndex <= anchor.charEnd) {
+    const anchorEnd =
+      typeof anchor.charEnd === "number"
+        ? anchor.charEnd
+        : anchor.charStart + Math.max(1, anchor.length ?? anchor.tokenText?.length ?? 1);
+    // Treat token end as exclusive so boundary positions resolve to the previous token.
+    if (charIndex >= anchor.charStart && charIndex < anchorEnd) {
       return {
         before: before ?? anchor,
         at: anchor,

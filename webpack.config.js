@@ -107,6 +107,15 @@ module.exports = async (env, options) => {
       },
       // write actual files so Word Online can fetch them reliably
       devMiddleware: { writeToDisk: true },
+      // Same-origin lemma endpoint for Word Online; avoids browser CORS/mixed-content issues.
+      proxy: [
+        {
+          context: ["/lemmas", "/health"],
+          target: `http://127.0.0.1:${process.env.LEMMAS_PROXY_PORT || 5050}`,
+          changeOrigin: true,
+          secure: false,
+        },
+      ],
     },
   };
   return config;

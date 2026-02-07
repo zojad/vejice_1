@@ -892,7 +892,19 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetAround.before ??
     targetAround.after;
   const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
-  const highlightCharEnd = highlightAnchor?.charEnd ?? srcIndex;
+  let highlightCharEnd = highlightAnchor?.charEnd;
+  if (
+    !(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) &&
+    typeof highlightCharStart === "number" &&
+    highlightCharStart >= 0 &&
+    typeof highlightAnchor?.tokenText === "string" &&
+    highlightAnchor.tokenText.length > 0
+  ) {
+    highlightCharEnd = highlightCharStart + highlightAnchor.tokenText.length;
+  }
+  if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart)) {
+    highlightCharEnd = highlightCharStart;
+  }
   const paragraphText = entry?.originalText ?? "";
   let highlightText = "";
   if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {

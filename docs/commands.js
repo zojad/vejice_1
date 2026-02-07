@@ -9369,6 +9369,20 @@ var logWarn = function logWarn() {
     (_console2 = console).warn.apply(_console2, [LOG_PREFIX].concat(args));
   }
 };
+function resolveDefaultEndpoint() {
+  var _window$location, _process$env;
+  var windowEndpoint = typeof window !== "undefined" && typeof window.__VEJICE_LEMMAS_URL === "string" ? window.__VEJICE_LEMMAS_URL.trim() : "";
+  if (windowEndpoint) return windowEndpoint;
+  if (typeof window !== "undefined" && (_window$location = window.location) !== null && _window$location !== void 0 && _window$location.origin) {
+    var isLocalDevOrigin = window.location.origin === "https://127.0.0.1:4001" || window.location.origin === "https://localhost:4001";
+    if (isLocalDevOrigin) {
+      return "".concat(window.location.origin, "/lemmas");
+    }
+  }
+  var envEndpoint = typeof process !== "undefined" && typeof ((_process$env = process.env) === null || _process$env === void 0 ? void 0 : "https://127.0.0.1:4001/lemmas") === "string" ? "https://127.0.0.1:4001/lemmas".trim() : "";
+  if (envEndpoint) return envEndpoint;
+  return "https://lemmas-vejice.com/lemmas";
+}
 
 /**
  * Anchor provider that prefers real offsets from a lemmatizer service.
@@ -9376,7 +9390,7 @@ var logWarn = function logWarn() {
  */
 var LemmatizerAnchorProvider = /*#__PURE__*/function (_AnchorProvider) {
   function LemmatizerAnchorProvider() {
-    var _process$env, _process$env2;
+    var _process$env2;
     var _this;
     var _ref = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {},
       client = _ref.client,
@@ -9384,7 +9398,7 @@ var LemmatizerAnchorProvider = /*#__PURE__*/function (_AnchorProvider) {
       timeoutMs = _ref.timeoutMs;
     _classCallCheck(this, LemmatizerAnchorProvider);
     _this = _callSuper(this, LemmatizerAnchorProvider, ["LemmatizerAnchorProvider"]);
-    var defaultEndpoint = typeof process !== "undefined" && ((_process$env = process.env) === null || _process$env === void 0 ? void 0 : "https://lemmas-vejice.com/lemmas") || typeof window !== "undefined" && window.__VEJICE_LEMMAS_URL || "https://lemmas-vejice.com/lemmas";
+    var defaultEndpoint = resolveDefaultEndpoint();
     var resolvedTimeout = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : parseInt(typeof process !== "undefined" && ((_process$env2 = process.env) === null || _process$env2 === void 0 ? void 0 : "8000") || typeof window !== "undefined" && window.__VEJICE_LEMMAS_TIMEOUT_MS || "8000", 10) || 8000;
     _this.endpoint = endpoint || defaultEndpoint;
     _this.client = client || axios__WEBPACK_IMPORTED_MODULE_0__["default"].create({
@@ -9948,9 +9962,12 @@ function findAnchorsNearChar(entry, type, charIndex) {
   }
   var before = null;
   for (var i = 0; i < collection.ordered.length; i++) {
+    var _ref15, _anchor$length, _anchor$tokenText;
     var anchor = collection.ordered[i];
     if (!anchor || anchor.charStart < 0) continue;
-    if (charIndex >= anchor.charStart && charIndex <= anchor.charEnd) {
+    var anchorEnd = typeof anchor.charEnd === "number" ? anchor.charEnd : anchor.charStart + Math.max(1, (_ref15 = (_anchor$length = anchor.length) !== null && _anchor$length !== void 0 ? _anchor$length : (_anchor$tokenText = anchor.tokenText) === null || _anchor$tokenText === void 0 ? void 0 : _anchor$tokenText.length) !== null && _ref15 !== void 0 ? _ref15 : 1);
+    // Treat token end as exclusive so boundary positions resolve to the previous token.
+    if (charIndex >= anchor.charStart && charIndex < anchorEnd) {
       return {
         before: before !== null && before !== void 0 ? before : anchor,
         at: anchor,
@@ -11078,7 +11095,7 @@ function buildDeleteSuggestionMetadata(entry, charIndex) {
   };
 }
 function buildInsertSuggestionMetadata(entry, _ref9) {
-  var _entry$documentOffset2, _ref0, _ref1, _ref10, _ref11, _sourceAround$at, _highlightAnchor$char, _highlightAnchor$char2, _entry$originalText2, _entry$paragraphIndex2;
+  var _entry$documentOffset2, _ref0, _ref1, _ref10, _ref11, _sourceAround$at, _highlightAnchor$char, _entry$originalText2, _entry$paragraphIndex2;
   var originalCharIndex = _ref9.originalCharIndex,
     targetCharIndex = _ref9.targetCharIndex;
   if (!entry) return null;
@@ -11089,7 +11106,13 @@ function buildInsertSuggestionMetadata(entry, _ref9) {
   var documentOffset = (_entry$documentOffset2 = entry === null || entry === void 0 ? void 0 : entry.documentOffset) !== null && _entry$documentOffset2 !== void 0 ? _entry$documentOffset2 : 0;
   var highlightAnchor = (_ref0 = (_ref1 = (_ref10 = (_ref11 = (_sourceAround$at = sourceAround.at) !== null && _sourceAround$at !== void 0 ? _sourceAround$at : sourceAround.before) !== null && _ref11 !== void 0 ? _ref11 : sourceAround.after) !== null && _ref10 !== void 0 ? _ref10 : targetAround.at) !== null && _ref1 !== void 0 ? _ref1 : targetAround.before) !== null && _ref0 !== void 0 ? _ref0 : targetAround.after;
   var highlightCharStart = (_highlightAnchor$char = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charStart) !== null && _highlightAnchor$char !== void 0 ? _highlightAnchor$char : srcIndex;
-  var highlightCharEnd = (_highlightAnchor$char2 = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charEnd) !== null && _highlightAnchor$char2 !== void 0 ? _highlightAnchor$char2 : srcIndex;
+  var highlightCharEnd = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charEnd;
+  if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) && typeof highlightCharStart === "number" && highlightCharStart >= 0 && typeof (highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.tokenText) === "string" && highlightAnchor.tokenText.length > 0) {
+    highlightCharEnd = highlightCharStart + highlightAnchor.tokenText.length;
+  }
+  if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart)) {
+    highlightCharEnd = highlightCharStart;
+  }
   var paragraphText = (_entry$originalText2 = entry === null || entry === void 0 ? void 0 : entry.originalText) !== null && _entry$originalText2 !== void 0 ? _entry$originalText2 : "";
   var highlightText = "";
   if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {
@@ -11442,8 +11465,8 @@ function shouldUseLemmatizerAnchors() {
     var _parseBooleanFlag, _process$env2, _process$env3, _process$env4, _process$env5;
     var envValue = (_parseBooleanFlag = parseBooleanFlag((_process$env2 = process.env) === null || _process$env2 === void 0 ? void 0 : "true")) !== null && _parseBooleanFlag !== void 0 ? _parseBooleanFlag : parseBooleanFlag((_process$env3 = process.env) === null || _process$env3 === void 0 ? void 0 : "true");
     if (typeof envValue === "boolean") return envValue;
-    if ((_process$env4 = process.env) !== null && _process$env4 !== void 0 && "https://lemmas-vejice.com/lemmas") {
-      log("Lemmas endpoint override via env:", "https://lemmas-vejice.com/lemmas");
+    if ((_process$env4 = process.env) !== null && _process$env4 !== void 0 && "https://127.0.0.1:4001/lemmas") {
+      log("Lemmas endpoint override via env:", "https://127.0.0.1:4001/lemmas");
     }
     if ((_process$env5 = process.env) !== null && _process$env5 !== void 0 && "8000") {
       log("Lemmas timeout override via env:", "8000");
@@ -12279,7 +12302,7 @@ function highlightInsertSuggestion(_x32, _x33, _x34) {
 function _highlightInsertSuggestion() {
   _highlightInsertSuggestion = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee0(context, paragraph, suggestion) {
     var _ref1, _suggestion$meta$corr, _suggestion$meta8, _suggestion$meta9, _suggestion$snippets$, _suggestion$snippets, _suggestion$meta$op$p, _suggestion$meta0, _suggestion$snippets$2, _suggestion$snippets2, _suggestion$meta$op$p2, _suggestion$meta1;
-    var corrected, anchor, entry, rawLeft, rawRight, lastWord, leftContext, searchOpts, range, metaEnd, wordSearch, leftSearch, rightSnippet, rightSearch;
+    var corrected, anchor, entry, rawLeft, rawRight, lastWord, leftContext, searchOpts, range, highlightAnchorCandidate, anchorEnd, metaEnd, wordSearch, leftSearch, rightSnippet, rightSearch;
     return _regenerator().w(function (_context0) {
       while (1) switch (_context0.n) {
         case 0:
@@ -12295,18 +12318,31 @@ function _highlightInsertSuggestion() {
             matchWholeWord: false
           };
           range = null;
-          if (!(Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0)) {
+          highlightAnchorCandidate = [anchor.sourceTokenAt, anchor.sourceTokenBefore, anchor.highlightAnchorTarget, anchor.targetTokenBefore, anchor.targetTokenAt].find(function (candidate) {
+            return Number.isFinite(candidate === null || candidate === void 0 ? void 0 : candidate.charStart) && candidate.charStart >= 0;
+          });
+          if (!highlightAnchorCandidate) {
             _context0.n = 2;
             break;
           }
-          metaEnd = anchor.highlightCharEnd > anchor.highlightCharStart ? anchor.highlightCharEnd : anchor.highlightCharStart + 1;
+          anchorEnd = Number.isFinite(highlightAnchorCandidate.charEnd) && highlightAnchorCandidate.charEnd > highlightAnchorCandidate.charStart ? highlightAnchorCandidate.charEnd : highlightAnchorCandidate.charStart + 1;
           _context0.n = 1;
-          return getRangeForAnchorSpan(context, paragraph, entry, anchor.highlightCharStart, metaEnd, "highlight-insert-meta", anchor.highlightText);
+          return getRangeForAnchorSpan(context, paragraph, entry, highlightAnchorCandidate.charStart, anchorEnd, "highlight-insert-anchor", highlightAnchorCandidate.tokenText || anchor.highlightText);
         case 1:
           range = _context0.v;
         case 2:
-          if (!(!range && lastWord)) {
+          if (!(!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0)) {
             _context0.n = 4;
+            break;
+          }
+          metaEnd = anchor.highlightCharEnd > anchor.highlightCharStart ? anchor.highlightCharEnd : anchor.highlightCharStart + 1;
+          _context0.n = 3;
+          return getRangeForAnchorSpan(context, paragraph, entry, anchor.highlightCharStart, metaEnd, "highlight-insert-meta", anchor.highlightText);
+        case 3:
+          range = _context0.v;
+        case 4:
+          if (!(!range && lastWord)) {
+            _context0.n = 6;
             break;
           }
           wordSearch = paragraph.getRange().search(lastWord, {
@@ -12314,51 +12350,51 @@ function _highlightInsertSuggestion() {
             matchWholeWord: true
           });
           wordSearch.load("items");
-          _context0.n = 3;
+          _context0.n = 5;
           return context.sync();
-        case 3:
+        case 5:
           if (wordSearch.items.length) {
             range = wordSearch.items[wordSearch.items.length - 1];
           }
-        case 4:
+        case 6:
           if (!(!range && leftContext && leftContext.trim())) {
-            _context0.n = 6;
+            _context0.n = 8;
             break;
           }
           leftSearch = paragraph.getRange().search(leftContext.trim(), searchOpts);
           leftSearch.load("items");
-          _context0.n = 5;
+          _context0.n = 7;
           return context.sync();
-        case 5:
+        case 7:
           if (leftSearch.items.length) {
             range = leftSearch.items[leftSearch.items.length - 1];
           }
-        case 6:
+        case 8:
           if (range) {
-            _context0.n = 8;
+            _context0.n = 10;
             break;
           }
           rightSnippet = (rawRight || "").replace(/,/g, "").trim();
           rightSnippet = rightSnippet.slice(0, 8);
           if (!rightSnippet) {
-            _context0.n = 8;
+            _context0.n = 10;
             break;
           }
           rightSearch = paragraph.getRange().search(rightSnippet, searchOpts);
           rightSearch.load("items");
-          _context0.n = 7;
+          _context0.n = 9;
           return context.sync();
-        case 7:
+        case 9:
           if (rightSearch.items.length) {
             range = rightSearch.items[0];
           }
-        case 8:
+        case 10:
           if (range) {
-            _context0.n = 9;
+            _context0.n = 11;
             break;
           }
           return _context0.a(2, false);
-        case 9:
+        case 11:
           try {
             range = range.getRange("Content");
           } catch (err) {
@@ -12901,7 +12937,7 @@ function _tryApplyInsertUsingHighlight() {
           }
           return _context19.a(2, true);
         case 2:
-          candidates = buildInsertRangeCandidates(meta);
+          candidates = buildInsertRangeCandidates(suggestion);
           i = 0;
         case 3:
           if (!(i < candidates.length)) {
@@ -12986,7 +13022,7 @@ function _applyInsertSuggestion() {
       while (1) switch (_context21.n) {
         case 0:
           _context21.n = 1;
-          return tryApplyInsertUsingHighlight(context, paragraph, suggestion);
+          return tryApplyInsertUsingMetadata(context, paragraph, suggestion);
         case 1:
           if (!_context21.v) {
             _context21.n = 2;
@@ -12995,7 +13031,7 @@ function _applyInsertSuggestion() {
           return _context21.a(2, true);
         case 2:
           _context21.n = 3;
-          return tryApplyInsertUsingMetadata(context, paragraph, suggestion);
+          return tryApplyInsertUsingHighlight(context, paragraph, suggestion);
         case 3:
           if (!_context21.v) {
             _context21.n = 4;
@@ -13090,11 +13126,21 @@ function cleanupCommaSpacingForParagraphs(_x68, _x69, _x70) {
 }
 function _cleanupCommaSpacingForParagraphs() {
   _cleanupCommaSpacingForParagraphs = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee23(context, paragraphs, indexes) {
-    var _iterator2, _step2, idx, paragraph, _t8, _t9;
+    var _ref19,
+      _ref19$force,
+      force,
+      _iterator2,
+      _step2,
+      idx,
+      paragraph,
+      _args23 = arguments,
+      _t8,
+      _t9;
     return _regenerator().w(function (_context23) {
       while (1) switch (_context23.p = _context23.n) {
         case 0:
-          if (!anchorProviderSupportsCharHints) {
+          _ref19 = _args23.length > 3 && _args23[3] !== undefined ? _args23[3] : {}, _ref19$force = _ref19.force, force = _ref19$force === void 0 ? false : _ref19$force;
+          if (!(anchorProviderSupportsCharHints && !force)) {
             _context23.n = 1;
             break;
           }
@@ -13435,8 +13481,8 @@ function _applyAllSuggestionsOnline() {
         case 10:
           _context28.n = 11;
           return Word.run(/*#__PURE__*/function () {
-            var _ref19 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee27(context) {
-              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator5, _step5, _step5$value, paragraphIndex, suggestions, paragraph, entry, anyApplied, _iterator7, _step7, suggestion, applied, _iterator6, _step6, idx, _t1, _t10, _t11;
+            var _ref20 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee27(context) {
+              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator5, _step5, _step5$value, paragraphIndex, suggestions, paragraph, entry, anyApplied, orderedSuggestions, _iterator7, _step7, suggestion, applied, _iterator6, _step6, idx, _t1, _t10, _t11;
               return _regenerator().w(function (_context27) {
                 while (1) switch (_context27.p = _context27.n) {
                   case 0:
@@ -13466,7 +13512,18 @@ function _applyAllSuggestionsOnline() {
                   case 4:
                     entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
                     anyApplied = false;
-                    _iterator7 = _createForOfIteratorHelper(suggestions);
+                    orderedSuggestions = _toConsumableArray(suggestions).sort(function (a, b) {
+                      var _ref21, _ref22, _ref23, _a$meta$op$originalPo, _a$meta, _a$meta2, _a$meta3, _a$charHint, _ref24, _ref25, _ref26, _b$meta$op$originalPo, _b$meta, _b$meta2, _b$meta3, _b$charHint;
+                      var kindRank = function kindRank(s) {
+                        return (s === null || s === void 0 ? void 0 : s.kind) === "delete" ? 0 : 1;
+                      };
+                      var rankDiff = kindRank(a) - kindRank(b);
+                      if (rankDiff !== 0) return rankDiff;
+                      var posA = (_ref21 = (_ref22 = (_ref23 = (_a$meta$op$originalPo = a === null || a === void 0 || (_a$meta = a.meta) === null || _a$meta === void 0 || (_a$meta = _a$meta.op) === null || _a$meta === void 0 ? void 0 : _a$meta.originalPos) !== null && _a$meta$op$originalPo !== void 0 ? _a$meta$op$originalPo : a === null || a === void 0 || (_a$meta2 = a.meta) === null || _a$meta2 === void 0 || (_a$meta2 = _a$meta2.op) === null || _a$meta2 === void 0 ? void 0 : _a$meta2.correctedPos) !== null && _ref23 !== void 0 ? _ref23 : a === null || a === void 0 || (_a$meta3 = a.meta) === null || _a$meta3 === void 0 || (_a$meta3 = _a$meta3.op) === null || _a$meta3 === void 0 ? void 0 : _a$meta3.pos) !== null && _ref22 !== void 0 ? _ref22 : a === null || a === void 0 || (_a$charHint = a.charHint) === null || _a$charHint === void 0 ? void 0 : _a$charHint.start) !== null && _ref21 !== void 0 ? _ref21 : -1;
+                      var posB = (_ref24 = (_ref25 = (_ref26 = (_b$meta$op$originalPo = b === null || b === void 0 || (_b$meta = b.meta) === null || _b$meta === void 0 || (_b$meta = _b$meta.op) === null || _b$meta === void 0 ? void 0 : _b$meta.originalPos) !== null && _b$meta$op$originalPo !== void 0 ? _b$meta$op$originalPo : b === null || b === void 0 || (_b$meta2 = b.meta) === null || _b$meta2 === void 0 || (_b$meta2 = _b$meta2.op) === null || _b$meta2 === void 0 ? void 0 : _b$meta2.correctedPos) !== null && _ref26 !== void 0 ? _ref26 : b === null || b === void 0 || (_b$meta3 = b.meta) === null || _b$meta3 === void 0 || (_b$meta3 = _b$meta3.op) === null || _b$meta3 === void 0 ? void 0 : _b$meta3.pos) !== null && _ref25 !== void 0 ? _ref25 : b === null || b === void 0 || (_b$charHint = b.charHint) === null || _b$charHint === void 0 ? void 0 : _b$charHint.start) !== null && _ref24 !== void 0 ? _ref24 : -1;
+                      return posB - posA;
+                    });
+                    _iterator7 = _createForOfIteratorHelper(orderedSuggestions);
                     _context27.p = 5;
                     _iterator7.s();
                   case 6:
@@ -13535,7 +13592,9 @@ function _applyAllSuggestionsOnline() {
                     return wordOnlineAdapter.clearHighlights(context, processedSuggestions);
                   case 21:
                     _context27.n = 22;
-                    return cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes);
+                    return cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
+                      force: true
+                    });
                   case 22:
                     _iterator6 = _createForOfIteratorHelper(touchedIndexes);
                     try {
@@ -13562,7 +13621,7 @@ function _applyAllSuggestionsOnline() {
               }, _callee27, null, [[7, 9], [5, 13, 14, 15], [2, 18, 19, 20]]);
             }));
             return function (_x84) {
-              return _ref19.apply(this, arguments);
+              return _ref20.apply(this, arguments);
             };
           }());
         case 11:
@@ -13585,7 +13644,7 @@ function _rejectAllSuggestionsOnline() {
         case 0:
           _context30.n = 1;
           return Word.run(/*#__PURE__*/function () {
-            var _ref20 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee29(context) {
+            var _ref27 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee29(context) {
               var paras;
               return _regenerator().w(function (_context29) {
                 while (1) switch (_context29.n) {
@@ -13607,7 +13666,7 @@ function _rejectAllSuggestionsOnline() {
               }, _callee29);
             }));
             return function (_x85) {
-              return _ref20.apply(this, arguments);
+              return _ref27.apply(this, arguments);
             };
           }());
         case 1:
@@ -13655,7 +13714,7 @@ function _checkDocumentTextDesktop() {
           _context33.p = 1;
           _context33.n = 2;
           return Word.run(/*#__PURE__*/function () {
-            var _ref21 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee32(context) {
+            var _ref28 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee32(context) {
               var doc, trackToggleSupported, prevTrack, paras, documentCharOffset, idx, paragraph, sourceText, normalizedSource, trimmed, paragraphDocOffset, pStart, result, suggestions, appliedInParagraph, _iterator8, _step8, suggestion, applied, _t13, _t14, _t15, _t16;
               return _regenerator().w(function (_context32) {
                 while (1) switch (_context32.p = _context32.n) {
@@ -13846,7 +13905,7 @@ function _checkDocumentTextDesktop() {
               }, _callee32, null, [[19, 21], [17, 26, 27, 28], [12, 14], [6,, 31, 34], [3, 5]]);
             }));
             return function (_x86) {
-              return _ref21.apply(this, arguments);
+              return _ref28.apply(this, arguments);
             };
           }());
         case 2:
@@ -13880,7 +13939,7 @@ function _checkDocumentTextOnline() {
           _context35.p = 1;
           _context35.n = 2;
           return Word.run(/*#__PURE__*/function () {
-            var _ref22 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee34(context) {
+            var _ref29 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee34(context) {
               var paras, documentCharOffset, idx, _result$suggestions, p, original, normalizedOriginal, trimmed, paragraphDocOffset, result, _iterator9, _step9, suggestionObj, highlighted, _t18;
               return _regenerator().w(function (_context34) {
                 while (1) switch (_context34.p = _context34.n) {
@@ -13994,7 +14053,7 @@ function _checkDocumentTextOnline() {
               }, _callee34, null, [[10, 15, 16, 17]]);
             }));
             return function (_x87) {
-              return _ref22.apply(this, arguments);
+              return _ref29.apply(this, arguments);
             };
           }());
         case 2:
@@ -14116,7 +14175,7 @@ var isWordOnline = function isWordOnline() {
 /******/ 	
 /******/ 	/* webpack/runtime/getFullHash */
 /******/ 	!function() {
-/******/ 		__webpack_require__.h = function() { return "a20d8e3fc33bec617540"; }
+/******/ 		__webpack_require__.h = function() { return "7b1fe5e8f03ff1cacb26"; }
 /******/ 	}();
 /******/ 	
 /******/ 	/* webpack/runtime/global */
