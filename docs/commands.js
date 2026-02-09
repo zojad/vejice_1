@@ -6181,12 +6181,8 @@ function _nonIterableRest() { throw new TypeError("Invalid attempt to destructur
 function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
 function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
 function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
-function _regeneratorValues(e) { if (null != e) { var t = e["function" == typeof Symbol && Symbol.iterator || "@@iterator"], r = 0; if (t) return t.call(e); if ("function" == typeof e.next) return e; if (!isNaN(e.length)) return { next: function next() { return e && r >= e.length && (e = void 0), { value: e && e[r++], done: !e }; } }; } throw new TypeError(_typeof(e) + " is not iterable"); }
 function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/babel/babel/blob/main/packages/babel-helpers/LICENSE */ var e, t, r = "function" == typeof Symbol ? Symbol : {}, n = r.iterator || "@@iterator", o = r.toStringTag || "@@toStringTag"; function i(r, n, o, i) { var c = n && n.prototype instanceof Generator ? n : Generator, u = Object.create(c.prototype); return _regeneratorDefine2(u, "_invoke", function (r, n, o) { var i, c, u, f = 0, p = o || [], y = !1, G = { p: 0, n: 0, v: e, a: d, f: d.bind(e, 4), d: function d(t, r) { return i = t, c = 0, u = e, G.n = r, a; } }; function d(r, n) { for (c = r, u = n, t = 0; !y && f && !o && t < p.length; t++) { var o, i = p[t], d = G.p, l = i[2]; r > 3 ? (o = l === n) && (u = i[(c = i[4]) ? 5 : (c = 3, 3)], i[4] = i[5] = e) : i[0] <= d && ((o = r < 2 && d < i[1]) ? (c = 0, G.v = n, G.n = i[1]) : d < l && (o = r < 3 || i[0] > n || n > l) && (i[4] = r, i[5] = n, G.n = l, c = 0)); } if (o || r > 1) return a; throw y = !0, n; } return function (o, p, l) { if (f > 1) throw TypeError("Generator is already running"); for (y && 1 === p && d(p, l), c = p, u = l; (t = c < 2 ? e : u) || !y;) { i || (c ? c < 3 ? (c > 1 && (G.n = -1), d(c, u)) : G.n = u : G.v = u); try { if (f = 2, i) { if (c || (o = "next"), t = i[o]) { if (!(t = t.call(i, u))) throw TypeError("iterator result is not an object"); if (!t.done) return t; u = t.value, c < 2 && (c = 0); } else 1 === c && (t = i.return) && t.call(i), c < 2 && (u = TypeError("The iterator does not provide a '" + o + "' method"), c = 1); i = e; } else if ((t = (y = G.n < 0) ? u : r.call(n, G)) !== a) break; } catch (t) { i = e, c = 1, u = t; } finally { f = 1; } } return { value: t, done: y }; }; }(r, o, i), !0), u; } var a = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} t = Object.getPrototypeOf; var c = [][n] ? t(t([][n]())) : (_regeneratorDefine2(t = {}, n, function () { return this; }), t), u = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(c); function f(e) { return Object.setPrototypeOf ? Object.setPrototypeOf(e, GeneratorFunctionPrototype) : (e.__proto__ = GeneratorFunctionPrototype, _regeneratorDefine2(e, o, "GeneratorFunction")), e.prototype = Object.create(u), e; } return GeneratorFunction.prototype = GeneratorFunctionPrototype, _regeneratorDefine2(u, "constructor", GeneratorFunctionPrototype), _regeneratorDefine2(GeneratorFunctionPrototype, "constructor", GeneratorFunction), GeneratorFunction.displayName = "GeneratorFunction", _regeneratorDefine2(GeneratorFunctionPrototype, o, "GeneratorFunction"), _regeneratorDefine2(u), _regeneratorDefine2(u, o, "Generator"), _regeneratorDefine2(u, n, function () { return this; }), _regeneratorDefine2(u, "toString", function () { return "[object Generator]"; }), (_regenerator = function _regenerator() { return { w: i, m: f }; })(); }
 function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
-function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
-function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
-function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, { value: t, enumerable: !0, configurable: !0, writable: !0 }) : e[r] = t, e; }
 function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread(); }
 function _nonIterableSpread() { throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArray(r) { if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r); }
@@ -6199,13 +6195,79 @@ function _asyncToGenerator(n) { return function () { var t = this, e = arguments
 function _classCallCheck(a, n) { if (!(a instanceof n)) throw new TypeError("Cannot call a class as a function"); }
 function _defineProperties(e, r) { for (var t = 0; t < r.length; t++) { var o = r[t]; o.enumerable = o.enumerable || !1, o.configurable = !0, "value" in o && (o.writable = !0), Object.defineProperty(e, _toPropertyKey(o.key), o); } }
 function _createClass(e, r, t) { return r && _defineProperties(e.prototype, r), t && _defineProperties(e, t), Object.defineProperty(e, "prototype", { writable: !1 }), e; }
+function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
+function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
+function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, { value: t, enumerable: !0, configurable: !0, writable: !0 }) : e[r] = t, e; }
 function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" == _typeof(i) ? i : i + ""; }
 function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != _typeof(i)) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
 
 
 
 var MAX_PARAGRAPH_CHARS = 3000;
+var PARAGRAPH_FIRST_MAX_CHARS = 1000;
 var TRAILING_COMMA_REGEX = /[,\s]+$/;
+var LOG_PREFIX = "[Vejice DEBUG DUMP]";
+var DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
+var DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
+if (typeof window !== "undefined") {
+  if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
+    window.__VEJICE_DEBUG_DUMPS__ = [];
+  }
+  if (!("__VEJICE_LAST_DEBUG_DUMP__" in window)) {
+    window.__VEJICE_LAST_DEBUG_DUMP__ = null;
+  }
+  window.__VEJICE_DEBUG_DUMP_READY__ = true;
+}
+function isDeepDebugEnabled() {
+  if (typeof window === "undefined") return false;
+  var isTruthyFlag = function isTruthyFlag(value) {
+    return value === true || value === 1 || value === "1" || value === "true";
+  };
+  if (isTruthyFlag(window.__VEJICE_DEBUG_DUMP__)) return true;
+  if (isTruthyFlag(window.__VEJICE_DEBUG__)) return true;
+  try {
+    var storage = window.localStorage;
+    if (storage) {
+      var stored = storage.getItem("vejice:debug:dump");
+      if (isTruthyFlag(stored)) return true;
+    }
+  } catch (_err) {
+    // Ignore storage access failures.
+  }
+  return false;
+}
+function pushDeepDebugDump(payload) {
+  if (!isDeepDebugEnabled() || typeof window === "undefined") return;
+  var safePayload = _objectSpread({
+    ts: Date.now()
+  }, payload);
+  window.__VEJICE_LAST_DEBUG_DUMP__ = safePayload;
+  window.__VEJICE_DEBUG_DUMPS__ = window.__VEJICE_DEBUG_DUMPS__ || [];
+  window.__VEJICE_DEBUG_DUMPS__.push(safePayload);
+  if (window.__VEJICE_DEBUG_DUMPS__.length > 20) {
+    window.__VEJICE_DEBUG_DUMPS__.shift();
+  }
+  try {
+    console.log(LOG_PREFIX, safePayload);
+  } catch (_err) {
+    // Ignore logging failures in host environments that limit console payloads.
+  }
+  try {
+    var storage = window.localStorage;
+    if (!storage) return;
+    storage.setItem(DEBUG_DUMP_LAST_STORAGE_KEY, JSON.stringify(safePayload));
+    var existingRaw = storage.getItem(DEBUG_DUMP_STORAGE_KEY);
+    var existing = existingRaw ? JSON.parse(existingRaw) : [];
+    var list = Array.isArray(existing) ? existing : [];
+    list.push(safePayload);
+    while (list.length > 20) {
+      list.shift();
+    }
+    storage.setItem(DEBUG_DUMP_STORAGE_KEY, JSON.stringify(list));
+  } catch (_err2) {
+    // Ignore storage failures in restricted runtimes.
+  }
+}
 var CommaSuggestionEngine = /*#__PURE__*/function () {
   function CommaSuggestionEngine(_ref) {
     var anchorProvider = _ref.anchorProvider,
@@ -6215,6 +6277,8 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
     _classCallCheck(this, CommaSuggestionEngine);
     this.anchorProvider = anchorProvider;
     this.apiClient = apiClient;
+    this.lastDebugDump = null;
+    this.debugDumps = [];
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || function () {},
       onSentenceTooLong: notifiers.onSentenceTooLong || function () {},
@@ -6226,18 +6290,34 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
     key: "analyzeParagraph",
     value: function () {
       var _analyzeParagraph = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(_ref2) {
-        var paragraphIndex, originalText, normalizedOriginalText, paragraphDocOffset, chunks, normalizedSource, processedMeta, chunkDetails, apiErrors, _iterator, _step, _detail, chunk, meta, detail, correctedChunk, baseForDiff, diffOps, _anchorsEntry, correctedParagraph, sourceTokens, targetTokens, anchorsEntry, suggestions, _i, _chunkDetails, _entry$metaRef, _entry$metaRef$remapp, entry, detailRef, ops, correctionTracking, correctionsPresent, fallbackOps, usingFallbackOnly, allOps, _iterator2, _step2, _loop, _ret, _iterator3, _step3, op, offset, adjustedOp, suggestion, _t, _t2, _t3, _t4, _t5, _t6;
-        return _regenerator().w(function (_context2) {
-          while (1) switch (_context2.p = _context2.n) {
+        var paragraphIndex, originalText, normalizedOriginalText, paragraphDocOffset, _ref2$forceSentenceCh, forceSentenceChunks, paragraphText, forceSentenceByLength, useSentenceChunks, debugEnabled, debugDump, chunks, normalizedSource, processedMeta, chunkDetails, apiErrors, nonCommaChunkSkips, _iterator, _step, chunk, meta, detail, correctedChunk, _detail, _detail2, _detail3, _detail4, _detail5, baseForDiff, diffOps, hasDetailedChunk, canFallbackToSentences, _anchorsEntry, correctedParagraph, sourceTokens, targetTokens, anchorsEntry, suggestions, debugOpFlow, _i, _chunkDetails, _entry$metaRef, _entry$metaRef$remapp, entry, detailRef, ops, correctionTracking, correctionsPresent, fallbackOps, usingFallbackOnly, allOps, opFlow, _iterator2, _step2, op, offset, baseOp, adjustedOp, suggestion, _t, _t2, _t3, _t4, _t5;
+        return _regenerator().w(function (_context) {
+          while (1) switch (_context.p = _context.n) {
             case 0:
-              paragraphIndex = _ref2.paragraphIndex, originalText = _ref2.originalText, normalizedOriginalText = _ref2.normalizedOriginalText, paragraphDocOffset = _ref2.paragraphDocOffset;
-              chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS);
+              paragraphIndex = _ref2.paragraphIndex, originalText = _ref2.originalText, normalizedOriginalText = _ref2.normalizedOriginalText, paragraphDocOffset = _ref2.paragraphDocOffset, _ref2$forceSentenceCh = _ref2.forceSentenceChunks, forceSentenceChunks = _ref2$forceSentenceCh === void 0 ? false : _ref2$forceSentenceCh;
+              paragraphText = typeof originalText === "string" ? originalText : "";
+              forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
+              useSentenceChunks = forceSentenceChunks || forceSentenceByLength;
+              debugEnabled = isDeepDebugEnabled();
+              debugDump = debugEnabled ? {
+                analysisMode: useSentenceChunks ? "sentence" : "paragraph",
+                sentenceModeReason: forceSentenceChunks ? "forced" : forceSentenceByLength ? "paragraph-too-long" : "none",
+                paragraphIndex: paragraphIndex,
+                paragraphDocOffset: paragraphDocOffset,
+                originalText: originalText,
+                normalizedOriginalText: typeof normalizedOriginalText === "string" ? normalizedOriginalText : (0,_textUtils_js__WEBPACK_IMPORTED_MODULE_1__.normalizeParagraphWhitespace)(originalText),
+                chunks: [],
+                final: {}
+              } : null;
+              chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
+                preferWholeParagraph: !useSentenceChunks
+              });
               if (chunks.length) {
-                _context2.n = 2;
+                _context.n = 2;
                 break;
               }
               _t = [];
-              _context2.n = 1;
+              _context.n = 1;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -6247,8 +6327,8 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 documentOffset: paragraphDocOffset
               });
             case 1:
-              _t2 = _context2.v;
-              return _context2.a(2, {
+              _t2 = _context.v;
+              return _context.a(2, {
                 suggestions: _t,
                 apiErrors: 0,
                 processedAny: false,
@@ -6262,12 +6342,13 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
               processedMeta = [];
               chunkDetails = [];
               apiErrors = 0;
+              nonCommaChunkSkips = 0;
               _iterator = _createForOfIteratorHelper(chunks);
-              _context2.p = 3;
+              _context.p = 3;
               _iterator.s();
             case 4:
               if ((_step = _iterator.n()).done) {
-                _context2.n = 13;
+                _context.n = 13;
                 break;
               }
               chunk = _step.value;
@@ -6279,47 +6360,63 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
               };
               processedMeta.push(meta);
               if (!chunk.tooLong) {
-                _context2.n = 5;
+                _context.n = 5;
                 break;
               }
               this.notifiers.onSentenceTooLong(paragraphIndex, chunk.length);
               meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-              return _context2.a(3, 12);
+              return _context.a(3, 12);
             case 5:
               detail = null;
-              _context2.p = 6;
-              _context2.n = 7;
+              _context.p = 6;
+              _context.n = 7;
               return this.apiClient.popraviPovedDetailed(chunk.normalizedText || chunk.text);
             case 7:
-              detail = _context2.v;
-              _context2.n = 9;
+              detail = _context.v;
+              _context.n = 9;
               break;
             case 8:
-              _context2.p = 8;
-              _t3 = _context2.v;
+              _context.p = 8;
+              _t3 = _context.v;
               apiErrors++;
               this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, _t3);
               meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-              return _context2.a(3, 12);
+              return _context.a(3, 12);
             case 9:
               correctedChunk = detail.correctedText;
+              if (debugEnabled && debugDump) {
+                debugDump.chunks.push({
+                  index: chunk.index,
+                  start: chunk.start,
+                  end: chunk.end,
+                  normalizedInput: chunk.normalizedText || chunk.text,
+                  correctedChunk: correctedChunk,
+                  rawSourceText: (_detail = detail) === null || _detail === void 0 || (_detail = _detail.raw) === null || _detail === void 0 ? void 0 : _detail.source_text,
+                  rawTargetText: (_detail2 = detail) === null || _detail2 === void 0 || (_detail2 = _detail2.raw) === null || _detail2 === void 0 ? void 0 : _detail2.target_text,
+                  rawCorrections: (_detail3 = detail) === null || _detail3 === void 0 ? void 0 : _detail3.corrections,
+                  rawSourceTokensCount: Array.isArray((_detail4 = detail) === null || _detail4 === void 0 ? void 0 : _detail4.sourceTokens) ? detail.sourceTokens.length : 0,
+                  rawTargetTokensCount: Array.isArray((_detail5 = detail) === null || _detail5 === void 0 ? void 0 : _detail5.targetTokens) ? detail.targetTokens.length : 0
+                });
+              }
               if ((0,_textUtils_js__WEBPACK_IMPORTED_MODULE_1__.onlyCommasChanged)(chunk.normalizedText || chunk.text, correctedChunk)) {
-                _context2.n = 10;
+                _context.n = 10;
                 break;
               }
               this.notifiers.onChunkNonCommaChanges(paragraphIndex, chunk.index, chunk.text, correctedChunk);
+              nonCommaChunkSkips++;
               meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-              return _context2.a(3, 12);
+              return _context.a(3, 12);
             case 10:
               meta.detail = detail;
               meta.correctedText = correctedChunk;
-              baseForDiff = chunk.text || chunk.normalizedText || "";
-              diffOps = correctionsHaveEntries((_detail = detail) === null || _detail === void 0 ? void 0 : _detail.corrections) ? [] : collapseDuplicateDiffOps(filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk)));
+              baseForDiff = chunk.text || chunk.normalizedText || ""; // Always compute comma-only diff ops. Correction metadata can be incomplete
+              // or carry positions that become inconsistent after chunk-level transforms.
+              diffOps = collapseDuplicateDiffOps(filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk)));
               if (!(!meta.detail && !diffOps.length)) {
-                _context2.n = 11;
+                _context.n = 11;
                 break;
               }
-              return _context2.a(3, 12);
+              return _context.a(3, 12);
             case 11:
               chunkDetails.push({
                 chunk: chunk,
@@ -6329,27 +6426,41 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 diffOps: diffOps
               });
             case 12:
-              _context2.n = 4;
+              _context.n = 4;
               break;
             case 13:
-              _context2.n = 15;
+              _context.n = 15;
               break;
             case 14:
-              _context2.p = 14;
-              _t4 = _context2.v;
+              _context.p = 14;
+              _t4 = _context.v;
               _iterator.e(_t4);
             case 15:
-              _context2.p = 15;
+              _context.p = 15;
               _iterator.f();
-              return _context2.f(15);
+              return _context.f(15);
             case 16:
-              if (processedMeta.some(function (meta) {
+              hasDetailedChunk = processedMeta.some(function (meta) {
                 return meta.detail;
-              })) {
-                _context2.n = 18;
+              });
+              canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;
+              if (!(!hasDetailedChunk && canFallbackToSentences && (apiErrors > 0 || nonCommaChunkSkips > 0))) {
+                _context.n = 17;
                 break;
               }
-              _context2.n = 17;
+              return _context.a(2, this.analyzeParagraph({
+                paragraphIndex: paragraphIndex,
+                originalText: originalText,
+                normalizedOriginalText: normalizedOriginalText,
+                paragraphDocOffset: paragraphDocOffset,
+                forceSentenceChunks: true
+              }));
+            case 17:
+              if (hasDetailedChunk) {
+                _context.n = 19;
+                break;
+              }
+              _context.n = 18;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -6358,15 +6469,15 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 targetTokens: [],
                 documentOffset: paragraphDocOffset
               });
-            case 17:
-              _anchorsEntry = _context2.v;
-              return _context2.a(2, {
+            case 18:
+              _anchorsEntry = _context.v;
+              return _context.a(2, {
                 suggestions: [],
                 apiErrors: apiErrors,
                 processedAny: false,
                 anchorsEntry: _anchorsEntry
               });
-            case 18:
+            case 19:
               correctedParagraph = processedMeta.map(function (meta) {
                 var _meta$chunk$trailing;
                 return meta.correctedText + ((_meta$chunk$trailing = meta.chunk.trailing) !== null && _meta$chunk$trailing !== void 0 ? _meta$chunk$trailing : "");
@@ -6390,7 +6501,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                   targetTokens.push.apply(targetTokens, _toConsumableArray(rekeyed));
                 }
               });
-              _context2.n = 19;
+              _context.n = 20;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -6399,13 +6510,14 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 targetTokens: targetTokens,
                 documentOffset: paragraphDocOffset
               });
-            case 19:
-              anchorsEntry = _context2.v;
-              suggestions = [];
-              _i = 0, _chunkDetails = chunkDetails;
             case 20:
+              anchorsEntry = _context.v;
+              suggestions = [];
+              debugOpFlow = debugEnabled ? [] : null;
+              _i = 0, _chunkDetails = chunkDetails;
+            case 21:
               if (!(_i < _chunkDetails.length)) {
-                _context2.n = 38;
+                _context.n = 33;
                 break;
               }
               entry = _chunkDetails[_i];
@@ -6431,126 +6543,71 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                     });
                   });
                   fallbackOps = [];
-                } else if (!ops.length && correctionsPresent) {
+                } else if (correctionsPresent) {
                   fallbackOps = fallbackOps.map(function (op) {
                     return _objectSpread(_objectSpread({}, op), {}, {
-                      fromCorrections: true
+                      fromCorrections: true,
+                      viaDiffFallback: true
                     });
                   });
                 }
               }
               usingFallbackOnly = !ops.length;
-              allOps = usingFallbackOnly ? fallbackOps : ops;
+              allOps = mergePreferredCommaOps(ops, fallbackOps);
               if (allOps.length) {
-                _context2.n = 21;
+                _context.n = 22;
                 break;
               }
-              return _context2.a(3, 37);
-            case 21:
+              return _context.a(3, 32);
+            case 22:
+              opFlow = debugEnabled ? {
+                chunkIndex: entry.chunk.index,
+                fromCorrections: ops.map(function (op) {
+                  return _objectSpread({}, op);
+                }),
+                fallbackOps: fallbackOps.map(function (op) {
+                  return _objectSpread({}, op);
+                }),
+                usingFallbackOnly: usingFallbackOnly,
+                keptOps: [],
+                droppedOps: []
+              } : null;
               _iterator2 = _createForOfIteratorHelper(allOps);
-              _context2.p = 22;
-              _loop = /*#__PURE__*/_regenerator().m(function _loop() {
-                var op, seenInsert, opSource, offset, baseOp, adjustedOp, suggestion;
-                return _regenerator().w(function (_context) {
-                  while (1) switch (_context.n) {
-                    case 0:
-                      op = _step2.value;
-                      if (!(!ops.includes(op) && op.kind === "insert")) {
-                        _context.n = 1;
-                        break;
-                      }
-                      seenInsert = ops.some(function (existing) {
-                        return existing.kind === "insert" && existing.pos === op.pos;
-                      });
-                      if (!seenInsert) {
-                        _context.n = 1;
-                        break;
-                      }
-                      return _context.a(2, 0);
-                    case 1:
-                      opSource = ops.includes(op) ? op : null;
-                      offset = entry.chunk.start;
-                      baseOp = opSource || op;
-                      adjustedOp = _objectSpread(_objectSpread({}, baseOp), {}, {
-                        pos: baseOp.pos + offset,
-                        originalPos: (typeof baseOp.originalPos === "number" ? baseOp.originalPos : baseOp.pos) + offset,
-                        correctedPos: (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset
-                      });
-                      if (!shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
-                        _context.n = 2;
-                        break;
-                      }
-                      return _context.a(2, 0);
-                    case 2:
-                      suggestion = buildSuggestionFromOp({
-                        op: adjustedOp,
-                        paragraphIndex: paragraphIndex,
-                        anchorsEntry: anchorsEntry,
-                        originalText: originalText,
-                        correctedParagraph: correctedParagraph
-                      });
-                      if (suggestion) {
-                        suggestions.push(suggestion);
-                      }
-                    case 3:
-                      return _context.a(2);
-                  }
-                }, _loop);
-              });
+              _context.p = 23;
               _iterator2.s();
-            case 23:
-              if ((_step2 = _iterator2.n()).done) {
-                _context2.n = 26;
-                break;
-              }
-              return _context2.d(_regeneratorValues(_loop()), 24);
             case 24:
-              _ret = _context2.v;
-              if (!(_ret === 0)) {
-                _context2.n = 25;
+              if ((_step2 = _iterator2.n()).done) {
+                _context.n = 28;
                 break;
               }
-              return _context2.a(3, 25);
-            case 25:
-              _context2.n = 23;
-              break;
-            case 26:
-              _context2.n = 28;
-              break;
-            case 27:
-              _context2.p = 27;
-              _t5 = _context2.v;
-              _iterator2.e(_t5);
-            case 28:
-              _context2.p = 28;
-              _iterator2.f();
-              return _context2.f(28);
-            case 29:
-              if (!(!ops.length && fallbackOps.length)) {
-                _context2.n = 37;
-                break;
-              }
-              _iterator3 = _createForOfIteratorHelper(fallbackOps);
-              _context2.p = 30;
-              _iterator3.s();
-            case 31:
-              if ((_step3 = _iterator3.n()).done) {
-                _context2.n = 34;
-                break;
-              }
-              op = _step3.value;
+              op = _step2.value;
               offset = entry.chunk.start;
-              adjustedOp = _objectSpread(_objectSpread({}, op), {}, {
-                pos: op.pos + offset,
-                originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
-                correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset
+              baseOp = op;
+              adjustedOp = _objectSpread(_objectSpread({}, baseOp), {}, {
+                pos: baseOp.pos + offset,
+                originalPos: (typeof baseOp.originalPos === "number" ? baseOp.originalPos : baseOp.pos) + offset,
+                correctedPos: (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset
               });
-              if (!shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
-                _context2.n = 32;
+              if (isOpConsistentWithTexts(adjustedOp, originalText, correctedParagraph)) {
+                _context.n = 25;
                 break;
               }
-              return _context2.a(3, 33);
-            case 32:
+              if (opFlow) opFlow.droppedOps.push({
+                reason: "inconsistent_with_texts",
+                op: adjustedOp
+              });
+              return _context.a(3, 27);
+            case 25:
+              if (!shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
+                _context.n = 26;
+                break;
+              }
+              if (opFlow) opFlow.droppedOps.push({
+                reason: "repeated_token_suppression",
+                op: adjustedOp
+              });
+              return _context.a(3, 27);
+            case 26:
               suggestion = buildSuggestionFromOp({
                 op: adjustedOp,
                 paragraphIndex: paragraphIndex,
@@ -6560,27 +6617,74 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
               });
               if (suggestion) {
                 suggestions.push(suggestion);
+                if (opFlow) opFlow.keptOps.push({
+                  op: adjustedOp,
+                  suggestionId: suggestion.id
+                });
               }
-            case 33:
-              _context2.n = 31;
+            case 27:
+              _context.n = 24;
               break;
-            case 34:
-              _context2.n = 36;
+            case 28:
+              _context.n = 30;
               break;
-            case 35:
-              _context2.p = 35;
-              _t6 = _context2.v;
-              _iterator3.e(_t6);
-            case 36:
-              _context2.p = 36;
-              _iterator3.f();
-              return _context2.f(36);
-            case 37:
+            case 29:
+              _context.p = 29;
+              _t5 = _context.v;
+              _iterator2.e(_t5);
+            case 30:
+              _context.p = 30;
+              _iterator2.f();
+              return _context.f(30);
+            case 31:
+              if (opFlow && debugOpFlow) {
+                debugOpFlow.push(opFlow);
+              }
+            case 32:
               _i++;
-              _context2.n = 20;
+              _context.n = 21;
               break;
-            case 38:
-              return _context2.a(2, {
+            case 33:
+              if (debugEnabled && debugDump) {
+                debugDump.final = {
+                  correctedParagraph: correctedParagraph,
+                  suggestionsCount: suggestions.length,
+                  suggestions: suggestions.map(function (s) {
+                    var _s$meta, _s$meta2, _s$meta3, _s$meta4, _s$meta5;
+                    return {
+                      id: s.id,
+                      kind: s.kind,
+                      paragraphIndex: s.paragraphIndex,
+                      charHint: s.charHint,
+                      op: s === null || s === void 0 || (_s$meta = s.meta) === null || _s$meta === void 0 ? void 0 : _s$meta.op,
+                      sourceTokenBefore: s === null || s === void 0 || (_s$meta2 = s.meta) === null || _s$meta2 === void 0 || (_s$meta2 = _s$meta2.anchor) === null || _s$meta2 === void 0 || (_s$meta2 = _s$meta2.sourceTokenBefore) === null || _s$meta2 === void 0 ? void 0 : _s$meta2.tokenText,
+                      sourceTokenAfter: s === null || s === void 0 || (_s$meta3 = s.meta) === null || _s$meta3 === void 0 || (_s$meta3 = _s$meta3.anchor) === null || _s$meta3 === void 0 || (_s$meta3 = _s$meta3.sourceTokenAfter) === null || _s$meta3 === void 0 ? void 0 : _s$meta3.tokenText,
+                      targetTokenBefore: s === null || s === void 0 || (_s$meta4 = s.meta) === null || _s$meta4 === void 0 || (_s$meta4 = _s$meta4.anchor) === null || _s$meta4 === void 0 || (_s$meta4 = _s$meta4.targetTokenBefore) === null || _s$meta4 === void 0 ? void 0 : _s$meta4.tokenText,
+                      targetTokenAfter: s === null || s === void 0 || (_s$meta5 = s.meta) === null || _s$meta5 === void 0 || (_s$meta5 = _s$meta5.anchor) === null || _s$meta5 === void 0 || (_s$meta5 = _s$meta5.targetTokenAfter) === null || _s$meta5 === void 0 ? void 0 : _s$meta5.tokenText
+                    };
+                  }),
+                  opFlow: debugOpFlow || []
+                };
+                this.lastDebugDump = debugDump;
+                this.debugDumps.push(debugDump);
+                if (this.debugDumps.length > 20) {
+                  this.debugDumps.shift();
+                }
+                pushDeepDebugDump(debugDump);
+              }
+              if (!(!suggestions.length && canFallbackToSentences && nonCommaChunkSkips > 0)) {
+                _context.n = 34;
+                break;
+              }
+              return _context.a(2, this.analyzeParagraph({
+                paragraphIndex: paragraphIndex,
+                originalText: originalText,
+                normalizedOriginalText: normalizedOriginalText,
+                paragraphDocOffset: paragraphDocOffset,
+                forceSentenceChunks: true
+              }));
+            case 34:
+              return _context.a(2, {
                 suggestions: suggestions,
                 apiErrors: apiErrors,
                 processedAny: Boolean(suggestions.length),
@@ -6588,7 +6692,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 correctedParagraph: correctedParagraph
               });
           }
-        }, _callee, this, [[30, 35, 36, 37], [22, 27, 28, 29], [6, 8], [3, 14, 15, 16]]);
+        }, _callee, this, [[23, 29, 30, 31], [6, 8], [3, 14, 15, 16]]);
       }));
       function analyzeParagraph(_x) {
         return _analyzeParagraph.apply(this, arguments);
@@ -6685,8 +6789,24 @@ function buildTokenHint(meta) {
 function splitParagraphIntoChunks() {
   var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
   var maxLen = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : MAX_PARAGRAPH_CHARS;
+  var _ref6 = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {},
+    _ref6$preferWholePara = _ref6.preferWholeParagraph,
+    preferWholeParagraph = _ref6$preferWholePara === void 0 ? true : _ref6$preferWholePara;
   var safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
+  // For normal-sized paragraphs, keep full context in a single API call.
+  // This avoids sentence splitter artifacts around abbreviations like "K. M.".
+  if (preferWholeParagraph && safeText.length <= maxLen) {
+    return [{
+      index: 0,
+      start: 0,
+      end: safeText.length,
+      length: safeText.length,
+      text: safeText,
+      trailing: "",
+      tooLong: false
+    }];
+  }
   var placeholder = "\uE000";
   var protectedText = safeText;
   var sentences = [];
@@ -6694,8 +6814,8 @@ function splitParagraphIntoChunks() {
   var pushSentence = function pushSentence(contentEnd) {
     var gapEnd = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : contentEnd;
     if (typeof contentEnd !== "number" || contentEnd <= start) {
-      var _ref6;
-      start = Math.max(start, (_ref6 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref6 !== void 0 ? _ref6 : start);
+      var _ref7;
+      start = Math.max(start, (_ref7 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref7 !== void 0 ? _ref7 : start);
       return;
     }
     sentences.push({
@@ -6851,6 +6971,51 @@ function collapseDuplicateDiffOps(ops) {
     return !shouldDropInsert(pos);
   });
 }
+function isOpConsistentWithTexts(op, originalText, correctedText) {
+  if (!op || _typeof(op) !== "object") return false;
+  var boundaryTolerance = op !== null && op !== void 0 && op.fromCorrections ? 3 : 0;
+  if (op.kind === "delete") {
+    var originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    var correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    // Valid delete must have comma in original and no comma in corrected at this boundary.
+    return hasCommaAtOrNearBoundary(originalText, originalPos, boundaryTolerance) && !hasCommaAtOrNearBoundary(correctedText, correctedPos, boundaryTolerance);
+  }
+  if (op.kind === "insert") {
+    var _originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    var _correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    // Valid insert must have comma in corrected and no comma in original at this boundary.
+    return !hasCommaAtOrNearBoundary(originalText, _originalPos, boundaryTolerance) && hasCommaAtOrNearBoundary(correctedText, _correctedPos, boundaryTolerance);
+  }
+  return true;
+}
+function hasCommaAtOrNearBoundary(text, pos) {
+  var tolerance = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 0;
+  var safeTolerance = Math.max(0, Number.isFinite(tolerance) ? Math.floor(tolerance) : 0);
+  for (var delta = -safeTolerance; delta <= safeTolerance; delta++) {
+    if (hasCommaAtBoundary(text, pos + delta)) {
+      return true;
+    }
+  }
+  return false;
+}
+function hasCommaAtBoundary(text, pos) {
+  if (typeof text !== "string" || !text.length) return false;
+  var safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
+  var direct = [safePos - 1, safePos, safePos + 1];
+  for (var _i3 = 0, _direct = direct; _i3 < _direct.length; _i3++) {
+    var idx = _direct[_i3];
+    if (idx >= 0 && idx < text.length && text[idx] === ",") {
+      return true;
+    }
+  }
+  var left = safePos - 1;
+  while (left >= 0 && /\s/.test(text[left])) left--;
+  if (left >= 0 && text[left] === ",") return true;
+  var right = safePos;
+  while (right < text.length && /\s/.test(text[right])) right++;
+  if (right < text.length && text[right] === ",") return true;
+  return false;
+}
 function filterCommaOps(original, corrected, ops) {
   return ops.filter(function (op) {
     if ((0,_textUtils_js__WEBPACK_IMPORTED_MODULE_1__.isNumericComma)(original, corrected, op.kind, op.pos)) return false;
@@ -6974,18 +7139,18 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
   if (!groups.length) return [];
   var ops = [];
   var seen = new Set();
-  var _iterator4 = _createForOfIteratorHelper(groups),
-    _step4;
+  var _iterator3 = _createForOfIteratorHelper(groups),
+    _step3;
   try {
-    for (_iterator4.s(); !(_step4 = _iterator4.n()).done;) {
-      var group = _step4.value;
+    for (_iterator3.s(); !(_step3 = _iterator3.n()).done;) {
+      var group = _step3.value;
       var entries = Array.isArray(group === null || group === void 0 ? void 0 : group.corrections) ? group.corrections : [];
-      var _iterator6 = _createForOfIteratorHelper(entries),
-        _step6;
+      var _iterator5 = _createForOfIteratorHelper(entries),
+        _step5;
       try {
-        for (_iterator6.s(); !(_step6 = _iterator6.n()).done;) {
+        for (_iterator5.s(); !(_step5 = _iterator5.n()).done;) {
           var _entry$source_id, _anchorsEntry$sourceA, _anchor$tokenText, _anchorsEntry$sourceA3;
-          var entry = _step6.value;
+          var entry = _step5.value;
           var analysis = analyzeCommaChangeFromCorrections(entry === null || entry === void 0 ? void 0 : entry.source_text, entry === null || entry === void 0 ? void 0 : entry.text);
           if (!analysis) continue;
           var tokenId = (_entry$source_id = entry === null || entry === void 0 ? void 0 : entry.source_id) !== null && _entry$source_id !== void 0 ? _entry$source_id : group === null || group === void 0 ? void 0 : group.source_start;
@@ -7079,41 +7244,45 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           }
         }
       } catch (err) {
-        _iterator6.e(err);
+        _iterator5.e(err);
       } finally {
-        _iterator6.f();
+        _iterator5.f();
       }
     }
   } catch (err) {
-    _iterator4.e(err);
+    _iterator3.e(err);
   } finally {
-    _iterator4.f();
+    _iterator3.f();
   }
   if (tracking && (_tracking$intents = tracking.intents) !== null && _tracking$intents !== void 0 && _tracking$intents.length) {
     tracking.blockedOriginalPositions = new Set(tracking.blockedOriginalPositions || []);
     tracking.blockedCorrectedPositions = new Set(tracking.blockedCorrectedPositions || []);
-    var _iterator5 = _createForOfIteratorHelper(tracking.intents),
-      _step5;
+    var _iterator4 = _createForOfIteratorHelper(tracking.intents),
+      _step4;
     try {
-      for (_iterator5.s(); !(_step5 = _iterator5.n()).done;) {
-        var _ref7, _ref8, _intent$baseText, _intent$analysis;
-        var intent = _step5.value;
+      for (_iterator4.s(); !(_step4 = _iterator4.n()).done;) {
+        var _ref8, _ref9, _intent$baseText, _intent$analysis, _intent$analysis2, _intent$analysis3;
+        var intent = _step4.value;
         var anchor = intent === null || intent === void 0 ? void 0 : intent.anchor;
         if (!anchor) continue;
-        var baseText = (_ref7 = (_ref8 = (_intent$baseText = intent.baseText) !== null && _intent$baseText !== void 0 ? _intent$baseText : (_intent$analysis = intent.analysis) === null || _intent$analysis === void 0 ? void 0 : _intent$analysis.baseText) !== null && _ref8 !== void 0 ? _ref8 : anchor.tokenText) !== null && _ref7 !== void 0 ? _ref7 : "";
+        var baseText = (_ref8 = (_ref9 = (_intent$baseText = intent.baseText) !== null && _intent$baseText !== void 0 ? _intent$baseText : (_intent$analysis = intent.analysis) === null || _intent$analysis === void 0 ? void 0 : _intent$analysis.baseText) !== null && _ref9 !== void 0 ? _ref9 : anchor.tokenText) !== null && _ref8 !== void 0 ? _ref8 : "";
         var charStart = anchor.charStart;
         if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
-        var deleteIndex = baseText.lastIndexOf(",");
-        if (deleteIndex >= 0) {
-          tracking.blockedOriginalPositions.add(charStart + deleteIndex);
+        if ((_intent$analysis2 = intent.analysis) !== null && _intent$analysis2 !== void 0 && _intent$analysis2.removeComma) {
+          var deleteIndex = baseText.lastIndexOf(",");
+          if (deleteIndex >= 0) {
+            tracking.blockedOriginalPositions.add(charStart + deleteIndex);
+          }
         }
-        var insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
-        tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
+        if ((_intent$analysis3 = intent.analysis) !== null && _intent$analysis3 !== void 0 && _intent$analysis3.addComma) {
+          var insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
+          tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
+        }
       }
     } catch (err) {
-      _iterator5.e(err);
+      _iterator4.e(err);
     } finally {
-      _iterator5.f();
+      _iterator4.f();
     }
   }
   return ops;
@@ -7195,6 +7364,25 @@ function filterDiffOpsAgainstCorrections(ops, tracking) {
     return true;
   });
 }
+function getCommaOpIdentity(op) {
+  var originalPos = typeof (op === null || op === void 0 ? void 0 : op.originalPos) === "number" ? op.originalPos : op === null || op === void 0 ? void 0 : op.pos;
+  var correctedPos = typeof (op === null || op === void 0 ? void 0 : op.correctedPos) === "number" ? op.correctedPos : op === null || op === void 0 ? void 0 : op.pos;
+  return "".concat((op === null || op === void 0 ? void 0 : op.kind) || "unknown", ":").concat(originalPos, ":").concat(correctedPos);
+}
+function mergePreferredCommaOps(primaryOps, secondaryOps) {
+  var merged = [];
+  var seen = new Set();
+  var pushUnique = function pushUnique(op) {
+    if (!op) return;
+    var key = getCommaOpIdentity(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(op);
+  };
+  (Array.isArray(primaryOps) ? primaryOps : []).forEach(pushUnique);
+  (Array.isArray(secondaryOps) ? secondaryOps : []).forEach(pushUnique);
+  return merged;
+}
 function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
   var _anchor$repeatKeyTota, _anchor$repeatKeyNear;
   if (op !== null && op !== void 0 && op.fromCorrections) return false;
@@ -7238,17 +7426,17 @@ function buildDeleteSuggestionMetadata(entry, charIndex) {
     highlightText: highlightText
   };
 }
-function buildInsertSuggestionMetadata(entry, _ref9) {
-  var _entry$documentOffset2, _ref0, _ref1, _ref10, _ref11, _sourceAround$at, _highlightAnchor$char, _entry$originalText2, _entry$paragraphIndex2;
-  var originalCharIndex = _ref9.originalCharIndex,
-    targetCharIndex = _ref9.targetCharIndex;
+function buildInsertSuggestionMetadata(entry, _ref0) {
+  var _entry$documentOffset2, _ref1, _ref10, _ref11, _ref12, _sourceAround$at, _highlightAnchor$char, _entry$originalText2, _entry$paragraphIndex2;
+  var originalCharIndex = _ref0.originalCharIndex,
+    targetCharIndex = _ref0.targetCharIndex;
   if (!entry) return null;
   var srcIndex = typeof originalCharIndex === "number" ? originalCharIndex : -1;
   var targetIndex = typeof targetCharIndex === "number" ? targetCharIndex : srcIndex;
   var sourceAround = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.findAnchorsNearChar)(entry, "source", srcIndex);
   var targetAround = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.findAnchorsNearChar)(entry, "target", targetIndex);
   var documentOffset = (_entry$documentOffset2 = entry === null || entry === void 0 ? void 0 : entry.documentOffset) !== null && _entry$documentOffset2 !== void 0 ? _entry$documentOffset2 : 0;
-  var highlightAnchor = (_ref0 = (_ref1 = (_ref10 = (_ref11 = (_sourceAround$at = sourceAround.at) !== null && _sourceAround$at !== void 0 ? _sourceAround$at : sourceAround.before) !== null && _ref11 !== void 0 ? _ref11 : sourceAround.after) !== null && _ref10 !== void 0 ? _ref10 : targetAround.at) !== null && _ref1 !== void 0 ? _ref1 : targetAround.before) !== null && _ref0 !== void 0 ? _ref0 : targetAround.after;
+  var highlightAnchor = (_ref1 = (_ref10 = (_ref11 = (_ref12 = (_sourceAround$at = sourceAround.at) !== null && _sourceAround$at !== void 0 ? _sourceAround$at : sourceAround.before) !== null && _ref12 !== void 0 ? _ref12 : sourceAround.after) !== null && _ref11 !== void 0 ? _ref11 : targetAround.at) !== null && _ref10 !== void 0 ? _ref10 : targetAround.before) !== null && _ref1 !== void 0 ? _ref1 : targetAround.after;
   var highlightCharStart = (_highlightAnchor$char = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charStart) !== null && _highlightAnchor$char !== void 0 ? _highlightAnchor$char : srcIndex;
   var highlightCharEnd = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charEnd;
   if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) && typeof highlightCharStart === "number" && highlightCharStart >= 0 && typeof (highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.tokenText) === "string" && highlightAnchor.tokenText.length > 0) {
@@ -7505,10 +7693,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _bridges_desktopTextBridge_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./bridges/desktopTextBridge.js */ "./src/logic/bridges/desktopTextBridge.js");
 /* harmony import */ var _engine_textUtils_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./engine/textUtils.js */ "./src/logic/engine/textUtils.js");
 var _Office;
-function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread(); }
-function _nonIterableSpread() { throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
-function _iterableToArray(r) { if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r); }
-function _arrayWithoutHoles(r) { if (Array.isArray(r)) return _arrayLikeToArray(r); }
 function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
 function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
@@ -7522,6 +7706,10 @@ function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" 
 function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != _typeof(i)) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
 function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
 function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
+function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread(); }
+function _nonIterableSpread() { throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
+function _iterableToArray(r) { if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r); }
+function _arrayWithoutHoles(r) { if (Array.isArray(r)) return _arrayLikeToArray(r); }
 function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t.return || t.return(); } finally { if (u) throw o; } } }; }
 function _unsupportedIterableToArray(r, a) { if (r) { if ("string" == typeof r) return _arrayLikeToArray(r, a); var t = {}.toString.call(r).slice(8, -1); return "Object" === t && r.constructor && (t = r.constructor.name), "Map" === t || "Set" === t ? Array.from(r) : "Arguments" === t || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : void 0; } }
 function _arrayLikeToArray(r, a) { (null == a || a > r.length) && (a = r.length); for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e]; return n; }
@@ -7721,10 +7909,33 @@ function restorePendingSuggestionsOnline() {
   }
 }
 if (typeof window !== "undefined") {
+  if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
+    window.__VEJICE_DEBUG_DUMPS__ = [];
+  }
+  if (!("__VEJICE_LAST_DEBUG_DUMP__" in window)) {
+    window.__VEJICE_LAST_DEBUG_DUMP__ = null;
+  }
+  window.__VEJICE_DEBUG_DUMP_READY__ = true;
   window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
   window.__VEJICE_DEBUG_STATE__.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = function () {
     return anchorProvider.paragraphAnchors;
+  };
+  window.getVejiceDebugDump = function () {
+    return window.__VEJICE_LAST_DEBUG_DUMP__ || null;
+  };
+  window.getVejiceDebugDumps = function () {
+    return Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? _toConsumableArray(window.__VEJICE_DEBUG_DUMPS__) : [];
+  };
+  window.getVejiceDebugStatus = function () {
+    return {
+      ready: Boolean(window.__VEJICE_DEBUG_DUMP_READY__),
+      debug: window.__VEJICE_DEBUG__,
+      dump: window.__VEJICE_DEBUG_DUMP__,
+      state: _typeof(window.__VEJICE_DEBUG_STATE__),
+      dumps: Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? window.__VEJICE_DEBUG_DUMPS__.length : 0,
+      hasLastDump: Boolean(window.__VEJICE_LAST_DEBUG_DUMP__)
+    };
   };
   window.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.getPendingSuggestionsSnapshot = function () {
@@ -7839,6 +8050,24 @@ var commaEngine = new _engine_CommaSuggestionEngine_js__WEBPACK_IMPORTED_MODULE_
     onChunkNonCommaChanges: notifyChunkNonCommaChanges
   }
 });
+if (typeof window !== "undefined") {
+  window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
+  window.__VEJICE_DEBUG_STATE__.getEngineDebugDump = function () {
+    return commaEngine.lastDebugDump || null;
+  };
+  window.__VEJICE_DEBUG_STATE__.getEngineDebugDumps = function () {
+    return Array.isArray(commaEngine.debugDumps) ? _toConsumableArray(commaEngine.debugDumps) : [];
+  };
+  window.getVejiceDebugDump = function () {
+    return commaEngine.lastDebugDump || window.__VEJICE_LAST_DEBUG_DUMP__ || null;
+  };
+  window.getVejiceDebugDumps = function () {
+    if (Array.isArray(commaEngine.debugDumps) && commaEngine.debugDumps.length) {
+      return _toConsumableArray(commaEngine.debugDumps);
+    }
+    return Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? _toConsumableArray(window.__VEJICE_DEBUG_DUMPS__) : [];
+  };
+}
 var onlineTextBridge = new _bridges_onlineTextBridge_js__WEBPACK_IMPORTED_MODULE_7__.OnlineTextBridge({
   applyInsertSuggestion: applyInsertSuggestion,
   applyDeleteSuggestion: applyDeleteSuggestion
@@ -10131,11 +10360,13 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       var beforeEnd = before.start + before.token.length;
       if (beforeEnd <= after.start) {
         var gap = snapshotText.slice(beforeEnd, after.start);
-        if (gap.includes(",")) {
+        // Only treat as already satisfied when the direct token gap is just comma+spaces.
+        if (/^\s*,\s*$/.test(gap)) {
           return {
             kind: "noop"
           };
         }
+        // If there are non-whitespace chars in the gap, anchors are not adjacent; don't noop.
         if (!/[^\s]/.test(gap)) {
           return {
             kind: "insert",
@@ -10232,7 +10463,7 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
 }
 function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
-  var plan = [];
+  var rawPlan = [];
   var skipped = [];
   var noop = [];
   var _iterator3 = _createForOfIteratorHelper(suggestions),
@@ -10254,8 +10485,8 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
         noop.push(suggestion);
         continue;
       }
-      plan.push(_objectSpread(_objectSpread({}, op), {}, {
-        suggestion: suggestion,
+      rawPlan.push(_objectSpread(_objectSpread({}, op), {}, {
+        suggestions: [suggestion],
         sortPos: getSuggestionSortPos(suggestion)
       }));
     }
@@ -10264,11 +10495,69 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   } finally {
     _iterator3.f();
   }
-  plan.sort(function (a, b) {
+  rawPlan.sort(function (a, b) {
     if (a.start !== b.start) return b.start - a.start;
     if (a.kind !== b.kind) return a.kind === "delete" ? -1 : 1;
     return b.sortPos - a.sortPos;
   });
+  var consumed = new Set();
+  var plan = [];
+  for (var i = 0; i < rawPlan.length; i++) {
+    if (consumed.has(i)) continue;
+    var current = rawPlan[i];
+
+    // Drop redundant inserts only when comma is already exactly at the insertion gap.
+    if (current.kind === "insert") {
+      var segment = snapshotText.slice(current.start, current.end);
+      if (segment === current.replacement) {
+        noop.push.apply(noop, _toConsumableArray(current.suggestions));
+        continue;
+      }
+      if (current.replacement.startsWith(",")) {
+        var segmentIsCommaGap = /^\s*,\s*$/.test(segment);
+        var left = current.start - 1;
+        while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+        var right = current.end;
+        while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+        var leftChar = left >= 0 ? snapshotText[left] : "";
+        var rightChar = right < snapshotText.length ? snapshotText[right] : "";
+        var segmentHasOnlyWhitespace = !/[^\s]/.test(segment);
+        if (segmentIsCommaGap || segmentHasOnlyWhitespace && (leftChar === "," || rightChar === ",")) {
+          noop.push.apply(noop, _toConsumableArray(current.suggestions));
+          continue;
+        }
+      }
+    }
+
+    // Coalesce local delete+insert into a single replace to avoid visual "double comma then delete".
+    if (current.kind === "delete") {
+      var deletePos = current.start;
+      var merged = false;
+      for (var j = i + 1; j < rawPlan.length; j++) {
+        if (consumed.has(j)) continue;
+        var candidate = rawPlan[j];
+        if (candidate.kind !== "insert") continue;
+        if (Math.abs(candidate.start - deletePos) > 1) continue;
+        if (!candidate.replacement.startsWith(",")) continue;
+        var start = Math.min(current.start, candidate.start);
+        var end = Math.max(current.end, candidate.end);
+        plan.push({
+          kind: "replace",
+          start: start,
+          end: end,
+          replacement: ", ",
+          snippet: snapshotText.slice(start, end) || ",",
+          suggestions: [].concat(_toConsumableArray(current.suggestions), _toConsumableArray(candidate.suggestions)),
+          sortPos: Math.max(current.sortPos, candidate.sortPos)
+        });
+        consumed.add(j);
+        merged = true;
+        break;
+      }
+      if (merged) continue;
+    }
+    plan.push(current);
+  }
   return {
     plan: plan,
     skipped: skipped,
@@ -10341,7 +10630,7 @@ function _applyAllSuggestionsOnline() {
           _context29.n = 11;
           return Word.run(/*#__PURE__*/function () {
             var _ref37 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee28(context) {
-              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator7, _step7, _entry$originalText7, _step7$value, paragraphIndex, suggestions, paragraph, entry, snapshotText, sourceText, _buildParagraphOperat, plan, skipped, noop, _iterator9, _step9, suggestion, anyApplied, appliedCount, applyFailedCount, _iterator0, _step0, op, range, _iterator8, _step8, idx, _t0, _t1;
+              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator7, _step7, _entry$originalText7, _step7$value, paragraphIndex, suggestions, paragraph, entry, snapshotText, sourceText, _buildParagraphOperat, plan, skipped, noop, _iterator9, _step9, suggestion, anyApplied, appliedCount, applyFailedCount, _iterator0, _step0, op, range, _iterator1, _step1, _suggestion, _iterator8, _step8, idx, _t0, _t1;
               return _regenerator().w(function (_context28) {
                 while (1) switch (_context28.p = _context28.n) {
                   case 0:
@@ -10419,21 +10708,31 @@ function _applyAllSuggestionsOnline() {
                       _context28.n = 9;
                       break;
                     }
-                    failedSuggestions.push(op.suggestion);
+                    failedSuggestions.push.apply(failedSuggestions, _toConsumableArray(op.suggestions));
                     applyFailedCount++;
                     return _context28.a(3, 10);
                   case 9:
                     try {
                       range.insertText(op.replacement, Word.InsertLocation.replace);
                       anyApplied = true;
-                      processedSuggestions.push({
-                        suggestion: op.suggestion,
-                        paragraph: paragraph
-                      });
+                      _iterator1 = _createForOfIteratorHelper(op.suggestions);
+                      try {
+                        for (_iterator1.s(); !(_step1 = _iterator1.n()).done;) {
+                          _suggestion = _step1.value;
+                          processedSuggestions.push({
+                            suggestion: _suggestion,
+                            paragraph: paragraph
+                          });
+                        }
+                      } catch (err) {
+                        _iterator1.e(err);
+                      } finally {
+                        _iterator1.f();
+                      }
                       appliedCount++;
                     } catch (applyErr) {
                       warn("applyAllSuggestionsOnline: failed planned op", applyErr);
-                      failedSuggestions.push(op.suggestion);
+                      failedSuggestions.push.apply(failedSuggestions, _toConsumableArray(op.suggestions));
                       applyFailedCount++;
                     }
                   case 10:
@@ -10603,7 +10902,7 @@ function _checkDocumentTextDesktop() {
           _context34.n = 2;
           return Word.run(/*#__PURE__*/function () {
             var _ref39 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee33(context) {
-              var doc, trackToggleSupported, prevTrack, paras, documentCharOffset, idx, paragraph, sourceText, normalizedSource, trimmed, paragraphDocOffset, pStart, result, suggestions, appliedInParagraph, _iterator1, _step1, suggestion, applied, _t11, _t12, _t13, _t14;
+              var doc, trackToggleSupported, prevTrack, paras, documentCharOffset, idx, paragraph, sourceText, normalizedSource, trimmed, paragraphDocOffset, pStart, result, suggestions, appliedInParagraph, _iterator10, _step10, suggestion, applied, _t11, _t12, _t13, _t14;
               return _regenerator().w(function (_context33) {
                 while (1) switch (_context33.p = _context33.n) {
                   case 0:
@@ -10713,15 +11012,15 @@ function _checkDocumentTextDesktop() {
                     return _context33.a(3, 30);
                   case 16:
                     appliedInParagraph = 0;
-                    _iterator1 = _createForOfIteratorHelper(suggestions);
+                    _iterator10 = _createForOfIteratorHelper(suggestions);
                     _context33.p = 17;
-                    _iterator1.s();
+                    _iterator10.s();
                   case 18:
-                    if ((_step1 = _iterator1.n()).done) {
+                    if ((_step10 = _iterator10.n()).done) {
                       _context33.n = 25;
                       break;
                     }
-                    suggestion = _step1.value;
+                    suggestion = _step10.value;
                     applied = false;
                     _context33.p = 19;
                     _context33.n = 20;
@@ -10756,10 +11055,10 @@ function _checkDocumentTextDesktop() {
                   case 26:
                     _context33.p = 26;
                     _t14 = _context33.v;
-                    _iterator1.e(_t14);
+                    _iterator10.e(_t14);
                   case 27:
                     _context33.p = 27;
-                    _iterator1.f();
+                    _iterator10.f();
                     return _context33.f(27);
                   case 28:
                     if (!appliedInParagraph) {
@@ -10828,7 +11127,7 @@ function _checkDocumentTextOnline() {
           _context36.n = 2;
           return Word.run(/*#__PURE__*/function () {
             var _ref40 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee35(context) {
-              var paras, documentCharOffset, idx, _result$suggestions, p, original, normalizedOriginal, trimmed, paragraphDocOffset, result, _iterator10, _step10, suggestionObj, highlighted, _t16;
+              var paras, documentCharOffset, idx, _result$suggestions, p, original, normalizedOriginal, trimmed, paragraphDocOffset, result, _iterator11, _step11, suggestionObj, highlighted, _t16;
               return _regenerator().w(function (_context35) {
                 while (1) switch (_context35.p = _context35.n) {
                   case 0:
@@ -10898,15 +11197,15 @@ function _checkDocumentTextOnline() {
                     }
                     return _context35.a(3, 17);
                   case 9:
-                    _iterator10 = _createForOfIteratorHelper(result.suggestions);
+                    _iterator11 = _createForOfIteratorHelper(result.suggestions);
                     _context35.p = 10;
-                    _iterator10.s();
+                    _iterator11.s();
                   case 11:
-                    if ((_step10 = _iterator10.n()).done) {
+                    if ((_step11 = _iterator11.n()).done) {
                       _context35.n = 14;
                       break;
                     }
-                    suggestionObj = _step10.value;
+                    suggestionObj = _step11.value;
                     _context35.n = 12;
                     return wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
                   case 12:
@@ -10923,10 +11222,10 @@ function _checkDocumentTextOnline() {
                   case 15:
                     _context35.p = 15;
                     _t16 = _context35.v;
-                    _iterator10.e(_t16);
+                    _iterator11.e(_t16);
                   case 16:
                     _context35.p = 16;
-                    _iterator10.f();
+                    _iterator11.f();
                     return _context35.f(16);
                   case 17:
                     idx++;

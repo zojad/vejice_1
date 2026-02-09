@@ -13,12 +13,80 @@ import {
 } from "../anchoring/SyntheticAnchorProvider.js";
 
 const MAX_PARAGRAPH_CHARS = 3000;
+const PARAGRAPH_FIRST_MAX_CHARS = 1000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
+const LOG_PREFIX = "[Vejice DEBUG DUMP]";
+const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
+const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
+
+if (typeof window !== "undefined") {
+  if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
+    window.__VEJICE_DEBUG_DUMPS__ = [];
+  }
+  if (!("__VEJICE_LAST_DEBUG_DUMP__" in window)) {
+    window.__VEJICE_LAST_DEBUG_DUMP__ = null;
+  }
+  window.__VEJICE_DEBUG_DUMP_READY__ = true;
+}
+
+function isDeepDebugEnabled() {
+  if (typeof window === "undefined") return false;
+  const isTruthyFlag = (value) =>
+    value === true || value === 1 || value === "1" || value === "true";
+  if (isTruthyFlag(window.__VEJICE_DEBUG_DUMP__)) return true;
+  if (isTruthyFlag(window.__VEJICE_DEBUG__)) return true;
+  try {
+    const storage = window.localStorage;
+    if (storage) {
+      const stored = storage.getItem("vejice:debug:dump");
+      if (isTruthyFlag(stored)) return true;
+    }
+  } catch (_err) {
+    // Ignore storage access failures.
+  }
+  return false;
+}
+
+function pushDeepDebugDump(payload) {
+  if (!isDeepDebugEnabled() || typeof window === "undefined") return;
+  const safePayload = {
+    ts: Date.now(),
+    ...payload,
+  };
+  window.__VEJICE_LAST_DEBUG_DUMP__ = safePayload;
+  window.__VEJICE_DEBUG_DUMPS__ = window.__VEJICE_DEBUG_DUMPS__ || [];
+  window.__VEJICE_DEBUG_DUMPS__.push(safePayload);
+  if (window.__VEJICE_DEBUG_DUMPS__.length > 20) {
+    window.__VEJICE_DEBUG_DUMPS__.shift();
+  }
+  try {
+    console.log(LOG_PREFIX, safePayload);
+  } catch (_err) {
+    // Ignore logging failures in host environments that limit console payloads.
+  }
+  try {
+    const storage = window.localStorage;
+    if (!storage) return;
+    storage.setItem(DEBUG_DUMP_LAST_STORAGE_KEY, JSON.stringify(safePayload));
+    const existingRaw = storage.getItem(DEBUG_DUMP_STORAGE_KEY);
+    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+    const list = Array.isArray(existing) ? existing : [];
+    list.push(safePayload);
+    while (list.length > 20) {
+      list.shift();
+    }
+    storage.setItem(DEBUG_DUMP_STORAGE_KEY, JSON.stringify(list));
+  } catch (_err2) {
+    // Ignore storage failures in restricted runtimes.
+  }
+}
 
 export class CommaSuggestionEngine {
   constructor({ anchorProvider, apiClient, notifiers = {} }) {
     this.anchorProvider = anchorProvider;
     this.apiClient = apiClient;
+    this.lastDebugDump = null;
+    this.debugDumps = [];
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || (() => {}),
       onSentenceTooLong: notifiers.onSentenceTooLong || (() => {}),
@@ -32,8 +100,34 @@ export class CommaSuggestionEngine {
     originalText,
     normalizedOriginalText,
     paragraphDocOffset,
+    forceSentenceChunks = false,
   }) {
-    const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS);
+    const paragraphText = typeof originalText === "string" ? originalText : "";
+    const forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
+    const useSentenceChunks = forceSentenceChunks || forceSentenceByLength;
+    const debugEnabled = isDeepDebugEnabled();
+    const debugDump = debugEnabled
+      ? {
+          analysisMode: useSentenceChunks ? "sentence" : "paragraph",
+          sentenceModeReason: forceSentenceChunks
+            ? "forced"
+            : forceSentenceByLength
+              ? "paragraph-too-long"
+              : "none",
+          paragraphIndex,
+          paragraphDocOffset,
+          originalText,
+          normalizedOriginalText:
+            typeof normalizedOriginalText === "string"
+              ? normalizedOriginalText
+              : normalizeParagraphWhitespace(originalText),
+          chunks: [],
+          final: {},
+        }
+      : null;
+    const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
+      preferWholeParagraph: !useSentenceChunks,
+    });
     if (!chunks.length) {
       return {
         suggestions: [],
@@ -60,6 +154,7 @@ export class CommaSuggestionEngine {
     const processedMeta = [];
     const chunkDetails = [];
     let apiErrors = 0;
+    let nonCommaChunkSkips = 0;
 
     for (const chunk of chunks) {
       const meta = {
@@ -91,6 +186,20 @@ export class CommaSuggestionEngine {
         continue;
       }
       const correctedChunk = detail.correctedText;
+      if (debugEnabled && debugDump) {
+        debugDump.chunks.push({
+          index: chunk.index,
+          start: chunk.start,
+          end: chunk.end,
+          normalizedInput: chunk.normalizedText || chunk.text,
+          correctedChunk,
+          rawSourceText: detail?.raw?.source_text,
+          rawTargetText: detail?.raw?.target_text,
+          rawCorrections: detail?.corrections,
+          rawSourceTokensCount: Array.isArray(detail?.sourceTokens) ? detail.sourceTokens.length : 0,
+          rawTargetTokensCount: Array.isArray(detail?.targetTokens) ? detail.targetTokens.length : 0,
+        });
+      }
       if (!onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
         this.notifiers.onChunkNonCommaChanges(
           paragraphIndex,
@@ -98,6 +207,7 @@ export class CommaSuggestionEngine {
           chunk.text,
           correctedChunk
         );
+        nonCommaChunkSkips++;
         meta.syntheticTokens = tokenizeForAnchoring(
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
@@ -108,11 +218,11 @@ export class CommaSuggestionEngine {
       meta.correctedText = correctedChunk;
 
       const baseForDiff = chunk.text || chunk.normalizedText || "";
-      const diffOps = correctionsHaveEntries(detail?.corrections)
-        ? []
-        : collapseDuplicateDiffOps(
-            filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
-          );
+      // Always compute comma-only diff ops. Correction metadata can be incomplete
+      // or carry positions that become inconsistent after chunk-level transforms.
+      const diffOps = collapseDuplicateDiffOps(
+        filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
+      );
       if (!meta.detail && !diffOps.length) continue;
       chunkDetails.push({
         chunk,
@@ -123,7 +233,19 @@ export class CommaSuggestionEngine {
       });
     }
 
-    if (!processedMeta.some((meta) => meta.detail)) {
+    const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
+    const canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;
+    if (!hasDetailedChunk && canFallbackToSentences && (apiErrors > 0 || nonCommaChunkSkips > 0)) {
+      return this.analyzeParagraph({
+        paragraphIndex,
+        originalText,
+        normalizedOriginalText,
+        paragraphDocOffset,
+        forceSentenceChunks: true,
+      });
+    }
+
+    if (!hasDetailedChunk) {
       const anchorsEntry = await this.anchorProvider.getAnchors({
         paragraphIndex,
         originalText,
@@ -174,6 +296,7 @@ export class CommaSuggestionEngine {
     });
 
     const suggestions = [];
+    const debugOpFlow = debugEnabled ? [] : null;
 
     for (const entry of chunkDetails) {
       const detailRef = entry.metaRef?.detail
@@ -201,23 +324,30 @@ export class CommaSuggestionEngine {
         if (!correctionsPresent && detailRef && !ops.length) {
           ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
           fallbackOps = [];
-        } else if (!ops.length && correctionsPresent) {
-          fallbackOps = fallbackOps.map((op) => ({ ...op, fromCorrections: true }));
+        } else if (correctionsPresent) {
+          fallbackOps = fallbackOps.map((op) => ({
+            ...op,
+            fromCorrections: true,
+            viaDiffFallback: true,
+          }));
         }
       }
       const usingFallbackOnly = !ops.length;
-      const allOps = usingFallbackOnly ? fallbackOps : ops;
+      const allOps = mergePreferredCommaOps(ops, fallbackOps);
       if (!allOps.length) continue;
+      const opFlow = debugEnabled
+        ? {
+            chunkIndex: entry.chunk.index,
+            fromCorrections: ops.map((op) => ({ ...op })),
+            fallbackOps: fallbackOps.map((op) => ({ ...op })),
+            usingFallbackOnly,
+            keptOps: [],
+            droppedOps: [],
+          }
+        : null;
       for (const op of allOps) {
-        if (!ops.includes(op) && op.kind === "insert") {
-          const seenInsert = ops.some(
-            (existing) => existing.kind === "insert" && existing.pos === op.pos
-          );
-          if (seenInsert) continue;
-        }
-        const opSource = ops.includes(op) ? op : null;
         const offset = entry.chunk.start;
-        const baseOp = opSource || op;
+        const baseOp = op;
         const adjustedOp = {
           ...baseOp,
           pos: baseOp.pos + offset,
@@ -226,7 +356,12 @@ export class CommaSuggestionEngine {
           correctedPos:
             (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset,
         };
+        if (!isOpConsistentWithTexts(adjustedOp, originalText, correctedParagraph)) {
+          if (opFlow) opFlow.droppedOps.push({ reason: "inconsistent_with_texts", op: adjustedOp });
+          continue;
+        }
         if (shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
+          if (opFlow) opFlow.droppedOps.push({ reason: "repeated_token_suppression", op: adjustedOp });
           continue;
         }
         const suggestion = buildSuggestionFromOp({
@@ -238,32 +373,47 @@ export class CommaSuggestionEngine {
         });
         if (suggestion) {
           suggestions.push(suggestion);
+          if (opFlow) opFlow.keptOps.push({ op: adjustedOp, suggestionId: suggestion.id });
         }
       }
-      if (!ops.length && fallbackOps.length) {
-        for (const op of fallbackOps) {
-          const offset = entry.chunk.start;
-          const adjustedOp = {
-            ...op,
-            pos: op.pos + offset,
-            originalPos: (typeof op.originalPos === "number" ? op.originalPos : op.pos) + offset,
-            correctedPos: (typeof op.correctedPos === "number" ? op.correctedPos : op.pos) + offset,
-          };
-          if (shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
-            continue;
-          }
-          const suggestion = buildSuggestionFromOp({
-            op: adjustedOp,
-            paragraphIndex,
-            anchorsEntry,
-            originalText,
-            correctedParagraph,
-          });
-          if (suggestion) {
-            suggestions.push(suggestion);
-          }
-        }
+      if (opFlow && debugOpFlow) {
+        debugOpFlow.push(opFlow);
       }
+    }
+
+    if (debugEnabled && debugDump) {
+      debugDump.final = {
+        correctedParagraph,
+        suggestionsCount: suggestions.length,
+        suggestions: suggestions.map((s) => ({
+          id: s.id,
+          kind: s.kind,
+          paragraphIndex: s.paragraphIndex,
+          charHint: s.charHint,
+          op: s?.meta?.op,
+          sourceTokenBefore: s?.meta?.anchor?.sourceTokenBefore?.tokenText,
+          sourceTokenAfter: s?.meta?.anchor?.sourceTokenAfter?.tokenText,
+          targetTokenBefore: s?.meta?.anchor?.targetTokenBefore?.tokenText,
+          targetTokenAfter: s?.meta?.anchor?.targetTokenAfter?.tokenText,
+        })),
+        opFlow: debugOpFlow || [],
+      };
+      this.lastDebugDump = debugDump;
+      this.debugDumps.push(debugDump);
+      if (this.debugDumps.length > 20) {
+        this.debugDumps.shift();
+      }
+      pushDeepDebugDump(debugDump);
+    }
+
+    if (!suggestions.length && canFallbackToSentences && nonCommaChunkSkips > 0) {
+      return this.analyzeParagraph({
+        paragraphIndex,
+        originalText,
+        normalizedOriginalText,
+        paragraphDocOffset,
+        forceSentenceChunks: true,
+      });
     }
 
     return {
@@ -357,9 +507,28 @@ function buildTokenHint(meta) {
   };
 }
 
-function splitParagraphIntoChunks(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
+function splitParagraphIntoChunks(
+  text = "",
+  maxLen = MAX_PARAGRAPH_CHARS,
+  { preferWholeParagraph = true } = {}
+) {
   const safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
+  // For normal-sized paragraphs, keep full context in a single API call.
+  // This avoids sentence splitter artifacts around abbreviations like "K. M.".
+  if (preferWholeParagraph && safeText.length <= maxLen) {
+    return [
+      {
+        index: 0,
+        start: 0,
+        end: safeText.length,
+        length: safeText.length,
+        text: safeText,
+        trailing: "",
+        tooLong: false,
+      },
+    ];
+  }
   const placeholder = "\uE000";
   const protectedText = safeText;
   const sentences = [];
@@ -504,6 +673,58 @@ function collapseDuplicateDiffOps(ops) {
     if (typeof pos !== "number") return true;
     return !shouldDropInsert(pos);
   });
+}
+
+function isOpConsistentWithTexts(op, originalText, correctedText) {
+  if (!op || typeof op !== "object") return false;
+  const boundaryTolerance = op?.fromCorrections ? 3 : 0;
+  if (op.kind === "delete") {
+    const originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    const correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    // Valid delete must have comma in original and no comma in corrected at this boundary.
+    return (
+      hasCommaAtOrNearBoundary(originalText, originalPos, boundaryTolerance) &&
+      !hasCommaAtOrNearBoundary(correctedText, correctedPos, boundaryTolerance)
+    );
+  }
+  if (op.kind === "insert") {
+    const originalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    const correctedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    // Valid insert must have comma in corrected and no comma in original at this boundary.
+    return (
+      !hasCommaAtOrNearBoundary(originalText, originalPos, boundaryTolerance) &&
+      hasCommaAtOrNearBoundary(correctedText, correctedPos, boundaryTolerance)
+    );
+  }
+  return true;
+}
+
+function hasCommaAtOrNearBoundary(text, pos, tolerance = 0) {
+  const safeTolerance = Math.max(0, Number.isFinite(tolerance) ? Math.floor(tolerance) : 0);
+  for (let delta = -safeTolerance; delta <= safeTolerance; delta++) {
+    if (hasCommaAtBoundary(text, pos + delta)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasCommaAtBoundary(text, pos) {
+  if (typeof text !== "string" || !text.length) return false;
+  const safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
+  const direct = [safePos - 1, safePos, safePos + 1];
+  for (const idx of direct) {
+    if (idx >= 0 && idx < text.length && text[idx] === ",") {
+      return true;
+    }
+  }
+  let left = safePos - 1;
+  while (left >= 0 && /\s/.test(text[left])) left--;
+  if (left >= 0 && text[left] === ",") return true;
+  let right = safePos;
+  while (right < text.length && /\s/.test(text[right])) right++;
+  if (right < text.length && text[right] === ",") return true;
+  return false;
 }
 
 function filterCommaOps(original, corrected, ops) {
@@ -743,12 +964,16 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
       const baseText = intent.baseText ?? intent.analysis?.baseText ?? anchor.tokenText ?? "";
       const charStart = anchor.charStart;
       if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
-      const deleteIndex = baseText.lastIndexOf(",");
-      if (deleteIndex >= 0) {
-        tracking.blockedOriginalPositions.add(charStart + deleteIndex);
+      if (intent.analysis?.removeComma) {
+        const deleteIndex = baseText.lastIndexOf(",");
+        if (deleteIndex >= 0) {
+          tracking.blockedOriginalPositions.add(charStart + deleteIndex);
+        }
       }
-      const insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
-      tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
+      if (intent.analysis?.addComma) {
+        const insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
+        tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
+      }
     }
   }
   return ops;
@@ -832,6 +1057,27 @@ function filterDiffOpsAgainstCorrections(ops, tracking) {
     if (op.kind === "insert" && blockedCorrected?.has(correctedPos)) return false;
     return true;
   });
+}
+
+function getCommaOpIdentity(op) {
+  const originalPos = typeof op?.originalPos === "number" ? op.originalPos : op?.pos;
+  const correctedPos = typeof op?.correctedPos === "number" ? op.correctedPos : op?.pos;
+  return `${op?.kind || "unknown"}:${originalPos}:${correctedPos}`;
+}
+
+function mergePreferredCommaOps(primaryOps, secondaryOps) {
+  const merged = [];
+  const seen = new Set();
+  const pushUnique = (op) => {
+    if (!op) return;
+    const key = getCommaOpIdentity(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(op);
+  };
+  (Array.isArray(primaryOps) ? primaryOps : []).forEach(pushUnique);
+  (Array.isArray(secondaryOps) ? secondaryOps : []).forEach(pushUnique);
+  return merged;
 }
 
 function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {

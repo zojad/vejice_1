@@ -187,9 +187,27 @@ function restorePendingSuggestionsOnline() {
 }
 
 if (typeof window !== "undefined") {
+  if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
+    window.__VEJICE_DEBUG_DUMPS__ = [];
+  }
+  if (!("__VEJICE_LAST_DEBUG_DUMP__" in window)) {
+    window.__VEJICE_LAST_DEBUG_DUMP__ = null;
+  }
+  window.__VEJICE_DEBUG_DUMP_READY__ = true;
   window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
   window.__VEJICE_DEBUG_STATE__.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.__VEJICE_DEBUG_STATE__.getParagraphAnchorsOnline = () => anchorProvider.paragraphAnchors;
+  window.getVejiceDebugDump = () => window.__VEJICE_LAST_DEBUG_DUMP__ || null;
+  window.getVejiceDebugDumps = () =>
+    Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? [...window.__VEJICE_DEBUG_DUMPS__] : [];
+  window.getVejiceDebugStatus = () => ({
+    ready: Boolean(window.__VEJICE_DEBUG_DUMP_READY__),
+    debug: window.__VEJICE_DEBUG__,
+    dump: window.__VEJICE_DEBUG_DUMP__,
+    state: typeof window.__VEJICE_DEBUG_STATE__,
+    dumps: Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? window.__VEJICE_DEBUG_DUMPS__.length : 0,
+    hasLastDump: Boolean(window.__VEJICE_LAST_DEBUG_DUMP__),
+  });
   window.getPendingSuggestionsOnline = getPendingSuggestionsOnline;
   window.getPendingSuggestionsSnapshot = () => getPendingSuggestionsOnline(true);
 }
@@ -294,6 +312,19 @@ const commaEngine = new CommaSuggestionEngine({
     onChunkNonCommaChanges: notifyChunkNonCommaChanges,
   },
 });
+if (typeof window !== "undefined") {
+  window.__VEJICE_DEBUG_STATE__ = window.__VEJICE_DEBUG_STATE__ || {};
+  window.__VEJICE_DEBUG_STATE__.getEngineDebugDump = () => commaEngine.lastDebugDump || null;
+  window.__VEJICE_DEBUG_STATE__.getEngineDebugDumps = () =>
+    Array.isArray(commaEngine.debugDumps) ? [...commaEngine.debugDumps] : [];
+  window.getVejiceDebugDump = () => commaEngine.lastDebugDump || window.__VEJICE_LAST_DEBUG_DUMP__ || null;
+  window.getVejiceDebugDumps = () => {
+    if (Array.isArray(commaEngine.debugDumps) && commaEngine.debugDumps.length) {
+      return [...commaEngine.debugDumps];
+    }
+    return Array.isArray(window.__VEJICE_DEBUG_DUMPS__) ? [...window.__VEJICE_DEBUG_DUMPS__] : [];
+  };
+}
 
 const onlineTextBridge = new OnlineTextBridge({
   applyInsertSuggestion,
@@ -1831,9 +1862,11 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       const beforeEnd = before.start + before.token.length;
       if (beforeEnd <= after.start) {
         const gap = snapshotText.slice(beforeEnd, after.start);
-        if (gap.includes(",")) {
+        // Only treat as already satisfied when the direct token gap is just comma+spaces.
+        if (/^\s*,\s*$/.test(gap)) {
           return { kind: "noop" };
         }
+        // If there are non-whitespace chars in the gap, anchors are not adjacent; don't noop.
         if (!/[^\s]/.test(gap)) {
           return {
             kind: "insert",
@@ -1939,7 +1972,7 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
 }
 
 function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
-  const plan = [];
+  const rawPlan = [];
   const skipped = [];
   const noop = [];
 
@@ -1959,18 +1992,78 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
       noop.push(suggestion);
       continue;
     }
-    plan.push({
+    rawPlan.push({
       ...op,
-      suggestion,
+      suggestions: [suggestion],
       sortPos: getSuggestionSortPos(suggestion),
     });
   }
 
-  plan.sort((a, b) => {
+  rawPlan.sort((a, b) => {
     if (a.start !== b.start) return b.start - a.start;
     if (a.kind !== b.kind) return a.kind === "delete" ? -1 : 1;
     return b.sortPos - a.sortPos;
   });
+
+  const consumed = new Set();
+  const plan = [];
+  for (let i = 0; i < rawPlan.length; i++) {
+    if (consumed.has(i)) continue;
+    const current = rawPlan[i];
+
+    // Drop redundant inserts only when comma is already exactly at the insertion gap.
+    if (current.kind === "insert") {
+      const segment = snapshotText.slice(current.start, current.end);
+      if (segment === current.replacement) {
+        noop.push(...current.suggestions);
+        continue;
+      }
+      if (current.replacement.startsWith(",")) {
+        const segmentIsCommaGap = /^\s*,\s*$/.test(segment);
+        let left = current.start - 1;
+        while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+        let right = current.end;
+        while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+        const leftChar = left >= 0 ? snapshotText[left] : "";
+        const rightChar = right < snapshotText.length ? snapshotText[right] : "";
+        const segmentHasOnlyWhitespace = !/[^\s]/.test(segment);
+        if (segmentIsCommaGap || (segmentHasOnlyWhitespace && (leftChar === "," || rightChar === ","))) {
+          noop.push(...current.suggestions);
+          continue;
+        }
+      }
+    }
+
+    // Coalesce local delete+insert into a single replace to avoid visual "double comma then delete".
+    if (current.kind === "delete") {
+      const deletePos = current.start;
+      let merged = false;
+      for (let j = i + 1; j < rawPlan.length; j++) {
+        if (consumed.has(j)) continue;
+        const candidate = rawPlan[j];
+        if (candidate.kind !== "insert") continue;
+        if (Math.abs(candidate.start - deletePos) > 1) continue;
+        if (!candidate.replacement.startsWith(",")) continue;
+        const start = Math.min(current.start, candidate.start);
+        const end = Math.max(current.end, candidate.end);
+        plan.push({
+          kind: "replace",
+          start,
+          end,
+          replacement: ", ",
+          snippet: snapshotText.slice(start, end) || ",",
+          suggestions: [...current.suggestions, ...candidate.suggestions],
+          sortPos: Math.max(current.sortPos, candidate.sortPos),
+        });
+        consumed.add(j);
+        merged = true;
+        break;
+      }
+      if (merged) continue;
+    }
+
+    plan.push(current);
+  }
 
   return { plan, skipped, noop };
 }
@@ -2039,18 +2132,20 @@ export async function applyAllSuggestionsOnline() {
           op.snippet
         );
         if (!range) {
-          failedSuggestions.push(op.suggestion);
+          failedSuggestions.push(...op.suggestions);
           applyFailedCount++;
           continue;
         }
         try {
           range.insertText(op.replacement, Word.InsertLocation.replace);
           anyApplied = true;
-          processedSuggestions.push({ suggestion: op.suggestion, paragraph });
+          for (const suggestion of op.suggestions) {
+            processedSuggestions.push({ suggestion, paragraph });
+          }
           appliedCount++;
         } catch (applyErr) {
           warn("applyAllSuggestionsOnline: failed planned op", applyErr);
-          failedSuggestions.push(op.suggestion);
+          failedSuggestions.push(...op.suggestions);
           applyFailedCount++;
         }
       }
