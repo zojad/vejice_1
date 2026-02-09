@@ -13,8 +13,29 @@ const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd(
 const log = (...a) => DEBUG && console.log("[Vejice API]", ...a);
 const MAX_SNIPPET = 120;
 const snip = (s) => (typeof s === "string" ? s.slice(0, MAX_SNIPPET) : s);
+
+function resolveApiUrl() {
+  const winOverride =
+    typeof window !== "undefined" && typeof window.__VEJICE_API_URL === "string"
+      ? window.__VEJICE_API_URL.trim()
+      : "";
+  if (winOverride) return winOverride;
+
+  const envUrl =
+    typeof process !== "undefined" && typeof process.env?.VEJICE_API_URL === "string"
+      ? process.env.VEJICE_API_URL.trim()
+      : "";
+  if (envUrl) return envUrl;
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/api/postavi_vejice`;
+  }
+  return "/api/postavi_vejice";
+}
+
+const API_URL = resolveApiUrl();
+
 const API_KEY =
-  (typeof process !== "undefined" && process.env?.VEJICE_API_KEY) ||
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
 const API_MAX_ATTEMPTS = 3;
@@ -172,15 +193,22 @@ function isRetryableError(info) {
   return ["ECONNABORTED", "ETIMEDOUT", "ERR_NETWORK"].includes(code);
 }
 
+function requiresApiKey(url) {
+  return typeof url === "string" && /gpu-proc1\.cjvt\.si/i.test(url);
+}
+
 async function requestPopravek(poved) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
     return mockRequestPopravljenPoved(poved);
   }
-  if (!API_KEY) {
+  if (!API_URL) {
+    throw new VejiceApiError("Missing VEJICE_API_URL configuration");
+  }
+  if (!API_KEY && requiresApiKey(API_URL)) {
     throw new VejiceApiError("Missing VEJICE_API_KEY configuration");
   }
-  const url = "https://gpu-proc1.cjvt.si/popravljalnik-api/postavi_vejice";
+  const url = API_URL;
 
   const data = {
     vhodna_poved: poved,
@@ -193,11 +221,13 @@ async function requestPopravek(poved) {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      "X-API-KEY": API_KEY,
     },
     timeout: 15000, // 15s
     // withCredentials: false, // keep default; not needed unless API sets cookies
   };
+  if (API_KEY) {
+    config.headers["X-API-KEY"] = API_KEY;
+  }
 
   const attempts = Math.max(1, API_MAX_ATTEMPTS);
   for (let attempt = 1; attempt <= attempts; attempt++) {

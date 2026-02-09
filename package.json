@@ -26,7 +26,8 @@
     "validate:prod": "office-addin-manifest validate dist/manifest.prod.xml",
     "start:all": "npm-run-all -p dev-server start",
     "watch": "webpack --mode development --watch",
-    "proxy:lemmas": "node proxy/lemmatizer-proxy.js"
+    "proxy:lemmas": "node proxy/lemmatizer-proxy.js",
+    "proxy:vejice": "node proxy/vejice-api-proxy.js"
   },
   "dependencies": {
     "axios": "^1.7.7",

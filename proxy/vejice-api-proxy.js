@@ -7,15 +7,13 @@ const path = require("path");
 const axios = require("axios");
 require("dotenv").config();
 
-const PORT = Number(process.env.LEMMAS_PROXY_PORT || process.env.PORT || 5050);
+const PORT = Number(process.env.VEJICE_PROXY_PORT || process.env.PORT || 5051);
 const TARGET_URL =
-  process.env.LEMMAS_PROXY_TARGET_URL || process.env.VEJICE_LEMMAS_URL || "";
-const TIMEOUT = Number(process.env.LEMMAS_PROXY_TIMEOUT_MS || 10000);
-const BODY_LIMIT_BYTES = Number(process.env.LEMMAS_PROXY_BODY_LIMIT_BYTES || 256 * 1024);
-const API_KEY = process.env.LEMMAS_PROXY_TARGET_API_KEY || process.env.VEJICE_API_KEY || "";
-const SHARED_TOKEN = (process.env.LEMMAS_PROXY_SHARED_TOKEN || "").trim();
-const SHARED_TOKEN_HEADER = process.env.LEMMAS_PROXY_SHARED_TOKEN_HEADER || "x-lemmas-token";
-const allowedOriginsRaw = process.env.LEMMAS_PROXY_ALLOWED_ORIGINS || "*";
+  process.env.VEJICE_PROXY_TARGET_URL || "https://gpu-proc1.cjvt.si/popravljalnik-api/postavi_vejice";
+const TIMEOUT = Number(process.env.VEJICE_PROXY_TIMEOUT_MS || 15000);
+const BODY_LIMIT_BYTES = Number(process.env.VEJICE_PROXY_BODY_LIMIT_BYTES || 256 * 1024);
+const API_KEY = process.env.VEJICE_PROXY_TARGET_API_KEY || process.env.VEJICE_API_KEY || "";
+const allowedOriginsRaw = process.env.VEJICE_PROXY_ALLOWED_ORIGINS || "*";
 const allowedOrigins = allowedOriginsRaw
   .split(",")
   .map((value) => value.trim())
@@ -29,6 +27,12 @@ function resolveOrigin(originHeader) {
   return found || "";
 }
 
+function isOriginAllowed(originHeader) {
+  if (ALLOW_ALL_ORIGINS) return true;
+  if (!originHeader) return true;
+  return allowedOrigins.some((allowed) => allowed.toLowerCase() === originHeader.toLowerCase());
+}
+
 function applyCors(res, originHeader) {
   const allowedOrigin = resolveOrigin(originHeader);
   if (allowedOrigin) {
@@ -36,23 +40,8 @@ function applyCors(res, originHeader) {
   }
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    `Content-Type, Authorization, X-Requested-With, ${SHARED_TOKEN_HEADER}`
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "false");
-}
-
-function isOriginAllowed(originHeader) {
-  if (ALLOW_ALL_ORIGINS) return true;
-  if (!originHeader) return true;
-  return allowedOrigins.some((allowed) => allowed.toLowerCase() === originHeader.toLowerCase());
-}
-
-function isAuthorized(req) {
-  if (!SHARED_TOKEN) return true;
-  const headerValue = req.headers[SHARED_TOKEN_HEADER] || req.headers[SHARED_TOKEN_HEADER.toLowerCase()];
-  return typeof headerValue === "string" && headerValue === SHARED_TOKEN;
 }
 
 function readRequestBody(req) {
@@ -81,35 +70,22 @@ function readRequestBody(req) {
   });
 }
 
-async function forwardLemmaRequest(body) {
-  if (!TARGET_URL) {
-    const error = new Error("Upstream URL not configured");
+async function forwardRequest(body) {
+  if (!API_KEY) {
+    const error = new Error("Vejice proxy API key is not configured");
     error.status = 500;
     throw error;
   }
-  const payload = {
-    lang: body.lang || "sl",
-    text: body.text || body.source_text || body.vhodna_poved || "",
-    ...(body.options ? { options: body.options } : {}),
-  };
-  if (!payload.text) {
-    const error = new Error("Missing text property in payload");
-    error.status = 400;
-    throw error;
-  }
-  const headers = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-  };
-  if (API_KEY) {
-    headers[process.env.LEMMAS_PROXY_TARGET_API_KEY_HEADER || "X-API-KEY"] = API_KEY;
-  }
-  const response = await axios.post(TARGET_URL, payload, {
+  const upstream = await axios.post(TARGET_URL, body, {
     timeout: TIMEOUT,
-    headers,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-API-KEY": API_KEY,
+    },
     validateStatus: () => true,
   });
-  return response;
+  return upstream;
 }
 
 async function handler(req, res) {
@@ -121,6 +97,7 @@ async function handler(req, res) {
     res.end(JSON.stringify({ error: "Origin not allowed" }));
     return;
   }
+
   if (req.method === "OPTIONS") {
     res.writeHead(204, { "Content-Length": "0" });
     res.end();
@@ -133,16 +110,10 @@ async function handler(req, res) {
     return;
   }
 
-  if (req.method === "POST" && req.url === "/lemmas") {
-    if (!isAuthorized(req)) {
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Unauthorized" }));
-      return;
-    }
+  if (req.method === "POST" && req.url === "/api/postavi_vejice") {
     try {
       const body = await readRequestBody(req);
-      const upstream = await forwardLemmaRequest(body);
+      const upstream = await forwardRequest(body);
       const headers = upstream.headers || {};
       Object.keys(headers).forEach((key) => {
         const lower = key.toLowerCase();
@@ -159,12 +130,11 @@ async function handler(req, res) {
         res.end(data);
       }
     } catch (err) {
+      console.error("[vejice-api-proxy]", err.message, err.response?.data || "");
       const status = err.status || (err.response && err.response.status) || 500;
-      const message = err.message || "Proxy error";
-      console.error("[lemmatizer-proxy]", message, err.response?.data || "");
       res.statusCode = status;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Lemmatizer upstream unavailable" }));
+      res.end(JSON.stringify({ error: "Vejice upstream unavailable" }));
     }
     return;
   }
@@ -175,15 +145,15 @@ async function handler(req, res) {
 }
 
 function createServer() {
-  const keyPath = process.env.LEMMAS_PROXY_SSL_KEY_PATH;
-  const certPath = process.env.LEMMAS_PROXY_SSL_CERT_PATH;
+  const keyPath = process.env.VEJICE_PROXY_SSL_KEY_PATH;
+  const certPath = process.env.VEJICE_PROXY_SSL_CERT_PATH;
   if (keyPath && certPath) {
     try {
       const key = fs.readFileSync(path.resolve(keyPath));
       const cert = fs.readFileSync(path.resolve(certPath));
       return https.createServer({ key, cert }, handler);
     } catch (err) {
-      console.warn("[lemmatizer-proxy] Failed to load TLS certs, falling back to HTTP", err.message);
+      console.warn("[vejice-api-proxy] Failed to load TLS certs, falling back to HTTP", err.message);
       return http.createServer(handler);
     }
   }
@@ -192,9 +162,9 @@ function createServer() {
 
 const server = createServer();
 server.listen(PORT, () => {
-  console.log(`[lemmatizer-proxy] Listening on port ${PORT}`);
-  console.log(`[lemmatizer-proxy] Forwarding to ${TARGET_URL}`);
+  console.log(`[vejice-api-proxy] Listening on port ${PORT}`);
+  console.log(`[vejice-api-proxy] Forwarding to configured upstream`);
   if (!ALLOW_ALL_ORIGINS) {
-    console.log(`[lemmatizer-proxy] Allowed origins: ${allowedOrigins.join(", ")}`);
+    console.log(`[vejice-api-proxy] Allowed origins: ${allowedOrigins.join(", ")}`);
   }
 });

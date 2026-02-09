@@ -18,10 +18,6 @@ async function getHttpsOptions() {
 }
 
 module.exports = async (env, options) => {
-  if (!process.env.VEJICE_API_KEY) {
-    console.warn("[webpack] VEJICE_API_KEY is not set. API calls will fail until you provide it.");
-  }
-
   const config = {
     devtool: "source-map",
     entry: {
@@ -57,7 +53,7 @@ module.exports = async (env, options) => {
         inject: "body",
       }),
       new webpack.DefinePlugin({
-        "process.env.VEJICE_API_KEY": JSON.stringify(process.env.VEJICE_API_KEY || ""),
+        "process.env.VEJICE_API_URL": JSON.stringify(process.env.VEJICE_API_URL || ""),
         "process.env.VEJICE_USE_MOCK": JSON.stringify(process.env.VEJICE_USE_MOCK || ""),
         "process.env.VEJICE_USE_LEMMATIZER": JSON.stringify(process.env.VEJICE_USE_LEMMATIZER || ""),
         "process.env.VEJICE_LEMMATIZER_ANCHORS": JSON.stringify(
@@ -109,6 +105,12 @@ module.exports = async (env, options) => {
       devMiddleware: { writeToDisk: true },
       // Same-origin lemma endpoint for Word Online; avoids browser CORS/mixed-content issues.
       proxy: [
+        {
+          context: ["/api/postavi_vejice"],
+          target: `http://127.0.0.1:${process.env.VEJICE_PROXY_PORT || 5051}`,
+          changeOrigin: true,
+          secure: false,
+        },
         {
           context: ["/lemmas", "/health"],
           target: `http://127.0.0.1:${process.env.LEMMAS_PROXY_PORT || 5050}`,
