@@ -5,6 +5,7 @@ import {
   checkDocumentText as runCheckVejice,
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
+  getPendingSuggestionsOnline,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
 
@@ -98,7 +99,11 @@ window.acceptAllChanges = async (event) => {
   log("CLICK: Sprejmi spremembe (acceptAllChanges)");
   try {
     if (isWordOnline()) {
+      const pendingBefore = getPendingSuggestionsOnline(true)?.length ?? 0;
+      log("Pending online suggestions before apply:", pendingBefore);
       await applyAllSuggestionsOnline();
+      const pendingAfter = getPendingSuggestionsOnline(true)?.length ?? 0;
+      log("Pending online suggestions after apply:", pendingAfter);
       log("Applied online suggestions |", Math.round(tnow() - t0), "ms");
     } else {
       if (!revisionsApiSupported()) {

@@ -1,13 +1,11 @@
 export class WordOnlineAdapter {
   constructor({
     highlightSuggestion,
-    applyInsertSuggestion,
-    applyDeleteSuggestion,
+    textBridge,
     clearSuggestionMarkers,
   }) {
     this.highlightSuggestionImpl = highlightSuggestion;
-    this.applyInsertSuggestionImpl = applyInsertSuggestion;
-    this.applyDeleteSuggestionImpl = applyDeleteSuggestion;
+    this.textBridge = textBridge;
     this.clearSuggestionMarkersImpl = clearSuggestionMarkers;
   }
 
@@ -23,13 +21,14 @@ export class WordOnlineAdapter {
   }
 
   applySuggestion(context, paragraph, suggestion) {
-    if (suggestion.kind === "insert") {
-      return this.applyInsertSuggestionImpl(context, paragraph, suggestion);
-    }
-    return this.applyDeleteSuggestionImpl(context, paragraph, suggestion);
+    return this.textBridge.applySuggestion(context, paragraph, suggestion);
   }
 
   clearHighlights(context, suggestionsOverride, paragraphs) {
     return this.clearSuggestionMarkersImpl(context, suggestionsOverride, paragraphs);
+  }
+
+  shouldForceSpacingCleanup() {
+    return this.textBridge?.shouldForceSpacingCleanup?.() ?? false;
   }
 }

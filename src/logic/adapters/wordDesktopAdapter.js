@@ -1,7 +1,6 @@
 export class WordDesktopAdapter {
-  constructor({ applyInsertSuggestion, applyDeleteSuggestion }) {
-    this.applyInsertSuggestionImpl = applyInsertSuggestion;
-    this.applyDeleteSuggestionImpl = applyDeleteSuggestion;
+  constructor({ textBridge }) {
+    this.textBridge = textBridge;
   }
 
   async getParagraphs(context) {
@@ -12,9 +11,6 @@ export class WordDesktopAdapter {
   }
 
   async applySuggestion(context, paragraph, suggestion) {
-    if (suggestion.kind === "insert") {
-      return this.applyInsertSuggestionImpl(context, paragraph, suggestion);
-    }
-    return this.applyDeleteSuggestionImpl(context, paragraph, suggestion);
+    return this.textBridge.applySuggestion(context, paragraph, suggestion);
   }
 }
