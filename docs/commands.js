@@ -8829,6 +8829,7 @@ var tnow = function tnow() {
   var _performance$now, _performance, _performance$now2;
   return (_performance$now = (_performance = performance) === null || _performance === void 0 || (_performance$now2 = _performance.now) === null || _performance$now2 === void 0 ? void 0 : _performance$now2.call(_performance)) !== null && _performance$now !== void 0 ? _performance$now : Date.now();
 };
+var TASKPANE_AUTOOPEN_SESSION_KEY = "vejice:autoopen-taskpane:v1";
 var done = function done(event, tag) {
   try {
     event && event.completed && event.completed();
@@ -8874,10 +8875,66 @@ var showCommandToast = function showCommandToast(message) {
   });
 };
 var isCheckRunning = false;
+var tryAutoOpenTaskpane = /*#__PURE__*/function () {
+  var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee() {
+    var _Office;
+    var storage, _t;
+    return _regenerator().w(function (_context) {
+      while (1) switch (_context.p = _context.n) {
+        case 0:
+          if (!(typeof Office === "undefined")) {
+            _context.n = 1;
+            break;
+          }
+          return _context.a(2);
+        case 1:
+          if ((_Office = Office) !== null && _Office !== void 0 && (_Office = _Office.addin) !== null && _Office !== void 0 && _Office.showAsTaskpane) {
+            _context.n = 2;
+            break;
+          }
+          log("Auto-open taskpane skipped: Office.addin.showAsTaskpane not supported");
+          return _context.a(2);
+        case 2:
+          if (!(typeof window === "undefined")) {
+            _context.n = 3;
+            break;
+          }
+          return _context.a(2);
+        case 3:
+          _context.p = 3;
+          storage = window.sessionStorage;
+          if (!(storage && storage.getItem(TASKPANE_AUTOOPEN_SESSION_KEY) === "1")) {
+            _context.n = 4;
+            break;
+          }
+          return _context.a(2);
+        case 4:
+          _context.n = 5;
+          return Office.addin.showAsTaskpane();
+        case 5:
+          if (storage) {
+            storage.setItem(TASKPANE_AUTOOPEN_SESSION_KEY, "1");
+          }
+          log("Auto-opened taskpane");
+          _context.n = 7;
+          break;
+        case 6:
+          _context.p = 6;
+          _t = _context.v;
+          errL("Auto-open taskpane failed:", _t);
+        case 7:
+          return _context.a(2);
+      }
+    }, _callee, null, [[3, 6]]);
+  }));
+  return function tryAutoOpenTaskpane() {
+    return _ref.apply(this, arguments);
+  };
+}();
 var revisionsApiSupported = function revisionsApiSupported() {
   try {
-    var _Office, _Office$isSetSupporte;
-    return Boolean((_Office = Office) === null || _Office === void 0 || (_Office = _Office.context) === null || _Office === void 0 || (_Office = _Office.requirements) === null || _Office === void 0 || (_Office$isSetSupporte = _Office.isSetSupported) === null || _Office$isSetSupporte === void 0 ? void 0 : _Office$isSetSupporte.call(_Office, "WordApi", "1.3"));
+    var _Office2, _Office2$isSetSupport;
+    return Boolean((_Office2 = Office) === null || _Office2 === void 0 || (_Office2 = _Office2.context) === null || _Office2 === void 0 || (_Office2 = _Office2.requirements) === null || _Office2 === void 0 || (_Office2$isSetSupport = _Office2.isSetSupported) === null || _Office2$isSetSupport === void 0 ? void 0 : _Office2$isSetSupport.call(_Office2, "WordApi", "1.3"));
   } catch (err) {
     errL("Failed to check requirement set support", err);
     return false;
@@ -8915,98 +8972,99 @@ if (typeof window !== "undefined" && typeof resolvedMock === "boolean") {
   if (resolvedMock) log("Mock API mode is ENABLED");
 }
 Office.onReady(function () {
-  var _Office2, _Office3;
-  log("Office ready | Host:", (_Office2 = Office) === null || _Office2 === void 0 || (_Office2 = _Office2.context) === null || _Office2 === void 0 ? void 0 : _Office2.host, "| Platform:", (_Office3 = Office) === null || _Office3 === void 0 ? void 0 : _Office3.platform);
+  var _Office3, _Office4;
+  log("Office ready | Host:", (_Office3 = Office) === null || _Office3 === void 0 || (_Office3 = _Office3.context) === null || _Office3 === void 0 ? void 0 : _Office3.host, "| Platform:", (_Office4 = Office) === null || _Office4 === void 0 ? void 0 : _Office4.platform);
+  tryAutoOpenTaskpane();
 });
 
 // —————————————————————————————————————————————
 // Ribbon commands (must be globals)
 // —————————————————————————————————————————————
 window.checkDocumentText = /*#__PURE__*/function () {
-  var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(event) {
-    var t0, _t;
-    return _regenerator().w(function (_context) {
-      while (1) switch (_context.p = _context.n) {
+  var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(event) {
+    var t0, _t2;
+    return _regenerator().w(function (_context2) {
+      while (1) switch (_context2.p = _context2.n) {
         case 0:
           t0 = tnow();
           log("CLICK: Preveri vejice (checkDocumentText)");
           if (!isCheckRunning) {
-            _context.n = 1;
+            _context2.n = 1;
             break;
           }
           log("checkDocumentText ignored: already running");
           showCommandToast("Preverjanje ze poteka.");
           done(event, "checkDocumentText");
           log("event.completed(): checkDocumentText");
-          return _context.a(2);
+          return _context2.a(2);
         case 1:
           isCheckRunning = true;
-          _context.p = 2;
-          _context.n = 3;
+          _context2.p = 2;
+          _context2.n = 3;
           return (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.checkDocumentText)();
         case 3:
           log("DONE: checkDocumentText |", Math.round(tnow() - t0), "ms");
-          _context.n = 5;
+          _context2.n = 5;
           break;
         case 4:
-          _context.p = 4;
-          _t = _context.v;
-          errL("checkDocumentText failed:", _t);
+          _context2.p = 4;
+          _t2 = _context2.v;
+          errL("checkDocumentText failed:", _t2);
         case 5:
-          _context.p = 5;
+          _context2.p = 5;
           isCheckRunning = false;
           done(event, "checkDocumentText");
           log("event.completed(): checkDocumentText");
-          return _context.f(5);
+          return _context2.f(5);
         case 6:
-          return _context.a(2);
+          return _context2.a(2);
       }
-    }, _callee, null, [[2, 4, 5, 6]]);
+    }, _callee2, null, [[2, 4, 5, 6]]);
   }));
   return function (_x) {
-    return _ref.apply(this, arguments);
+    return _ref2.apply(this, arguments);
   };
 }();
 window.acceptAllChanges = /*#__PURE__*/function () {
-  var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(event) {
-    var t0, _getPendingSuggestion, _getPendingSuggestion2, _getPendingSuggestion3, _getPendingSuggestion4, pendingBefore, pendingAfter, _err$message, _t2;
-    return _regenerator().w(function (_context3) {
-      while (1) switch (_context3.p = _context3.n) {
+  var _ref3 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee4(event) {
+    var t0, _getPendingSuggestion, _getPendingSuggestion2, _getPendingSuggestion3, _getPendingSuggestion4, pendingBefore, pendingAfter, _err$message, _t3;
+    return _regenerator().w(function (_context4) {
+      while (1) switch (_context4.p = _context4.n) {
         case 0:
           t0 = tnow();
           log("CLICK: Sprejmi spremembe (acceptAllChanges)");
-          _context3.p = 1;
+          _context4.p = 1;
           if (!(0,_utils_host_js__WEBPACK_IMPORTED_MODULE_1__.isWordOnline)()) {
-            _context3.n = 3;
+            _context4.n = 3;
             break;
           }
           pendingBefore = (_getPendingSuggestion = (_getPendingSuggestion2 = (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.getPendingSuggestionsOnline)(true)) === null || _getPendingSuggestion2 === void 0 ? void 0 : _getPendingSuggestion2.length) !== null && _getPendingSuggestion !== void 0 ? _getPendingSuggestion : 0;
           log("Pending online suggestions before apply:", pendingBefore);
-          _context3.n = 2;
+          _context4.n = 2;
           return (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.applyAllSuggestionsOnline)();
         case 2:
           pendingAfter = (_getPendingSuggestion3 = (_getPendingSuggestion4 = (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.getPendingSuggestionsOnline)(true)) === null || _getPendingSuggestion4 === void 0 ? void 0 : _getPendingSuggestion4.length) !== null && _getPendingSuggestion3 !== void 0 ? _getPendingSuggestion3 : 0;
           log("Pending online suggestions after apply:", pendingAfter);
           log("Applied online suggestions |", Math.round(tnow() - t0), "ms");
-          _context3.n = 5;
+          _context4.n = 5;
           break;
         case 3:
           if (revisionsApiSupported()) {
-            _context3.n = 4;
+            _context4.n = 4;
             break;
           }
           throw new Error("Revisions API is not available on this host");
         case 4:
-          _context3.n = 5;
+          _context4.n = 5;
           return Word.run(/*#__PURE__*/function () {
-            var _ref3 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(context) {
+            var _ref4 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(context) {
               var revisions, count;
-              return _regenerator().w(function (_context2) {
-                while (1) switch (_context2.n) {
+              return _regenerator().w(function (_context3) {
+                while (1) switch (_context3.n) {
                   case 0:
                     revisions = context.document.revisions;
                     revisions.load("items");
-                    _context2.n = 1;
+                    _context3.n = 1;
                     return context.sync();
                   case 1:
                     count = revisions.items.length;
@@ -9014,80 +9072,80 @@ window.acceptAllChanges = /*#__PURE__*/function () {
                     revisions.items.forEach(function (rev) {
                       return rev.accept();
                     });
-                    _context2.n = 2;
+                    _context3.n = 2;
                     return context.sync();
                   case 2:
                     log("Accepted revisions:", count, "|", Math.round(tnow() - t0), "ms");
                   case 3:
-                    return _context2.a(2);
+                    return _context3.a(2);
                 }
-              }, _callee2);
+              }, _callee3);
             }));
             return function (_x3) {
-              return _ref3.apply(this, arguments);
+              return _ref4.apply(this, arguments);
             };
           }());
         case 5:
-          _context3.n = 7;
+          _context4.n = 7;
           break;
         case 6:
-          _context3.p = 6;
-          _t2 = _context3.v;
-          if (_t2 !== null && _t2 !== void 0 && (_err$message = _t2.message) !== null && _err$message !== void 0 && _err$message.includes("Revisions API is not available")) {
+          _context4.p = 6;
+          _t3 = _context4.v;
+          if (_t3 !== null && _t3 !== void 0 && (_err$message = _t3.message) !== null && _err$message !== void 0 && _err$message.includes("Revisions API is not available")) {
             errL("acceptAllChanges skipped: revisions API is not available on this host");
           } else {
-            errL("acceptAllChanges failed:", _t2);
+            errL("acceptAllChanges failed:", _t3);
           }
         case 7:
-          _context3.p = 7;
+          _context4.p = 7;
           done(event, "acceptAllChanges");
           log("event.completed(): acceptAllChanges");
-          return _context3.f(7);
+          return _context4.f(7);
         case 8:
-          return _context3.a(2);
+          return _context4.a(2);
       }
-    }, _callee3, null, [[1, 6, 7, 8]]);
+    }, _callee4, null, [[1, 6, 7, 8]]);
   }));
   return function (_x2) {
-    return _ref2.apply(this, arguments);
+    return _ref3.apply(this, arguments);
   };
 }();
 window.rejectAllChanges = /*#__PURE__*/function () {
-  var _ref4 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(event) {
-    var t0, _err$message2, _t3;
-    return _regenerator().w(function (_context5) {
-      while (1) switch (_context5.p = _context5.n) {
+  var _ref5 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee6(event) {
+    var t0, _err$message2, _t4;
+    return _regenerator().w(function (_context6) {
+      while (1) switch (_context6.p = _context6.n) {
         case 0:
           t0 = tnow();
           log("CLICK: Zavrni spremembe (rejectAllChanges)");
-          _context5.p = 1;
+          _context6.p = 1;
           if (!(0,_utils_host_js__WEBPACK_IMPORTED_MODULE_1__.isWordOnline)()) {
-            _context5.n = 3;
+            _context6.n = 3;
             break;
           }
-          _context5.n = 2;
+          _context6.n = 2;
           return (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.rejectAllSuggestionsOnline)();
         case 2:
           log("Cleared online suggestions |", Math.round(tnow() - t0), "ms");
-          _context5.n = 5;
+          _context6.n = 5;
           break;
         case 3:
           if (revisionsApiSupported()) {
-            _context5.n = 4;
+            _context6.n = 4;
             break;
           }
           throw new Error("Revisions API is not available on this host");
         case 4:
-          _context5.n = 5;
+          _context6.n = 5;
           return Word.run(/*#__PURE__*/function () {
-            var _ref5 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee4(context) {
+            var _ref6 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(context) {
               var revisions, count;
-              return _regenerator().w(function (_context4) {
-                while (1) switch (_context4.n) {
+              return _regenerator().w(function (_context5) {
+                while (1) switch (_context5.n) {
                   case 0:
                     revisions = context.document.revisions;
                     revisions.load("items");
-                    _context4.n = 1;
+                    _context5.n = 1;
                     return context.sync();
                   case 1:
                     count = revisions.items.length;
@@ -9095,42 +9153,42 @@ window.rejectAllChanges = /*#__PURE__*/function () {
                     revisions.items.forEach(function (rev) {
                       return rev.reject();
                     });
-                    _context4.n = 2;
+                    _context5.n = 2;
                     return context.sync();
                   case 2:
                     log("Rejected revisions:", count, "|", Math.round(tnow() - t0), "ms");
                   case 3:
-                    return _context4.a(2);
+                    return _context5.a(2);
                 }
-              }, _callee4);
+              }, _callee5);
             }));
             return function (_x5) {
-              return _ref5.apply(this, arguments);
+              return _ref6.apply(this, arguments);
             };
           }());
         case 5:
-          _context5.n = 7;
+          _context6.n = 7;
           break;
         case 6:
-          _context5.p = 6;
-          _t3 = _context5.v;
-          if (_t3 !== null && _t3 !== void 0 && (_err$message2 = _t3.message) !== null && _err$message2 !== void 0 && _err$message2.includes("Revisions API is not available")) {
+          _context6.p = 6;
+          _t4 = _context6.v;
+          if (_t4 !== null && _t4 !== void 0 && (_err$message2 = _t4.message) !== null && _err$message2 !== void 0 && _err$message2.includes("Revisions API is not available")) {
             errL("rejectAllChanges skipped: revisions API is not available on this host");
           } else {
-            errL("rejectAllChanges failed:", _t3);
+            errL("rejectAllChanges failed:", _t4);
           }
         case 7:
-          _context5.p = 7;
+          _context6.p = 7;
           done(event, "rejectAllChanges");
           log("event.completed(): rejectAllChanges");
-          return _context5.f(7);
+          return _context6.f(7);
         case 8:
-          return _context5.a(2);
+          return _context6.a(2);
       }
-    }, _callee5, null, [[1, 6, 7, 8]]);
+    }, _callee6, null, [[1, 6, 7, 8]]);
   }));
   return function (_x4) {
-    return _ref4.apply(this, arguments);
+    return _ref5.apply(this, arguments);
   };
 }();
 
@@ -15606,7 +15664,7 @@ var isWordOnline = function isWordOnline() {
 /******/ 	
 /******/ 	/* webpack/runtime/getFullHash */
 /******/ 	!function() {
-/******/ 		__webpack_require__.h = function() { return "b3f5c46eaf4640daa1dc"; }
+/******/ 		__webpack_require__.h = function() { return "7af934c51ba33ad4ee30"; }
 /******/ 	}();
 /******/ 	
 /******/ 	/* webpack/runtime/global */

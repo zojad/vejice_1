@@ -20,6 +20,7 @@ const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd(
 const log = (...a) => DEBUG && console.log("[Vejice CMD]", ...a);
 const errL = (...a) => console.error("[Vejice CMD]", ...a);
 const tnow = () => performance?.now?.() ?? Date.now();
+const TASKPANE_AUTOOPEN_SESSION_KEY = "vejice:autoopen-taskpane:v1";
 const done = (event, tag) => {
   try {
     event && event.completed && event.completed();
@@ -65,6 +66,28 @@ const showCommandToast = (message) => {
   );
 };
 let isCheckRunning = false;
+
+const tryAutoOpenTaskpane = async () => {
+  if (typeof Office === "undefined") return;
+  if (!Office?.addin?.showAsTaskpane) {
+    log("Auto-open taskpane skipped: Office.addin.showAsTaskpane not supported");
+    return;
+  }
+  if (typeof window === "undefined") return;
+  try {
+    const storage = window.sessionStorage;
+    if (storage && storage.getItem(TASKPANE_AUTOOPEN_SESSION_KEY) === "1") {
+      return;
+    }
+    await Office.addin.showAsTaskpane();
+    if (storage) {
+      storage.setItem(TASKPANE_AUTOOPEN_SESSION_KEY, "1");
+    }
+    log("Auto-opened taskpane");
+  } catch (err) {
+    errL("Auto-open taskpane failed:", err);
+  }
+};
 
 const revisionsApiSupported = () => {
   try {
@@ -113,6 +136,7 @@ if (typeof window !== "undefined" && typeof resolvedMock === "boolean") {
 
 Office.onReady(() => {
   log("Office ready | Host:", Office?.context?.host, "| Platform:", Office?.platform);
+  tryAutoOpenTaskpane();
 });
 
 // —————————————————————————————————————————————
