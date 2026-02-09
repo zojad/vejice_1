@@ -1,0 +1,1 @@
+{"version":3,"file":"polyfill.443ddabe4e5f1389e4a6.hot-update.js","mappings":";;;;;UAAA,qCAAqC,gC","sources":["webpack://office-addin-taskpane-js/webpack/runtime/getFullHash"],"sourcesContent":["__webpack_require__.h = function() { return \"b3f5c46eaf4640daa1dc\"; }"],"names":[],"sourceRoot":""}
