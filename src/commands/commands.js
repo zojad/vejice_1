@@ -27,6 +27,44 @@ const done = (event, tag) => {
     errL(`${tag}: event.completed() threw`, e);
   }
 };
+let cmdToastDialog = null;
+const showCommandToast = (message) => {
+  if (!message) return;
+  if (typeof Office === "undefined" || !Office.context?.ui?.displayDialogAsync) return;
+  const origin =
+    (typeof window !== "undefined" && window.location && window.location.origin) || null;
+  if (!origin) return;
+  const toastUrl = new URL("toast.html", origin);
+  toastUrl.searchParams.set("message", message);
+  Office.context.ui.displayDialogAsync(
+    toastUrl.toString(),
+    { height: 20, width: 30, displayInIframe: true },
+    (asyncResult) => {
+      if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) return;
+      if (cmdToastDialog) {
+        try {
+          cmdToastDialog.close();
+        } catch (_err) {
+          // ignore
+        }
+      }
+      cmdToastDialog = asyncResult.value;
+      const closeDialog = () => {
+        if (!cmdToastDialog) return;
+        try {
+          cmdToastDialog.close();
+        } catch (_err) {
+          // ignore
+        } finally {
+          cmdToastDialog = null;
+        }
+      };
+      cmdToastDialog.addEventHandler(Office.EventType.DialogMessageReceived, closeDialog);
+      cmdToastDialog.addEventHandler(Office.EventType.DialogEventReceived, closeDialog);
+    }
+  );
+};
+let isCheckRunning = false;
 
 const revisionsApiSupported = () => {
   try {
@@ -83,12 +121,21 @@ Office.onReady(() => {
 window.checkDocumentText = async (event) => {
   const t0 = tnow();
   log("CLICK: Preveri vejice (checkDocumentText)");
+  if (isCheckRunning) {
+    log("checkDocumentText ignored: already running");
+    showCommandToast("Preverjanje ze poteka.");
+    done(event, "checkDocumentText");
+    log("event.completed(): checkDocumentText");
+    return;
+  }
+  isCheckRunning = true;
   try {
     await runCheckVejice();
     log("DONE: checkDocumentText |", Math.round(tnow() - t0), "ms");
   } catch (err) {
     errL("checkDocumentText failed:", err);
   } finally {
+    isCheckRunning = false;
     done(event, "checkDocumentText");
     log("event.completed(): checkDocumentText");
   }

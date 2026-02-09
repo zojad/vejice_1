@@ -58,6 +58,7 @@ const TRACKED_CHANGES_PRESENT_MESSAGE =
   "Najprej sprejmite ali zavrnite obstoječe spremembe (Track Changes), nato ponovno zaženite preverjanje.";
 const API_UNAVAILABLE_MESSAGE =
   "Storitev CJVT Vejice trenutno ni na voljo. Znova poskusite kasneje.";
+const NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajočih ali napačnih vejic.";
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
@@ -373,6 +374,11 @@ function notifyApiUnavailable() {
   apiFailureNotified = true;
   warn("API unavailable – notifying toast");
   showToastNotification(API_UNAVAILABLE_MESSAGE);
+}
+
+function notifyNoIssuesFound() {
+  log("No comma issues found – notifying toast");
+  showToastNotification(NO_ISSUES_FOUND_MESSAGE);
 }
 
 function resetNotificationFlags() {
@@ -2394,6 +2400,9 @@ async function checkDocumentTextDesktop() {
       "| apiErrors:",
       apiErrors
     );
+    if (paragraphsProcessed > 0 && totalInserted === 0 && totalDeleted === 0 && apiErrors === 0) {
+      notifyNoIssuesFound();
+    }
   } catch (e) {
     errL("ERROR in checkDocumentText:", e);
   }
@@ -2467,6 +2476,9 @@ async function checkDocumentTextOnline() {
       "| apiErrors:",
       apiErrors
     );
+    if (paragraphsProcessed > 0 && suggestions === 0 && apiErrors === 0) {
+      notifyNoIssuesFound();
+    }
   } catch (e) {
     errL("ERROR in checkDocumentTextOnline:", e);
   }
