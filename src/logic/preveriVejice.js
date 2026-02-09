@@ -656,6 +656,82 @@ async function searchParagraphForSnippet(context, paragraph, snippet) {
   return matches;
 }
 
+async function getRangesForPlannedOperations(context, paragraph, snapshotText, plan, reason = "apply-planned") {
+  if (!Array.isArray(plan) || !plan.length) return [];
+  if (!paragraph || typeof paragraph.getRange !== "function") {
+    return plan.map(() => null);
+  }
+  if (typeof paragraph.text !== "string") {
+    paragraph.load("text");
+    await context.sync();
+  }
+
+  const text = typeof snapshotText === "string" ? snapshotText : paragraph.text || "";
+  const liveText = typeof paragraph.text === "string" ? paragraph.text : text;
+  const searchOptions = {
+    matchCase: true,
+    matchWholeWord: false,
+    ignoreSpace: false,
+    ignorePunct: false,
+  };
+
+  const requests = [];
+  const perOpVariants = plan.map((op, opIndex) => {
+    const safeStart = Math.max(0, Math.min(Math.floor(op.start ?? 0), Math.max(0, text.length - 1)));
+    const computedEnd = Math.max(safeStart + 1, Math.floor(op.end ?? safeStart + 1));
+    const safeEnd = Math.min(computedEnd, text.length);
+    let snippet = text.slice(safeStart, safeEnd);
+    if (!snippet && typeof op?.snippet === "string" && op.snippet.length) {
+      snippet = op.snippet;
+    }
+    if (!snippet) return [];
+
+    const variants = [];
+    variants.push({ text: snippet, safeStart });
+    const trimmed = snippet.trim();
+    if (trimmed && trimmed !== snippet) {
+      variants.push({ text: trimmed, safeStart });
+    }
+
+    const unique = [];
+    const seen = new Set();
+    for (const variant of variants) {
+      if (seen.has(variant.text)) continue;
+      seen.add(variant.text);
+      const matches = paragraph.getRange().search(variant.text, searchOptions);
+      matches.load("items");
+      requests.push({ matches, text: variant.text, safeStart, opIndex });
+      unique.push({ text: variant.text, safeStart, matches });
+    }
+    return unique;
+  });
+
+  if (requests.length) {
+    await context.sync();
+  }
+
+  return plan.map((op, opIndex) => {
+    const variants = perOpVariants[opIndex] || [];
+    if (!variants.length) return null;
+
+    for (const variant of variants) {
+      const items = variant.matches?.items || [];
+      if (!items.length) continue;
+      const mappedStart = mapIndexAcrossCanonical(text, liveText, variant.safeStart);
+      const occurrence = countSnippetOccurrencesBefore(liveText, variant.text, mappedStart);
+      const idx = Math.min(occurrence, items.length - 1);
+      return items[idx];
+    }
+
+    const fallback = variants[0];
+    warn(`getRangesForPlannedOperations(${reason}): snippet not found`, {
+      snippet: fallback?.text,
+      safeStart: fallback?.safeStart,
+    });
+    return null;
+  });
+}
+
 function buildDeleteSuggestionMetadata(entry, charIndex) {
   const sourceAround = findAnchorsNearChar(entry, "source", charIndex);
   const documentOffset = entry?.documentOffset ?? 0;
@@ -2101,8 +2177,6 @@ export async function applyAllSuggestionsOnline() {
         continue;
       }
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
-      paragraph.load("text");
-      await context.sync();
       const snapshotText = paragraph.text || "";
       const sourceText = entry?.originalText ?? snapshotText;
       const { plan, skipped, noop } = buildParagraphOperationsPlan(snapshotText, sourceText, suggestions);
@@ -2121,16 +2195,16 @@ export async function applyAllSuggestionsOnline() {
       let anyApplied = false;
       let appliedCount = 0;
       let applyFailedCount = 0;
-      for (const op of plan) {
-        const range = await getRangeForCharacterSpan(
-          context,
-          paragraph,
-          snapshotText,
-          op.start,
-          op.end,
-          `apply-planned-${op.kind}`,
-          op.snippet
-        );
+      const plannedRanges = await getRangesForPlannedOperations(
+        context,
+        paragraph,
+        snapshotText,
+        plan,
+        "apply-all-batch"
+      );
+      for (let opIndex = 0; opIndex < plan.length; opIndex++) {
+        const op = plan[opIndex];
+        const range = plannedRanges[opIndex];
         if (!range) {
           failedSuggestions.push(...op.suggestions);
           applyFailedCount++;
@@ -2154,7 +2228,9 @@ export async function applyAllSuggestionsOnline() {
         touchedIndexes.add(paragraphIndex);
       }
     }
-    await wordOnlineAdapter.clearHighlights(context, processedSuggestions);
+    if (processedSuggestions.length) {
+      await wordOnlineAdapter.clearHighlights(context, processedSuggestions);
+    }
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
       force: wordOnlineAdapter.shouldForceSpacingCleanup(),
     });
