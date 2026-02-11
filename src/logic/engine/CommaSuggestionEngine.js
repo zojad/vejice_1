@@ -13,7 +13,8 @@ import {
 } from "../anchoring/SyntheticAnchorProvider.js";
 
 const MAX_PARAGRAPH_CHARS = 3000;
-const PARAGRAPH_FIRST_MAX_CHARS = 1000;
+const PARAGRAPH_FIRST_MAX_CHARS = 1200;
+const MIN_CHUNK_MERGE_CHARS = 20;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -530,7 +531,17 @@ function splitParagraphIntoChunks(
     ];
   }
   const placeholder = "\uE000";
-  const protectedText = safeText;
+  const protectDots = (input, regex) =>
+    input.replace(regex, (match) => match.replace(/\./g, placeholder));
+  // Protect dots in common abbreviation/date forms so sentence splitting
+  // doesn't break chunks like "K. M." or "25. 3. 2008".
+  let protectedText = safeText;
+  protectedText = protectDots(protectedText, /\b(?:[\p{L}]\.\s*){2,}/gu);
+  protectedText = protectDots(protectedText, /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g);
+  protectedText = protectDots(
+    protectedText,
+    /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu
+  );
   const sentences = [];
   let start = 0;
 
@@ -570,7 +581,26 @@ function splitParagraphIntoChunks(
     });
   }
 
-  return sentences.map((sentence, index) => {
+  const mergedSentences = [];
+  for (const sentence of sentences) {
+    const sentenceLen = Math.max(0, (sentence.end ?? 0) - (sentence.start ?? 0));
+    const previous = mergedSentences[mergedSentences.length - 1];
+    // Merge tiny fragments like "3." / "M." into previous chunk to avoid extra API calls.
+    if (
+      previous &&
+      sentenceLen > 0 &&
+      sentenceLen < MIN_CHUNK_MERGE_CHARS &&
+      sentence.end > previous.end &&
+      sentence.end - previous.start <= maxLen
+    ) {
+      previous.end = sentence.end;
+      previous.gapEnd = sentence.gapEnd ?? sentence.end;
+      continue;
+    }
+    mergedSentences.push({ ...sentence });
+  }
+
+  return mergedSentences.map((sentence, index) => {
     const gapEnd = sentence.gapEnd ?? sentence.end;
     const length = sentence.end - sentence.start;
     return {

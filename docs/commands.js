@@ -8412,13 +8412,17 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   popraviPovedDetailed: function() { return /* binding */ popraviPovedDetailed; }
 /* harmony export */ });
 /* harmony import */ var axios__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! axios */ "./node_modules/axios/lib/axios.js");
-function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
 var _process$env$VEJICE_U, _process$env3;
+function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/babel/babel/blob/main/packages/babel-helpers/LICENSE */ var e, t, r = "function" == typeof Symbol ? Symbol : {}, n = r.iterator || "@@iterator", o = r.toStringTag || "@@toStringTag"; function i(r, n, o, i) { var c = n && n.prototype instanceof Generator ? n : Generator, u = Object.create(c.prototype); return _regeneratorDefine2(u, "_invoke", function (r, n, o) { var i, c, u, f = 0, p = o || [], y = !1, G = { p: 0, n: 0, v: e, a: d, f: d.bind(e, 4), d: function d(t, r) { return i = t, c = 0, u = e, G.n = r, a; } }; function d(r, n) { for (c = r, u = n, t = 0; !y && f && !o && t < p.length; t++) { var o, i = p[t], d = G.p, l = i[2]; r > 3 ? (o = l === n) && (u = i[(c = i[4]) ? 5 : (c = 3, 3)], i[4] = i[5] = e) : i[0] <= d && ((o = r < 2 && d < i[1]) ? (c = 0, G.v = n, G.n = i[1]) : d < l && (o = r < 3 || i[0] > n || n > l) && (i[4] = r, i[5] = n, G.n = l, c = 0)); } if (o || r > 1) return a; throw y = !0, n; } return function (o, p, l) { if (f > 1) throw TypeError("Generator is already running"); for (y && 1 === p && d(p, l), c = p, u = l; (t = c < 2 ? e : u) || !y;) { i || (c ? c < 3 ? (c > 1 && (G.n = -1), d(c, u)) : G.n = u : G.v = u); try { if (f = 2, i) { if (c || (o = "next"), t = i[o]) { if (!(t = t.call(i, u))) throw TypeError("iterator result is not an object"); if (!t.done) return t; u = t.value, c < 2 && (c = 0); } else 1 === c && (t = i.return) && t.call(i), c < 2 && (u = TypeError("The iterator does not provide a '" + o + "' method"), c = 1); i = e; } else if ((t = (y = G.n < 0) ? u : r.call(n, G)) !== a) break; } catch (t) { i = e, c = 1, u = t; } finally { f = 1; } } return { value: t, done: y }; }; }(r, o, i), !0), u; } var a = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} t = Object.getPrototypeOf; var c = [][n] ? t(t([][n]())) : (_regeneratorDefine2(t = {}, n, function () { return this; }), t), u = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(c); function f(e) { return Object.setPrototypeOf ? Object.setPrototypeOf(e, GeneratorFunctionPrototype) : (e.__proto__ = GeneratorFunctionPrototype, _regeneratorDefine2(e, o, "GeneratorFunction")), e.prototype = Object.create(u), e; } return GeneratorFunction.prototype = GeneratorFunctionPrototype, _regeneratorDefine2(u, "constructor", GeneratorFunctionPrototype), _regeneratorDefine2(GeneratorFunctionPrototype, "constructor", GeneratorFunction), GeneratorFunction.displayName = "GeneratorFunction", _regeneratorDefine2(GeneratorFunctionPrototype, o, "GeneratorFunction"), _regeneratorDefine2(u), _regeneratorDefine2(u, o, "Generator"), _regeneratorDefine2(u, n, function () { return this; }), _regeneratorDefine2(u, "toString", function () { return "[object Generator]"; }), (_regenerator = function _regenerator() { return { w: i, m: f }; })(); }
+function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
 function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
 function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
 function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, { value: t, enumerable: !0, configurable: !0, writable: !0 }) : e[r] = t, e; }
-function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/babel/babel/blob/main/packages/babel-helpers/LICENSE */ var e, t, r = "function" == typeof Symbol ? Symbol : {}, n = r.iterator || "@@iterator", o = r.toStringTag || "@@toStringTag"; function i(r, n, o, i) { var c = n && n.prototype instanceof Generator ? n : Generator, u = Object.create(c.prototype); return _regeneratorDefine2(u, "_invoke", function (r, n, o) { var i, c, u, f = 0, p = o || [], y = !1, G = { p: 0, n: 0, v: e, a: d, f: d.bind(e, 4), d: function d(t, r) { return i = t, c = 0, u = e, G.n = r, a; } }; function d(r, n) { for (c = r, u = n, t = 0; !y && f && !o && t < p.length; t++) { var o, i = p[t], d = G.p, l = i[2]; r > 3 ? (o = l === n) && (u = i[(c = i[4]) ? 5 : (c = 3, 3)], i[4] = i[5] = e) : i[0] <= d && ((o = r < 2 && d < i[1]) ? (c = 0, G.v = n, G.n = i[1]) : d < l && (o = r < 3 || i[0] > n || n > l) && (i[4] = r, i[5] = n, G.n = l, c = 0)); } if (o || r > 1) return a; throw y = !0, n; } return function (o, p, l) { if (f > 1) throw TypeError("Generator is already running"); for (y && 1 === p && d(p, l), c = p, u = l; (t = c < 2 ? e : u) || !y;) { i || (c ? c < 3 ? (c > 1 && (G.n = -1), d(c, u)) : G.n = u : G.v = u); try { if (f = 2, i) { if (c || (o = "next"), t = i[o]) { if (!(t = t.call(i, u))) throw TypeError("iterator result is not an object"); if (!t.done) return t; u = t.value, c < 2 && (c = 0); } else 1 === c && (t = i.return) && t.call(i), c < 2 && (u = TypeError("The iterator does not provide a '" + o + "' method"), c = 1); i = e; } else if ((t = (y = G.n < 0) ? u : r.call(n, G)) !== a) break; } catch (t) { i = e, c = 1, u = t; } finally { f = 1; } } return { value: t, done: y }; }; }(r, o, i), !0), u; } var a = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} t = Object.getPrototypeOf; var c = [][n] ? t(t([][n]())) : (_regeneratorDefine2(t = {}, n, function () { return this; }), t), u = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(c); function f(e) { return Object.setPrototypeOf ? Object.setPrototypeOf(e, GeneratorFunctionPrototype) : (e.__proto__ = GeneratorFunctionPrototype, _regeneratorDefine2(e, o, "GeneratorFunction")), e.prototype = Object.create(u), e; } return GeneratorFunction.prototype = GeneratorFunctionPrototype, _regeneratorDefine2(u, "constructor", GeneratorFunctionPrototype), _regeneratorDefine2(GeneratorFunctionPrototype, "constructor", GeneratorFunction), GeneratorFunction.displayName = "GeneratorFunction", _regeneratorDefine2(GeneratorFunctionPrototype, o, "GeneratorFunction"), _regeneratorDefine2(u), _regeneratorDefine2(u, o, "Generator"), _regeneratorDefine2(u, n, function () { return this; }), _regeneratorDefine2(u, "toString", function () { return "[object Generator]"; }), (_regenerator = function _regenerator() { return { w: i, m: f }; })(); }
-function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
+function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
+function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
+function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
+function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
+function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
 function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
 function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
 function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t.return || t.return(); } finally { if (u) throw o; } } }; }
@@ -8644,6 +8648,83 @@ function isRetryableError(info) {
 function requiresApiKey(url) {
   return typeof url === "string" && /gpu-proc1\.cjvt\.si/i.test(url);
 }
+var DOT_GUARD_PLACEHOLDER = "\uE000";
+var DOT_GUARD_PATTERNS = [/\b(?:(?:[A-Za-z\xAA\xB5\xBA\xC0-\xD6\xD8-\xF6\xF8-\u02C1\u02C6-\u02D1\u02E0-\u02E4\u02EC\u02EE\u0370-\u0374\u0376\u0377\u037A-\u037D\u037F\u0386\u0388-\u038A\u038C\u038E-\u03A1\u03A3-\u03F5\u03F7-\u0481\u048A-\u052F\u0531-\u0556\u0559\u0560-\u0588\u05D0-\u05EA\u05EF-\u05F2\u0620-\u064A\u066E\u066F\u0671-\u06D3\u06D5\u06E5\u06E6\u06EE\u06EF\u06FA-\u06FC\u06FF\u0710\u0712-\u072F\u074D-\u07A5\u07B1\u07CA-\u07EA\u07F4\u07F5\u07FA\u0800-\u0815\u081A\u0824\u0828\u0840-\u0858\u0860-\u086A\u0870-\u0887\u0889-\u088F\u08A0-\u08C9\u0904-\u0939\u093D\u0950\u0958-\u0961\u0971-\u0980\u0985-\u098C\u098F\u0990\u0993-\u09A8\u09AA-\u09B0\u09B2\u09B6-\u09B9\u09BD\u09CE\u09DC\u09DD\u09DF-\u09E1\u09F0\u09F1\u09FC\u0A05-\u0A0A\u0A0F\u0A10\u0A13-\u0A28\u0A2A-\u0A30\u0A32\u0A33\u0A35\u0A36\u0A38\u0A39\u0A59-\u0A5C\u0A5E\u0A72-\u0A74\u0A85-\u0A8D\u0A8F-\u0A91\u0A93-\u0AA8\u0AAA-\u0AB0\u0AB2\u0AB3\u0AB5-\u0AB9\u0ABD\u0AD0\u0AE0\u0AE1\u0AF9\u0B05-\u0B0C\u0B0F\u0B10\u0B13-\u0B28\u0B2A-\u0B30\u0B32\u0B33\u0B35-\u0B39\u0B3D\u0B5C\u0B5D\u0B5F-\u0B61\u0B71\u0B83\u0B85-\u0B8A\u0B8E-\u0B90\u0B92-\u0B95\u0B99\u0B9A\u0B9C\u0B9E\u0B9F\u0BA3\u0BA4\u0BA8-\u0BAA\u0BAE-\u0BB9\u0BD0\u0C05-\u0C0C\u0C0E-\u0C10\u0C12-\u0C28\u0C2A-\u0C39\u0C3D\u0C58-\u0C5A\u0C5C\u0C5D\u0C60\u0C61\u0C80\u0C85-\u0C8C\u0C8E-\u0C90\u0C92-\u0CA8\u0CAA-\u0CB3\u0CB5-\u0CB9\u0CBD\u0CDC-\u0CDE\u0CE0\u0CE1\u0CF1\u0CF2\u0D04-\u0D0C\u0D0E-\u0D10\u0D12-\u0D3A\u0D3D\u0D4E\u0D54-\u0D56\u0D5F-\u0D61\u0D7A-\u0D7F\u0D85-\u0D96\u0D9A-\u0DB1\u0DB3-\u0DBB\u0DBD\u0DC0-\u0DC6\u0E01-\u0E30\u0E32\u0E33\u0E40-\u0E46\u0E81\u0E82\u0E84\u0E86-\u0E8A\u0E8C-\u0EA3\u0EA5\u0EA7-\u0EB0\u0EB2\u0EB3\u0EBD\u0EC0-\u0EC4\u0EC6\u0EDC-\u0EDF\u0F00\u0F40-\u0F47\u0F49-\u0F6C\u0F88-\u0F8C\u1000-\u102A\u103F\u1050-\u1055\u105A-\u105D\u1061\u1065\u1066\u106E-\u1070\u1075-\u1081\u108E\u10A0-\u10C5\u10C7\u10CD\u10D0-\u10FA\u10FC-\u1248\u124A-\u124D\u1250-\u1256\u1258\u125A-\u125D\u1260-\u1288\u128A-\u128D\u1290-\u12B0\u12B2-\u12B5\u12B8-\u12BE\u12C0\u12C2-\u12C5\u12C8-\u12D6\u12D8-\u1310\u1312-\u1315\u1318-\u135A\u1380-\u138F\u13A0-\u13F5\u13F8-\u13FD\u1401-\u166C\u166F-\u167F\u1681-\u169A\u16A0-\u16EA\u16F1-\u16F8\u1700-\u1711\u171F-\u1731\u1740-\u1751\u1760-\u176C\u176E-\u1770\u1780-\u17B3\u17D7\u17DC\u1820-\u1878\u1880-\u1884\u1887-\u18A8\u18AA\u18B0-\u18F5\u1900-\u191E\u1950-\u196D\u1970-\u1974\u1980-\u19AB\u19B0-\u19C9\u1A00-\u1A16\u1A20-\u1A54\u1AA7\u1B05-\u1B33\u1B45-\u1B4C\u1B83-\u1BA0\u1BAE\u1BAF\u1BBA-\u1BE5\u1C00-\u1C23\u1C4D-\u1C4F\u1C5A-\u1C7D\u1C80-\u1C8A\u1C90-\u1CBA\u1CBD-\u1CBF\u1CE9-\u1CEC\u1CEE-\u1CF3\u1CF5\u1CF6\u1CFA\u1D00-\u1DBF\u1E00-\u1F15\u1F18-\u1F1D\u1F20-\u1F45\u1F48-\u1F4D\u1F50-\u1F57\u1F59\u1F5B\u1F5D\u1F5F-\u1F7D\u1F80-\u1FB4\u1FB6-\u1FBC\u1FBE\u1FC2-\u1FC4\u1FC6-\u1FCC\u1FD0-\u1FD3\u1FD6-\u1FDB\u1FE0-\u1FEC\u1FF2-\u1FF4\u1FF6-\u1FFC\u2071\u207F\u2090-\u209C\u2102\u2107\u210A-\u2113\u2115\u2119-\u211D\u2124\u2126\u2128\u212A-\u212D\u212F-\u2139\u213C-\u213F\u2145-\u2149\u214E\u2183\u2184\u2C00-\u2CE4\u2CEB-\u2CEE\u2CF2\u2CF3\u2D00-\u2D25\u2D27\u2D2D\u2D30-\u2D67\u2D6F\u2D80-\u2D96\u2DA0-\u2DA6\u2DA8-\u2DAE\u2DB0-\u2DB6\u2DB8-\u2DBE\u2DC0-\u2DC6\u2DC8-\u2DCE\u2DD0-\u2DD6\u2DD8-\u2DDE\u2E2F\u3005\u3006\u3031-\u3035\u303B\u303C\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3105-\u312F\u3131-\u318E\u31A0-\u31BF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\uA48C\uA4D0-\uA4FD\uA500-\uA60C\uA610-\uA61F\uA62A\uA62B\uA640-\uA66E\uA67F-\uA69D\uA6A0-\uA6E5\uA717-\uA71F\uA722-\uA788\uA78B-\uA7DC\uA7F1-\uA801\uA803-\uA805\uA807-\uA80A\uA80C-\uA822\uA840-\uA873\uA882-\uA8B3\uA8F2-\uA8F7\uA8FB\uA8FD\uA8FE\uA90A-\uA925\uA930-\uA946\uA960-\uA97C\uA984-\uA9B2\uA9CF\uA9E0-\uA9E4\uA9E6-\uA9EF\uA9FA-\uA9FE\uAA00-\uAA28\uAA40-\uAA42\uAA44-\uAA4B\uAA60-\uAA76\uAA7A\uAA7E-\uAAAF\uAAB1\uAAB5\uAAB6\uAAB9-\uAABD\uAAC0\uAAC2\uAADB-\uAADD\uAAE0-\uAAEA\uAAF2-\uAAF4\uAB01-\uAB06\uAB09-\uAB0E\uAB11-\uAB16\uAB20-\uAB26\uAB28-\uAB2E\uAB30-\uAB5A\uAB5C-\uAB69\uAB70-\uABE2\uAC00-\uD7A3\uD7B0-\uD7C6\uD7CB-\uD7FB\uF900-\uFA6D\uFA70-\uFAD9\uFB00-\uFB06\uFB13-\uFB17\uFB1D\uFB1F-\uFB28\uFB2A-\uFB36\uFB38-\uFB3C\uFB3E\uFB40\uFB41\uFB43\uFB44\uFB46-\uFBB1\uFBD3-\uFD3D\uFD50-\uFD8F\uFD92-\uFDC7\uFDF0-\uFDFB\uFE70-\uFE74\uFE76-\uFEFC\uFF21-\uFF3A\uFF41-\uFF5A\uFF66-\uFFBE\uFFC2-\uFFC7\uFFCA-\uFFCF\uFFD2-\uFFD7\uFFDA-\uFFDC]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26\uDC28-\uDC3A\uDC3C\uDC3D\uDC3F-\uDC4D\uDC50-\uDC5D\uDC80-\uDCFA\uDE80-\uDE9C\uDEA0-\uDED0\uDF00-\uDF1F\uDF2D-\uDF40\uDF42-\uDF49\uDF50-\uDF75\uDF80-\uDF9D\uDFA0-\uDFC3\uDFC8-\uDFCF]|\uD801[\uDC00-\uDC9D\uDCB0-\uDCD3\uDCD8-\uDCFB\uDD00-\uDD27\uDD30-\uDD63\uDD70-\uDD7A\uDD7C-\uDD8A\uDD8C-\uDD92\uDD94\uDD95\uDD97-\uDDA1\uDDA3-\uDDB1\uDDB3-\uDDB9\uDDBB\uDDBC\uDDC0-\uDDF3\uDE00-\uDF36\uDF40-\uDF55\uDF60-\uDF67\uDF80-\uDF85\uDF87-\uDFB0\uDFB2-\uDFBA]|\uD802[\uDC00-\uDC05\uDC08\uDC0A-\uDC35\uDC37\uDC38\uDC3C\uDC3F-\uDC55\uDC60-\uDC76\uDC80-\uDC9E\uDCE0-\uDCF2\uDCF4\uDCF5\uDD00-\uDD15\uDD20-\uDD39\uDD40-\uDD59\uDD80-\uDDB7\uDDBE\uDDBF\uDE00\uDE10-\uDE13\uDE15-\uDE17\uDE19-\uDE35\uDE60-\uDE7C\uDE80-\uDE9C\uDEC0-\uDEC7\uDEC9-\uDEE4\uDF00-\uDF35\uDF40-\uDF55\uDF60-\uDF72\uDF80-\uDF91]|\uD803[\uDC00-\uDC48\uDC80-\uDCB2\uDCC0-\uDCF2\uDD00-\uDD23\uDD4A-\uDD65\uDD6F-\uDD85\uDE80-\uDEA9\uDEB0\uDEB1\uDEC2-\uDEC7\uDF00-\uDF1C\uDF27\uDF30-\uDF45\uDF70-\uDF81\uDFB0-\uDFC4\uDFE0-\uDFF6]|\uD804[\uDC03-\uDC37\uDC71\uDC72\uDC75\uDC83-\uDCAF\uDCD0-\uDCE8\uDD03-\uDD26\uDD44\uDD47\uDD50-\uDD72\uDD76\uDD83-\uDDB2\uDDC1-\uDDC4\uDDDA\uDDDC\uDE00-\uDE11\uDE13-\uDE2B\uDE3F\uDE40\uDE80-\uDE86\uDE88\uDE8A-\uDE8D\uDE8F-\uDE9D\uDE9F-\uDEA8\uDEB0-\uDEDE\uDF05-\uDF0C\uDF0F\uDF10\uDF13-\uDF28\uDF2A-\uDF30\uDF32\uDF33\uDF35-\uDF39\uDF3D\uDF50\uDF5D-\uDF61\uDF80-\uDF89\uDF8B\uDF8E\uDF90-\uDFB5\uDFB7\uDFD1\uDFD3]|\uD805[\uDC00-\uDC34\uDC47-\uDC4A\uDC5F-\uDC61\uDC80-\uDCAF\uDCC4\uDCC5\uDCC7\uDD80-\uDDAE\uDDD8-\uDDDB\uDE00-\uDE2F\uDE44\uDE80-\uDEAA\uDEB8\uDF00-\uDF1A\uDF40-\uDF46]|\uD806[\uDC00-\uDC2B\uDCA0-\uDCDF\uDCFF-\uDD06\uDD09\uDD0C-\uDD13\uDD15\uDD16\uDD18-\uDD2F\uDD3F\uDD41\uDDA0-\uDDA7\uDDAA-\uDDD0\uDDE1\uDDE3\uDE00\uDE0B-\uDE32\uDE3A\uDE50\uDE5C-\uDE89\uDE9D\uDEB0-\uDEF8\uDFC0-\uDFE0]|\uD807[\uDC00-\uDC08\uDC0A-\uDC2E\uDC40\uDC72-\uDC8F\uDD00-\uDD06\uDD08\uDD09\uDD0B-\uDD30\uDD46\uDD60-\uDD65\uDD67\uDD68\uDD6A-\uDD89\uDD98\uDDB0-\uDDDB\uDEE0-\uDEF2\uDF02\uDF04-\uDF10\uDF12-\uDF33\uDFB0]|\uD808[\uDC00-\uDF99]|\uD809[\uDC80-\uDD43]|\uD80B[\uDF90-\uDFF0]|[\uD80C\uD80E\uD80F\uD81C-\uD822\uD840-\uD868\uD86A-\uD86D\uD86F-\uD872\uD874-\uD879\uD880-\uD883\uD885-\uD88C][\uDC00-\uDFFF]|\uD80D[\uDC00-\uDC2F\uDC41-\uDC46\uDC60-\uDFFF]|\uD810[\uDC00-\uDFFA]|\uD811[\uDC00-\uDE46]|\uD818[\uDD00-\uDD1D]|\uD81A[\uDC00-\uDE38\uDE40-\uDE5E\uDE70-\uDEBE\uDED0-\uDEED\uDF00-\uDF2F\uDF40-\uDF43\uDF63-\uDF77\uDF7D-\uDF8F]|\uD81B[\uDD40-\uDD6C\uDE40-\uDE7F\uDEA0-\uDEB8\uDEBB-\uDED3\uDF00-\uDF4A\uDF50\uDF93-\uDF9F\uDFE0\uDFE1\uDFE3\uDFF2\uDFF3]|\uD823[\uDC00-\uDCD5\uDCFF-\uDD1E\uDD80-\uDDF2]|\uD82B[\uDFF0-\uDFF3\uDFF5-\uDFFB\uDFFD\uDFFE]|\uD82C[\uDC00-\uDD22\uDD32\uDD50-\uDD52\uDD55\uDD64-\uDD67\uDD70-\uDEFB]|\uD82F[\uDC00-\uDC6A\uDC70-\uDC7C\uDC80-\uDC88\uDC90-\uDC99]|\uD835[\uDC00-\uDC54\uDC56-\uDC9C\uDC9E\uDC9F\uDCA2\uDCA5\uDCA6\uDCA9-\uDCAC\uDCAE-\uDCB9\uDCBB\uDCBD-\uDCC3\uDCC5-\uDD05\uDD07-\uDD0A\uDD0D-\uDD14\uDD16-\uDD1C\uDD1E-\uDD39\uDD3B-\uDD3E\uDD40-\uDD44\uDD46\uDD4A-\uDD50\uDD52-\uDEA5\uDEA8-\uDEC0\uDEC2-\uDEDA\uDEDC-\uDEFA\uDEFC-\uDF14\uDF16-\uDF34\uDF36-\uDF4E\uDF50-\uDF6E\uDF70-\uDF88\uDF8A-\uDFA8\uDFAA-\uDFC2\uDFC4-\uDFCB]|\uD837[\uDF00-\uDF1E\uDF25-\uDF2A]|\uD838[\uDC30-\uDC6D\uDD00-\uDD2C\uDD37-\uDD3D\uDD4E\uDE90-\uDEAD\uDEC0-\uDEEB]|\uD839[\uDCD0-\uDCEB\uDDD0-\uDDED\uDDF0\uDEC0-\uDEDE\uDEE0-\uDEE2\uDEE4\uDEE5\uDEE7-\uDEED\uDEF0-\uDEF4\uDEFE\uDEFF\uDFE0-\uDFE6\uDFE8-\uDFEB\uDFED\uDFEE\uDFF0-\uDFFE]|\uD83A[\uDC00-\uDCC4\uDD00-\uDD43\uDD4B]|\uD83B[\uDE00-\uDE03\uDE05-\uDE1F\uDE21\uDE22\uDE24\uDE27\uDE29-\uDE32\uDE34-\uDE37\uDE39\uDE3B\uDE42\uDE47\uDE49\uDE4B\uDE4D-\uDE4F\uDE51\uDE52\uDE54\uDE57\uDE59\uDE5B\uDE5D\uDE5F\uDE61\uDE62\uDE64\uDE67-\uDE6A\uDE6C-\uDE72\uDE74-\uDE77\uDE79-\uDE7C\uDE7E\uDE80-\uDE89\uDE8B-\uDE9B\uDEA1-\uDEA3\uDEA5-\uDEA9\uDEAB-\uDEBB]|\uD869[\uDC00-\uDEDF\uDF00-\uDFFF]|\uD86E[\uDC00-\uDC1D\uDC20-\uDFFF]|\uD873[\uDC00-\uDEAD\uDEB0-\uDFFF]|\uD87A[\uDC00-\uDFE0\uDFF0-\uDFFF]|\uD87B[\uDC00-\uDE5D]|\uD87E[\uDC00-\uDE1D]|\uD884[\uDC00-\uDF4A\uDF50-\uDFFF]|\uD88D[\uDC00-\uDC79])\.[\t-\r \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*){2,}/g, /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g, /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|go[s\u017F]|prim)\./gi];
+function hasProblematicDotPattern() {
+  var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
+  if (typeof text !== "string" || !text) return false;
+  var _iterator2 = _createForOfIteratorHelper(DOT_GUARD_PATTERNS),
+    _step2;
+  try {
+    for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
+      var pattern = _step2.value;
+      pattern.lastIndex = 0;
+      if (pattern.test(text)) return true;
+    }
+  } catch (err) {
+    _iterator2.e(err);
+  } finally {
+    _iterator2.f();
+  }
+  return false;
+}
+function protectProblematicDots() {
+  var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
+  if (typeof text !== "string" || !text) return text;
+  var protectedText = text;
+  var _iterator3 = _createForOfIteratorHelper(DOT_GUARD_PATTERNS),
+    _step3;
+  try {
+    for (_iterator3.s(); !(_step3 = _iterator3.n()).done;) {
+      var pattern = _step3.value;
+      protectedText = protectedText.replace(pattern, function (match) {
+        return match.replace(/\./g, DOT_GUARD_PLACEHOLDER);
+      });
+    }
+  } catch (err) {
+    _iterator3.e(err);
+  } finally {
+    _iterator3.f();
+  }
+  return protectedText;
+}
+function unprotectText(text) {
+  if (typeof text !== "string" || !text) return text;
+  return text.replace(new RegExp(DOT_GUARD_PLACEHOLDER, "g"), ".");
+}
+function unprotectStringsDeep(value) {
+  if (typeof value === "string") return unprotectText(value);
+  if (Array.isArray(value)) return value.map(function (item) {
+    return unprotectStringsDeep(item);
+  });
+  if (!value || _typeof(value) !== "object") return value;
+  var out = {};
+  for (var _i = 0, _Object$entries = Object.entries(value); _i < _Object$entries.length; _i++) {
+    var _Object$entries$_i = _slicedToArray(_Object$entries[_i], 2),
+      key = _Object$entries$_i[0],
+      val = _Object$entries$_i[1];
+    out[key] = unprotectStringsDeep(val);
+  }
+  return out;
+}
+function normalizeResponsePayload(inputSentence, payload) {
+  var raw = unprotectStringsDeep(_objectSpread({}, payload || {}));
+  var correctedText = unprotectText(pickCorrectedText(inputSentence, raw));
+  if (typeof raw.source_text !== "string") raw.source_text = inputSentence;
+  if (typeof raw.target_text !== "string") raw.target_text = correctedText;
+  return {
+    correctedText: correctedText,
+    raw: raw
+  };
+}
+function buildRequestData(sentence) {
+  return {
+    vhodna_poved: sentence,
+    hkratne_napovedi: true,
+    "ne_ozna\u010Di_imen": false,
+    "prepri\u010Danost_modela": 0.08
+  };
+}
 function requestPopravek(_x) {
   return _requestPopravek.apply(this, arguments);
 }
@@ -8653,7 +8734,7 @@ function requestPopravek(_x) {
  */
 function _requestPopravek() {
   _requestPopravek = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(poved) {
-    var url, data, config, attempts, attempt, _performance$now, _performance, _performance$now2, t0, _poved$length, _performance$now3, _performance2, _performance2$now, r, t1, raw, correctedText, _performance$now4, _performance3, _performance3$now, _t, durationMs, info, retryable, delay, _t2;
+    var url, data, config, attempts, protectedRetryUsed, attempt, _performance$now, _performance, _performance$now2, t0, _poved$length, _performance$now3, _performance2, _performance2$now, r, t1, _normalizeResponsePay, correctedText, raw, _performance$now4, _performance3, _performance3$now, _t, durationMs, info, canTryProtectedDots, protectedSentence, _poved$length2, protectedData, protectedResponse, _normalizeResponsePay2, _correctedText, _raw, protectedInfo, retryable, delay, _t2, _t3;
     return _regenerator().w(function (_context2) {
       while (1) switch (_context2.p = _context2.n) {
         case 0:
@@ -8677,12 +8758,7 @@ function _requestPopravek() {
           throw new VejiceApiError("Missing VEJICE_API_KEY configuration");
         case 3:
           url = API_URL;
-          data = {
-            vhodna_poved: poved,
-            hkratne_napovedi: true,
-            ne_označi_imen: false,
-            prepričanost_modela: 0.08
-          };
+          data = buildRequestData(poved);
           config = {
             headers: {
               "Content-Type": "application/json",
@@ -8695,10 +8771,11 @@ function _requestPopravek() {
             config.headers["X-API-KEY"] = API_KEY;
           }
           attempts = Math.max(1, API_MAX_ATTEMPTS);
+          protectedRetryUsed = false;
           attempt = 1;
         case 4:
           if (!(attempt <= attempts)) {
-            _context2.n = 11;
+            _context2.n = 16;
             break;
           }
           t0 = (_performance$now = (_performance = performance) === null || _performance === void 0 || (_performance$now2 = _performance.now) === null || _performance$now2 === void 0 ? void 0 : _performance$now2.call(_performance)) !== null && _performance$now !== void 0 ? _performance$now : Date.now();
@@ -8709,10 +8786,7 @@ function _requestPopravek() {
         case 6:
           r = _context2.v;
           t1 = (_performance$now3 = (_performance2 = performance) === null || _performance2 === void 0 || (_performance2$now = _performance2.now) === null || _performance2$now === void 0 ? void 0 : _performance2$now.call(_performance2)) !== null && _performance$now3 !== void 0 ? _performance$now3 : Date.now();
-          raw = _objectSpread({}, (r === null || r === void 0 ? void 0 : r.data) || {});
-          correctedText = pickCorrectedText(poved, raw);
-          if (typeof raw.source_text !== "string") raw.source_text = poved;
-          if (typeof raw.target_text !== "string") raw.target_text = correctedText;
+          _normalizeResponsePay = normalizeResponsePayload(poved, r === null || r === void 0 ? void 0 : r.data), correctedText = _normalizeResponsePay.correctedText, raw = _normalizeResponsePay.raw;
           log("OK", "".concat(Math.round(t1 - t0), " ms"), "| status:", r === null || r === void 0 ? void 0 : r.status, "| changed:", correctedText !== poved, "| keys:", raw && Object.keys(raw), "| sourceTokens:", Array.isArray(raw === null || raw === void 0 ? void 0 : raw.source_tokens) ? raw.source_tokens.length : 0, "| targetTokens:", Array.isArray(raw === null || raw === void 0 ? void 0 : raw.target_tokens) ? raw.target_tokens.length : 0, "| attempt:", attempt);
           return _context2.a(2, {
             correctedText: correctedText,
@@ -8724,36 +8798,75 @@ function _requestPopravek() {
           _t = (_performance$now4 = (_performance3 = performance) === null || _performance3 === void 0 || (_performance3$now = _performance3.now) === null || _performance3$now === void 0 ? void 0 : _performance3$now.call(_performance3)) !== null && _performance$now4 !== void 0 ? _performance$now4 : Date.now();
           durationMs = Math.round(_t - t0);
           info = describeAxiosError(_t2);
+          canTryProtectedDots = !protectedRetryUsed && !USE_MOCK && typeof (info === null || info === void 0 ? void 0 : info.status) === "number" && info.status >= 500 && hasProblematicDotPattern(poved);
+          if (!canTryProtectedDots) {
+            _context2.n = 12;
+            break;
+          }
+          protectedRetryUsed = true;
+          _context2.p = 8;
+          protectedSentence = protectProblematicDots(poved);
+          if (!(protectedSentence !== poved)) {
+            _context2.n = 10;
+            break;
+          }
+          log("Retrying once with dot-protected payload", {
+            attempt: attempt,
+            len: (_poved$length2 = poved === null || poved === void 0 ? void 0 : poved.length) !== null && _poved$length2 !== void 0 ? _poved$length2 : 0,
+            snippet: snip(poved)
+          });
+          protectedData = buildRequestData(protectedSentence);
+          _context2.n = 9;
+          return axios__WEBPACK_IMPORTED_MODULE_0__["default"].post(url, protectedData, config);
+        case 9:
+          protectedResponse = _context2.v;
+          _normalizeResponsePay2 = normalizeResponsePayload(poved, protectedResponse === null || protectedResponse === void 0 ? void 0 : protectedResponse.data), _correctedText = _normalizeResponsePay2.correctedText, _raw = _normalizeResponsePay2.raw;
+          log("OK (dot-protected)", "| status:", protectedResponse === null || protectedResponse === void 0 ? void 0 : protectedResponse.status, "| changed:", _correctedText !== poved);
+          return _context2.a(2, {
+            correctedText: _correctedText,
+            raw: _raw
+          });
+        case 10:
+          _context2.n = 12;
+          break;
+        case 11:
+          _context2.p = 11;
+          _t3 = _context2.v;
+          protectedInfo = describeAxiosError(_t3);
+          log("ERROR (dot-protected)", _objectSpread(_objectSpread({}, protectedInfo), {}, {
+            attempt: attempt
+          }));
+        case 12:
           retryable = attempt < attempts && isRetryableError(info);
           log("ERROR", "".concat(durationMs, " ms"), _objectSpread(_objectSpread({}, info), {}, {
             attempt: attempt,
             retryable: retryable
           }));
           if (!retryable) {
-            _context2.n = 9;
+            _context2.n = 14;
             break;
           }
           delay = API_RETRY_DELAY_MS * attempt;
           log("Retrying Vejice API request in", delay, "ms");
-          _context2.n = 8;
+          _context2.n = 13;
           return delayMs(delay);
-        case 8:
-          return _context2.a(3, 10);
-        case 9:
+        case 13:
+          return _context2.a(3, 15);
+        case 14:
           throw new VejiceApiError("Vejice API call failed", {
             durationMs: durationMs,
             info: info,
             attempt: attempt,
             cause: _t2
           });
-        case 10:
+        case 15:
           attempt++;
           _context2.n = 4;
           break;
-        case 11:
+        case 16:
           return _context2.a(2);
       }
-    }, _callee2, null, [[5, 7]]);
+    }, _callee2, null, [[8, 11], [5, 7]]);
   }));
   return _requestPopravek.apply(this, arguments);
 }
@@ -9240,9 +9353,12 @@ function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" 
 function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != _typeof(i)) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
 var WordDesktopAdapter = /*#__PURE__*/function () {
   function WordDesktopAdapter(_ref) {
-    var textBridge = _ref.textBridge;
+    var textBridge = _ref.textBridge,
+      _ref$trace = _ref.trace,
+      trace = _ref$trace === void 0 ? function () {} : _ref$trace;
     _classCallCheck(this, WordDesktopAdapter);
     this.textBridge = textBridge;
+    this.trace = trace;
   }
   return _createClass(WordDesktopAdapter, [{
     key: "getParagraphs",
@@ -9252,14 +9368,27 @@ var WordDesktopAdapter = /*#__PURE__*/function () {
         return _regenerator().w(function (_context) {
           while (1) switch (_context.n) {
             case 0:
-              paras = context.document.body.paragraphs;
-              paras.load("items/text");
+              // Win32 Word can fail on direct body.paragraphs in some document states.
+              // Using body range first is more stable across builds.
+              paras = context.document.body.getRange().paragraphs; // Desktop Word can throw on shorthand nested loads (e.g. "items/text"),
+              // so load items first, then load each paragraph text explicitly.
+              this.trace("DesktopAdapter:getParagraphs load(items) -> sync:start");
+              paras.load("items");
               _context.n = 1;
               return context.sync();
             case 1:
+              this.trace("DesktopAdapter:getParagraphs load(items) -> sync:done", paras.items.length);
+              this.trace("DesktopAdapter:getParagraphs load(item.text) -> sync:start");
+              paras.items.forEach(function (p) {
+                return p.load("text");
+              });
+              _context.n = 2;
+              return context.sync();
+            case 2:
+              this.trace("DesktopAdapter:getParagraphs load(item.text) -> sync:done");
               return _context.a(2, paras);
           }
-        }, _callee);
+        }, _callee, this);
       }));
       function getParagraphs(_x) {
         return _getParagraphs.apply(this, arguments);
@@ -10182,9 +10311,11 @@ var DesktopTextBridge = /*#__PURE__*/function (_TextBridge) {
       applyDeleteSuggestion: applyDeleteSuggestion,
       forceSpacingCleanup: false,
       normalizationProfile: {
-        collapseWhitespace: true,
-        normalizeQuotes: true,
-        normalizeDashes: true,
+        // Keep desktop mapping as literal as possible; Win32 text offsets are
+        // sensitive to canonical rewrites and can drift with aggressive normalization.
+        collapseWhitespace: false,
+        normalizeQuotes: false,
+        normalizeDashes: false,
         normalizeEllipsis: false
       }
     }]);
@@ -10395,7 +10526,8 @@ function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e 
 
 
 var MAX_PARAGRAPH_CHARS = 3000;
-var PARAGRAPH_FIRST_MAX_CHARS = 1000;
+var PARAGRAPH_FIRST_MAX_CHARS = 1200;
+var MIN_CHUNK_MERGE_CHARS = 20;
 var TRAILING_COMMA_REGEX = /[,\s]+$/;
 var LOG_PREFIX = "[Vejice DEBUG DUMP]";
 var DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -10999,7 +11131,17 @@ function splitParagraphIntoChunks() {
     }];
   }
   var placeholder = "\uE000";
+  var protectDots = function protectDots(input, regex) {
+    return input.replace(regex, function (match) {
+      return match.replace(/\./g, placeholder);
+    });
+  };
+  // Protect dots in common abbreviation/date forms so sentence splitting
+  // doesn't break chunks like "K. M." or "25. 3. 2008".
   var protectedText = safeText;
+  protectedText = protectDots(protectedText, /\b(?:(?:[A-Za-z\xAA\xB5\xBA\xC0-\xD6\xD8-\xF6\xF8-\u02C1\u02C6-\u02D1\u02E0-\u02E4\u02EC\u02EE\u0370-\u0374\u0376\u0377\u037A-\u037D\u037F\u0386\u0388-\u038A\u038C\u038E-\u03A1\u03A3-\u03F5\u03F7-\u0481\u048A-\u052F\u0531-\u0556\u0559\u0560-\u0588\u05D0-\u05EA\u05EF-\u05F2\u0620-\u064A\u066E\u066F\u0671-\u06D3\u06D5\u06E5\u06E6\u06EE\u06EF\u06FA-\u06FC\u06FF\u0710\u0712-\u072F\u074D-\u07A5\u07B1\u07CA-\u07EA\u07F4\u07F5\u07FA\u0800-\u0815\u081A\u0824\u0828\u0840-\u0858\u0860-\u086A\u0870-\u0887\u0889-\u088F\u08A0-\u08C9\u0904-\u0939\u093D\u0950\u0958-\u0961\u0971-\u0980\u0985-\u098C\u098F\u0990\u0993-\u09A8\u09AA-\u09B0\u09B2\u09B6-\u09B9\u09BD\u09CE\u09DC\u09DD\u09DF-\u09E1\u09F0\u09F1\u09FC\u0A05-\u0A0A\u0A0F\u0A10\u0A13-\u0A28\u0A2A-\u0A30\u0A32\u0A33\u0A35\u0A36\u0A38\u0A39\u0A59-\u0A5C\u0A5E\u0A72-\u0A74\u0A85-\u0A8D\u0A8F-\u0A91\u0A93-\u0AA8\u0AAA-\u0AB0\u0AB2\u0AB3\u0AB5-\u0AB9\u0ABD\u0AD0\u0AE0\u0AE1\u0AF9\u0B05-\u0B0C\u0B0F\u0B10\u0B13-\u0B28\u0B2A-\u0B30\u0B32\u0B33\u0B35-\u0B39\u0B3D\u0B5C\u0B5D\u0B5F-\u0B61\u0B71\u0B83\u0B85-\u0B8A\u0B8E-\u0B90\u0B92-\u0B95\u0B99\u0B9A\u0B9C\u0B9E\u0B9F\u0BA3\u0BA4\u0BA8-\u0BAA\u0BAE-\u0BB9\u0BD0\u0C05-\u0C0C\u0C0E-\u0C10\u0C12-\u0C28\u0C2A-\u0C39\u0C3D\u0C58-\u0C5A\u0C5C\u0C5D\u0C60\u0C61\u0C80\u0C85-\u0C8C\u0C8E-\u0C90\u0C92-\u0CA8\u0CAA-\u0CB3\u0CB5-\u0CB9\u0CBD\u0CDC-\u0CDE\u0CE0\u0CE1\u0CF1\u0CF2\u0D04-\u0D0C\u0D0E-\u0D10\u0D12-\u0D3A\u0D3D\u0D4E\u0D54-\u0D56\u0D5F-\u0D61\u0D7A-\u0D7F\u0D85-\u0D96\u0D9A-\u0DB1\u0DB3-\u0DBB\u0DBD\u0DC0-\u0DC6\u0E01-\u0E30\u0E32\u0E33\u0E40-\u0E46\u0E81\u0E82\u0E84\u0E86-\u0E8A\u0E8C-\u0EA3\u0EA5\u0EA7-\u0EB0\u0EB2\u0EB3\u0EBD\u0EC0-\u0EC4\u0EC6\u0EDC-\u0EDF\u0F00\u0F40-\u0F47\u0F49-\u0F6C\u0F88-\u0F8C\u1000-\u102A\u103F\u1050-\u1055\u105A-\u105D\u1061\u1065\u1066\u106E-\u1070\u1075-\u1081\u108E\u10A0-\u10C5\u10C7\u10CD\u10D0-\u10FA\u10FC-\u1248\u124A-\u124D\u1250-\u1256\u1258\u125A-\u125D\u1260-\u1288\u128A-\u128D\u1290-\u12B0\u12B2-\u12B5\u12B8-\u12BE\u12C0\u12C2-\u12C5\u12C8-\u12D6\u12D8-\u1310\u1312-\u1315\u1318-\u135A\u1380-\u138F\u13A0-\u13F5\u13F8-\u13FD\u1401-\u166C\u166F-\u167F\u1681-\u169A\u16A0-\u16EA\u16F1-\u16F8\u1700-\u1711\u171F-\u1731\u1740-\u1751\u1760-\u176C\u176E-\u1770\u1780-\u17B3\u17D7\u17DC\u1820-\u1878\u1880-\u1884\u1887-\u18A8\u18AA\u18B0-\u18F5\u1900-\u191E\u1950-\u196D\u1970-\u1974\u1980-\u19AB\u19B0-\u19C9\u1A00-\u1A16\u1A20-\u1A54\u1AA7\u1B05-\u1B33\u1B45-\u1B4C\u1B83-\u1BA0\u1BAE\u1BAF\u1BBA-\u1BE5\u1C00-\u1C23\u1C4D-\u1C4F\u1C5A-\u1C7D\u1C80-\u1C8A\u1C90-\u1CBA\u1CBD-\u1CBF\u1CE9-\u1CEC\u1CEE-\u1CF3\u1CF5\u1CF6\u1CFA\u1D00-\u1DBF\u1E00-\u1F15\u1F18-\u1F1D\u1F20-\u1F45\u1F48-\u1F4D\u1F50-\u1F57\u1F59\u1F5B\u1F5D\u1F5F-\u1F7D\u1F80-\u1FB4\u1FB6-\u1FBC\u1FBE\u1FC2-\u1FC4\u1FC6-\u1FCC\u1FD0-\u1FD3\u1FD6-\u1FDB\u1FE0-\u1FEC\u1FF2-\u1FF4\u1FF6-\u1FFC\u2071\u207F\u2090-\u209C\u2102\u2107\u210A-\u2113\u2115\u2119-\u211D\u2124\u2126\u2128\u212A-\u212D\u212F-\u2139\u213C-\u213F\u2145-\u2149\u214E\u2183\u2184\u2C00-\u2CE4\u2CEB-\u2CEE\u2CF2\u2CF3\u2D00-\u2D25\u2D27\u2D2D\u2D30-\u2D67\u2D6F\u2D80-\u2D96\u2DA0-\u2DA6\u2DA8-\u2DAE\u2DB0-\u2DB6\u2DB8-\u2DBE\u2DC0-\u2DC6\u2DC8-\u2DCE\u2DD0-\u2DD6\u2DD8-\u2DDE\u2E2F\u3005\u3006\u3031-\u3035\u303B\u303C\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3105-\u312F\u3131-\u318E\u31A0-\u31BF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\uA48C\uA4D0-\uA4FD\uA500-\uA60C\uA610-\uA61F\uA62A\uA62B\uA640-\uA66E\uA67F-\uA69D\uA6A0-\uA6E5\uA717-\uA71F\uA722-\uA788\uA78B-\uA7DC\uA7F1-\uA801\uA803-\uA805\uA807-\uA80A\uA80C-\uA822\uA840-\uA873\uA882-\uA8B3\uA8F2-\uA8F7\uA8FB\uA8FD\uA8FE\uA90A-\uA925\uA930-\uA946\uA960-\uA97C\uA984-\uA9B2\uA9CF\uA9E0-\uA9E4\uA9E6-\uA9EF\uA9FA-\uA9FE\uAA00-\uAA28\uAA40-\uAA42\uAA44-\uAA4B\uAA60-\uAA76\uAA7A\uAA7E-\uAAAF\uAAB1\uAAB5\uAAB6\uAAB9-\uAABD\uAAC0\uAAC2\uAADB-\uAADD\uAAE0-\uAAEA\uAAF2-\uAAF4\uAB01-\uAB06\uAB09-\uAB0E\uAB11-\uAB16\uAB20-\uAB26\uAB28-\uAB2E\uAB30-\uAB5A\uAB5C-\uAB69\uAB70-\uABE2\uAC00-\uD7A3\uD7B0-\uD7C6\uD7CB-\uD7FB\uF900-\uFA6D\uFA70-\uFAD9\uFB00-\uFB06\uFB13-\uFB17\uFB1D\uFB1F-\uFB28\uFB2A-\uFB36\uFB38-\uFB3C\uFB3E\uFB40\uFB41\uFB43\uFB44\uFB46-\uFBB1\uFBD3-\uFD3D\uFD50-\uFD8F\uFD92-\uFDC7\uFDF0-\uFDFB\uFE70-\uFE74\uFE76-\uFEFC\uFF21-\uFF3A\uFF41-\uFF5A\uFF66-\uFFBE\uFFC2-\uFFC7\uFFCA-\uFFCF\uFFD2-\uFFD7\uFFDA-\uFFDC]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26\uDC28-\uDC3A\uDC3C\uDC3D\uDC3F-\uDC4D\uDC50-\uDC5D\uDC80-\uDCFA\uDE80-\uDE9C\uDEA0-\uDED0\uDF00-\uDF1F\uDF2D-\uDF40\uDF42-\uDF49\uDF50-\uDF75\uDF80-\uDF9D\uDFA0-\uDFC3\uDFC8-\uDFCF]|\uD801[\uDC00-\uDC9D\uDCB0-\uDCD3\uDCD8-\uDCFB\uDD00-\uDD27\uDD30-\uDD63\uDD70-\uDD7A\uDD7C-\uDD8A\uDD8C-\uDD92\uDD94\uDD95\uDD97-\uDDA1\uDDA3-\uDDB1\uDDB3-\uDDB9\uDDBB\uDDBC\uDDC0-\uDDF3\uDE00-\uDF36\uDF40-\uDF55\uDF60-\uDF67\uDF80-\uDF85\uDF87-\uDFB0\uDFB2-\uDFBA]|\uD802[\uDC00-\uDC05\uDC08\uDC0A-\uDC35\uDC37\uDC38\uDC3C\uDC3F-\uDC55\uDC60-\uDC76\uDC80-\uDC9E\uDCE0-\uDCF2\uDCF4\uDCF5\uDD00-\uDD15\uDD20-\uDD39\uDD40-\uDD59\uDD80-\uDDB7\uDDBE\uDDBF\uDE00\uDE10-\uDE13\uDE15-\uDE17\uDE19-\uDE35\uDE60-\uDE7C\uDE80-\uDE9C\uDEC0-\uDEC7\uDEC9-\uDEE4\uDF00-\uDF35\uDF40-\uDF55\uDF60-\uDF72\uDF80-\uDF91]|\uD803[\uDC00-\uDC48\uDC80-\uDCB2\uDCC0-\uDCF2\uDD00-\uDD23\uDD4A-\uDD65\uDD6F-\uDD85\uDE80-\uDEA9\uDEB0\uDEB1\uDEC2-\uDEC7\uDF00-\uDF1C\uDF27\uDF30-\uDF45\uDF70-\uDF81\uDFB0-\uDFC4\uDFE0-\uDFF6]|\uD804[\uDC03-\uDC37\uDC71\uDC72\uDC75\uDC83-\uDCAF\uDCD0-\uDCE8\uDD03-\uDD26\uDD44\uDD47\uDD50-\uDD72\uDD76\uDD83-\uDDB2\uDDC1-\uDDC4\uDDDA\uDDDC\uDE00-\uDE11\uDE13-\uDE2B\uDE3F\uDE40\uDE80-\uDE86\uDE88\uDE8A-\uDE8D\uDE8F-\uDE9D\uDE9F-\uDEA8\uDEB0-\uDEDE\uDF05-\uDF0C\uDF0F\uDF10\uDF13-\uDF28\uDF2A-\uDF30\uDF32\uDF33\uDF35-\uDF39\uDF3D\uDF50\uDF5D-\uDF61\uDF80-\uDF89\uDF8B\uDF8E\uDF90-\uDFB5\uDFB7\uDFD1\uDFD3]|\uD805[\uDC00-\uDC34\uDC47-\uDC4A\uDC5F-\uDC61\uDC80-\uDCAF\uDCC4\uDCC5\uDCC7\uDD80-\uDDAE\uDDD8-\uDDDB\uDE00-\uDE2F\uDE44\uDE80-\uDEAA\uDEB8\uDF00-\uDF1A\uDF40-\uDF46]|\uD806[\uDC00-\uDC2B\uDCA0-\uDCDF\uDCFF-\uDD06\uDD09\uDD0C-\uDD13\uDD15\uDD16\uDD18-\uDD2F\uDD3F\uDD41\uDDA0-\uDDA7\uDDAA-\uDDD0\uDDE1\uDDE3\uDE00\uDE0B-\uDE32\uDE3A\uDE50\uDE5C-\uDE89\uDE9D\uDEB0-\uDEF8\uDFC0-\uDFE0]|\uD807[\uDC00-\uDC08\uDC0A-\uDC2E\uDC40\uDC72-\uDC8F\uDD00-\uDD06\uDD08\uDD09\uDD0B-\uDD30\uDD46\uDD60-\uDD65\uDD67\uDD68\uDD6A-\uDD89\uDD98\uDDB0-\uDDDB\uDEE0-\uDEF2\uDF02\uDF04-\uDF10\uDF12-\uDF33\uDFB0]|\uD808[\uDC00-\uDF99]|\uD809[\uDC80-\uDD43]|\uD80B[\uDF90-\uDFF0]|[\uD80C\uD80E\uD80F\uD81C-\uD822\uD840-\uD868\uD86A-\uD86D\uD86F-\uD872\uD874-\uD879\uD880-\uD883\uD885-\uD88C][\uDC00-\uDFFF]|\uD80D[\uDC00-\uDC2F\uDC41-\uDC46\uDC60-\uDFFF]|\uD810[\uDC00-\uDFFA]|\uD811[\uDC00-\uDE46]|\uD818[\uDD00-\uDD1D]|\uD81A[\uDC00-\uDE38\uDE40-\uDE5E\uDE70-\uDEBE\uDED0-\uDEED\uDF00-\uDF2F\uDF40-\uDF43\uDF63-\uDF77\uDF7D-\uDF8F]|\uD81B[\uDD40-\uDD6C\uDE40-\uDE7F\uDEA0-\uDEB8\uDEBB-\uDED3\uDF00-\uDF4A\uDF50\uDF93-\uDF9F\uDFE0\uDFE1\uDFE3\uDFF2\uDFF3]|\uD823[\uDC00-\uDCD5\uDCFF-\uDD1E\uDD80-\uDDF2]|\uD82B[\uDFF0-\uDFF3\uDFF5-\uDFFB\uDFFD\uDFFE]|\uD82C[\uDC00-\uDD22\uDD32\uDD50-\uDD52\uDD55\uDD64-\uDD67\uDD70-\uDEFB]|\uD82F[\uDC00-\uDC6A\uDC70-\uDC7C\uDC80-\uDC88\uDC90-\uDC99]|\uD835[\uDC00-\uDC54\uDC56-\uDC9C\uDC9E\uDC9F\uDCA2\uDCA5\uDCA6\uDCA9-\uDCAC\uDCAE-\uDCB9\uDCBB\uDCBD-\uDCC3\uDCC5-\uDD05\uDD07-\uDD0A\uDD0D-\uDD14\uDD16-\uDD1C\uDD1E-\uDD39\uDD3B-\uDD3E\uDD40-\uDD44\uDD46\uDD4A-\uDD50\uDD52-\uDEA5\uDEA8-\uDEC0\uDEC2-\uDEDA\uDEDC-\uDEFA\uDEFC-\uDF14\uDF16-\uDF34\uDF36-\uDF4E\uDF50-\uDF6E\uDF70-\uDF88\uDF8A-\uDFA8\uDFAA-\uDFC2\uDFC4-\uDFCB]|\uD837[\uDF00-\uDF1E\uDF25-\uDF2A]|\uD838[\uDC30-\uDC6D\uDD00-\uDD2C\uDD37-\uDD3D\uDD4E\uDE90-\uDEAD\uDEC0-\uDEEB]|\uD839[\uDCD0-\uDCEB\uDDD0-\uDDED\uDDF0\uDEC0-\uDEDE\uDEE0-\uDEE2\uDEE4\uDEE5\uDEE7-\uDEED\uDEF0-\uDEF4\uDEFE\uDEFF\uDFE0-\uDFE6\uDFE8-\uDFEB\uDFED\uDFEE\uDFF0-\uDFFE]|\uD83A[\uDC00-\uDCC4\uDD00-\uDD43\uDD4B]|\uD83B[\uDE00-\uDE03\uDE05-\uDE1F\uDE21\uDE22\uDE24\uDE27\uDE29-\uDE32\uDE34-\uDE37\uDE39\uDE3B\uDE42\uDE47\uDE49\uDE4B\uDE4D-\uDE4F\uDE51\uDE52\uDE54\uDE57\uDE59\uDE5B\uDE5D\uDE5F\uDE61\uDE62\uDE64\uDE67-\uDE6A\uDE6C-\uDE72\uDE74-\uDE77\uDE79-\uDE7C\uDE7E\uDE80-\uDE89\uDE8B-\uDE9B\uDEA1-\uDEA3\uDEA5-\uDEA9\uDEAB-\uDEBB]|\uD869[\uDC00-\uDEDF\uDF00-\uDFFF]|\uD86E[\uDC00-\uDC1D\uDC20-\uDFFF]|\uD873[\uDC00-\uDEAD\uDEB0-\uDFFF]|\uD87A[\uDC00-\uDFE0\uDFF0-\uDFFF]|\uD87B[\uDC00-\uDE5D]|\uD87E[\uDC00-\uDE1D]|\uD884[\uDC00-\uDF4A\uDF50-\uDFFF]|\uD88D[\uDC00-\uDC79])\.[\t-\r \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*){2,}/g);
+  protectedText = protectDots(protectedText, /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g);
+  protectedText = protectDots(protectedText, /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|go[s\u017F]|prim)\./gi);
   var sentences = [];
   var start = 0;
   var pushSentence = function pushSentence(contentEnd) {
@@ -11042,9 +11184,24 @@ function splitParagraphIntoChunks() {
       gapEnd: protectedText.length
     });
   }
-  return sentences.map(function (sentence, index) {
-    var _sentence$gapEnd;
-    var gapEnd = (_sentence$gapEnd = sentence.gapEnd) !== null && _sentence$gapEnd !== void 0 ? _sentence$gapEnd : sentence.end;
+  var mergedSentences = [];
+  for (var _i2 = 0, _sentences = sentences; _i2 < _sentences.length; _i2++) {
+    var _sentence$end, _sentence$start;
+    var sentence = _sentences[_i2];
+    var sentenceLen = Math.max(0, ((_sentence$end = sentence.end) !== null && _sentence$end !== void 0 ? _sentence$end : 0) - ((_sentence$start = sentence.start) !== null && _sentence$start !== void 0 ? _sentence$start : 0));
+    var previous = mergedSentences[mergedSentences.length - 1];
+    // Merge tiny fragments like "3." / "M." into previous chunk to avoid extra API calls.
+    if (previous && sentenceLen > 0 && sentenceLen < MIN_CHUNK_MERGE_CHARS && sentence.end > previous.end && sentence.end - previous.start <= maxLen) {
+      var _sentence$gapEnd;
+      previous.end = sentence.end;
+      previous.gapEnd = (_sentence$gapEnd = sentence.gapEnd) !== null && _sentence$gapEnd !== void 0 ? _sentence$gapEnd : sentence.end;
+      continue;
+    }
+    mergedSentences.push(_objectSpread({}, sentence));
+  }
+  return mergedSentences.map(function (sentence, index) {
+    var _sentence$gapEnd2;
+    var gapEnd = (_sentence$gapEnd2 = sentence.gapEnd) !== null && _sentence$gapEnd2 !== void 0 ? _sentence$gapEnd2 : sentence.end;
     var length = sentence.end - sentence.start;
     return {
       index: index,
@@ -11116,8 +11273,8 @@ function remapCorrections(corrections, idMap) {
   }
   if (_typeof(corrections) === "object") {
     var remapped = {};
-    for (var _i2 = 0, _Object$entries = Object.entries(corrections); _i2 < _Object$entries.length; _i2++) {
-      var _Object$entries$_i = _slicedToArray(_Object$entries[_i2], 2),
+    for (var _i3 = 0, _Object$entries = Object.entries(corrections); _i3 < _Object$entries.length; _i3++) {
+      var _Object$entries$_i = _slicedToArray(_Object$entries[_i3], 2),
         key = _Object$entries$_i[0],
         group = _Object$entries$_i[1];
       remapped[key] = remapGroup(group);
@@ -11193,8 +11350,8 @@ function hasCommaAtBoundary(text, pos) {
   if (typeof text !== "string" || !text.length) return false;
   var safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
   var direct = [safePos - 1, safePos, safePos + 1];
-  for (var _i3 = 0, _direct = direct; _i3 < _direct.length; _i3++) {
-    var idx = _direct[_i3];
+  for (var _i4 = 0, _direct = direct; _i4 < _direct.length; _i4++) {
+    var idx = _direct[_i4];
     if (idx >= 0 && idx < text.length && text[idx] === ",") {
       return true;
     }
@@ -11976,6 +12133,7 @@ var API_UNAVAILABLE_MESSAGE = "Storitev CJVT Vejice trenutno ni na voljo. Znova 
 var NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajočih ali napačnih vejic.";
 var longSentenceNotified = false;
 var chunkApiFailureNotified = false;
+var pendingScanNotifications = [];
 var BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
 var BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
 function parseBooleanFlag(value) {
@@ -12183,6 +12341,32 @@ function showToastNotification(message) {
     toastDialog.addEventHandler(Office.EventType.DialogEventReceived, closeDialog);
   });
 }
+function queueScanNotification(message) {
+  if (!message) return;
+  pendingScanNotifications.push(message);
+}
+function flushScanNotifications() {
+  if (!pendingScanNotifications.length) return;
+  var seen = new Set();
+  var uniqueMessages = [];
+  var _iterator2 = _createForOfIteratorHelper(pendingScanNotifications),
+    _step2;
+  try {
+    for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
+      var message = _step2.value;
+      if (!message || seen.has(message)) continue;
+      seen.add(message);
+      uniqueMessages.push(message);
+    }
+  } catch (err) {
+    _iterator2.e(err);
+  } finally {
+    _iterator2.f();
+  }
+  pendingScanNotifications.length = 0;
+  if (!uniqueMessages.length) return;
+  showToastNotification(uniqueMessages.join("\n"));
+}
 function notifyParagraphTooLong(paragraphIndex, length) {
   var label = paragraphIndex + 1;
   var msg = "Odstavek ".concat(label, ": ").concat(LONG_PARAGRAPH_MESSAGE, " (").concat(length, " znakov).");
@@ -12190,7 +12374,7 @@ function notifyParagraphTooLong(paragraphIndex, length) {
     paragraphIndex: paragraphIndex,
     length: length
   });
-  showToastNotification(msg);
+  queueScanNotification(msg);
 }
 function notifySentenceTooLong(paragraphIndex, length) {
   var label = paragraphIndex + 1;
@@ -12201,7 +12385,7 @@ function notifySentenceTooLong(paragraphIndex, length) {
   });
   if (longSentenceNotified) return;
   longSentenceNotified = true;
-  showToastNotification(msg);
+  queueScanNotification(msg);
 }
 function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
   var paragraphLabel = paragraphIndex + 1;
@@ -12211,9 +12395,7 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
     paragraphIndex: paragraphIndex,
     chunkIndex: chunkIndex
   });
-  if (chunkApiFailureNotified) return;
-  chunkApiFailureNotified = true;
-  showToastNotification(msg);
+  queueScanNotification(msg);
 }
 function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, corrected) {
   var paragraphLabel = paragraphIndex + 1;
@@ -12225,7 +12407,7 @@ function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, correc
     original: original,
     corrected: corrected
   });
-  showToastNotification(msg);
+  queueScanNotification(msg);
 }
 var anchorProvider = createAnchorProvider();
 var anchorProviderSupportsCharHints = typeof anchorProvider.supportsCharHints === "function" ? anchorProvider.supportsCharHints() : false;
@@ -12284,7 +12466,10 @@ var wordOnlineAdapter = new _adapters_wordOnlineAdapter_js__WEBPACK_IMPORTED_MOD
   clearSuggestionMarkers: clearOnlineSuggestionMarkers
 });
 var wordDesktopAdapter = new _adapters_wordDesktopAdapter_js__WEBPACK_IMPORTED_MODULE_6__.WordDesktopAdapter({
-  textBridge: desktopTextBridge
+  textBridge: desktopTextBridge,
+  trace: function trace() {
+    return log.apply(void 0, arguments);
+  }
 });
 function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
   var label = paragraphIndex + 1;
@@ -12293,27 +12478,28 @@ function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
     original: original,
     corrected: corrected
   });
-  showToastNotification("Odstavek ".concat(label, ": ").concat(PARAGRAPH_NON_COMMA_MESSAGE));
+  queueScanNotification("Odstavek ".concat(label, ": ").concat(PARAGRAPH_NON_COMMA_MESSAGE));
 }
 function notifyTrackedChangesPresent() {
   warn("Tracked changes present – aborting check");
-  showToastNotification(TRACKED_CHANGES_PRESENT_MESSAGE);
+  queueScanNotification(TRACKED_CHANGES_PRESENT_MESSAGE);
 }
 var apiFailureNotified = false;
 function notifyApiUnavailable() {
   if (apiFailureNotified) return;
   apiFailureNotified = true;
   warn("API unavailable – notifying toast");
-  showToastNotification(API_UNAVAILABLE_MESSAGE);
+  queueScanNotification(API_UNAVAILABLE_MESSAGE);
 }
 function notifyNoIssuesFound() {
   log("No comma issues found – notifying toast");
-  showToastNotification(NO_ISSUES_FOUND_MESSAGE);
+  queueScanNotification(NO_ISSUES_FOUND_MESSAGE);
 }
 function resetNotificationFlags() {
   apiFailureNotified = false;
   longSentenceNotified = false;
   chunkApiFailureNotified = false;
+  pendingScanNotifications.length = 0;
 }
 function documentHasTrackedChanges(_x) {
   return _documentHasTrackedChanges.apply(this, arguments);
@@ -12344,10 +12530,12 @@ function _documentHasTrackedChanges() {
           return _context.a(2, false);
         case 3:
           _context.p = 3;
+          log("Desktop phase: revisions.load(items) -> sync:start");
           revisions.load("items");
           _context.n = 4;
           return context.sync();
         case 4:
+          log("Desktop phase: revisions.load(items) -> sync:done", revisions.items.length);
           return _context.a(2, revisions.items.length > 0);
         case 5:
           _context.p = 5;
@@ -12722,6 +12910,7 @@ function _getRangesForPlannedOperations() {
       liveText,
       searchOptions,
       requests,
+      searchCache,
       perOpVariants,
       _args5 = arguments;
     return _regenerator().w(function (_context5) {
@@ -12759,6 +12948,7 @@ function _getRangesForPlannedOperations() {
             ignorePunct: false
           };
           requests = [];
+          searchCache = new Map();
           perOpVariants = plan.map(function (op, opIndex) {
             var _op$start, _op$end;
             var safeStart = Math.max(0, Math.min(Math.floor((_op$start = op.start) !== null && _op$start !== void 0 ? _op$start : 0), Math.max(0, text.length - 1)));
@@ -12787,14 +12977,18 @@ function _getRangesForPlannedOperations() {
               var variant = _variants[_i3];
               if (seen.has(variant.text)) continue;
               seen.add(variant.text);
-              var matches = paragraph.getRange().search(variant.text, searchOptions);
-              matches.load("items");
-              requests.push({
-                matches: matches,
-                text: variant.text,
-                safeStart: safeStart,
-                opIndex: opIndex
-              });
+              var matches = searchCache.get(variant.text);
+              if (!matches) {
+                matches = paragraph.getRange().search(variant.text, searchOptions);
+                matches.load("items");
+                searchCache.set(variant.text, matches);
+                requests.push({
+                  matches: matches,
+                  text: variant.text,
+                  safeStart: safeStart,
+                  opIndex: opIndex
+                });
+              }
               unique.push({
                 text: variant.text,
                 safeStart: safeStart,
@@ -12813,12 +13007,12 @@ function _getRangesForPlannedOperations() {
           return _context5.a(2, plan.map(function (op, opIndex) {
             var variants = perOpVariants[opIndex] || [];
             if (!variants.length) return null;
-            var _iterator4 = _createForOfIteratorHelper(variants),
-              _step4;
+            var _iterator5 = _createForOfIteratorHelper(variants),
+              _step5;
             try {
-              for (_iterator4.s(); !(_step4 = _iterator4.n()).done;) {
+              for (_iterator5.s(); !(_step5 = _iterator5.n()).done;) {
                 var _variant$matches;
-                var variant = _step4.value;
+                var variant = _step5.value;
                 var items = ((_variant$matches = variant.matches) === null || _variant$matches === void 0 ? void 0 : _variant$matches.items) || [];
                 if (!items.length) continue;
                 var mappedStart = mapIndexAcrossCanonical(text, liveText, variant.safeStart);
@@ -12827,9 +13021,9 @@ function _getRangesForPlannedOperations() {
                 return items[idx];
               }
             } catch (err) {
-              _iterator4.e(err);
+              _iterator5.e(err);
             } finally {
-              _iterator4.f();
+              _iterator5.f();
             }
             var fallback = variants[0];
             warn("getRangesForPlannedOperations(".concat(reason, "): snippet not found"), {
@@ -13507,7 +13701,7 @@ function _tryApplyDeleteUsingHighlight() {
                 }
               }, _callee12, null, [[1, 2]]);
             }));
-            return function tryByRange(_x78) {
+            return function tryByRange(_x80) {
               return _ref25.apply(this, arguments);
             };
           }();
@@ -13667,7 +13861,7 @@ function _findTokenRangeForAnchor() {
                 }
               }, _callee16);
             }));
-            return function tryFind(_x79, _x80) {
+            return function tryFind(_x81, _x82) {
               return _ref28.apply(this, arguments);
             };
           }();
@@ -13720,20 +13914,20 @@ function selectInsertAnchor(meta) {
     anchor: meta.targetTokenAt,
     location: Word.InsertLocation.after
   } : null].filter(Boolean);
-  var _iterator2 = _createForOfIteratorHelper(candidates),
-    _step2;
+  var _iterator3 = _createForOfIteratorHelper(candidates),
+    _step3;
   try {
-    for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
+    for (_iterator3.s(); !(_step3 = _iterator3.n()).done;) {
       var _candidate$anchor;
-      var candidate = _step2.value;
+      var candidate = _step3.value;
       if (candidate !== null && candidate !== void 0 && (_candidate$anchor = candidate.anchor) !== null && _candidate$anchor !== void 0 && _candidate$anchor.matched && Number.isFinite(candidate.anchor.charStart) && candidate.anchor.charStart >= 0) {
         return candidate;
       }
     }
   } catch (err) {
-    _iterator2.e(err);
+    _iterator3.e(err);
   } finally {
-    _iterator2.f();
+    _iterator3.f();
   }
   return null;
 }
@@ -13829,7 +14023,7 @@ function _tryApplyInsertUsingMetadata() {
                 }
               }, _callee18);
             }));
-            return function insertCommaAtChar(_x81, _x82) {
+            return function insertCommaAtChar(_x83, _x84) {
               return _ref29.apply(this, arguments);
             };
           }();
@@ -13957,7 +14151,7 @@ function _tryApplyInsertUsingMetadata() {
                 }
               }, _callee19);
             }));
-            return function replaceGapBetweenAnchors(_x83, _x84, _x85) {
+            return function replaceGapBetweenAnchors(_x85, _x86, _x87) {
               return _ref30.apply(this, arguments);
             };
           }();
@@ -14053,7 +14247,7 @@ function _tryApplyInsertUsingMetadata() {
                 }
               }, _callee20);
             }));
-            return function insertCommaAfterToken(_x86, _x87) {
+            return function insertCommaAfterToken(_x88, _x89) {
               return _ref31.apply(this, arguments);
             };
           }();
@@ -14130,7 +14324,7 @@ function _tryApplyInsertUsingMetadata() {
                 }
               }, _callee21);
             }));
-            return function insertCommaBeforeToken(_x88, _x89) {
+            return function insertCommaBeforeToken(_x90, _x91) {
               return _ref32.apply(this, arguments);
             };
           }();
@@ -14319,94 +14513,177 @@ function _normalizeCommaSpacingInParagraph() {
   }));
   return _normalizeCommaSpacingInParagraph.apply(this, arguments);
 }
-function cleanupCommaSpacingForParagraphs(_x66, _x67, _x68) {
-  return _cleanupCommaSpacingForParagraphs.apply(this, arguments);
+function ensureCommaSpaceAfterInParagraph(_x66, _x67) {
+  return _ensureCommaSpaceAfterInParagraph.apply(this, arguments);
 }
-function _cleanupCommaSpacingForParagraphs() {
-  _cleanupCommaSpacingForParagraphs = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee25(context, paragraphs, indexes) {
-    var _ref36,
-      _ref36$force,
-      force,
-      _iterator5,
-      _step5,
-      idx,
-      paragraph,
-      _args25 = arguments,
-      _t7,
-      _t8;
+function _ensureCommaSpaceAfterInParagraph() {
+  _ensureCommaSpaceAfterInParagraph = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee25(context, paragraph) {
+    var text, spacingPlan, idx, _text2, nextChar, ranges, i, afterRange;
     return _regenerator().w(function (_context25) {
-      while (1) switch (_context25.p = _context25.n) {
+      while (1) switch (_context25.n) {
         case 0:
-          _ref36 = _args25.length > 3 && _args25[3] !== undefined ? _args25[3] : {}, _ref36$force = _ref36.force, force = _ref36$force === void 0 ? false : _ref36$force;
-          if (!(anchorProviderSupportsCharHints && !force)) {
-            _context25.n = 1;
-            break;
-          }
-          log("Skipping comma spacing cleanup – lemmatizer anchors already normalized.");
-          return _context25.a(2);
+          paragraph.load("text");
+          _context25.n = 1;
+          return context.sync();
         case 1:
-          if (indexes !== null && indexes !== void 0 && indexes.size) {
+          text = paragraph.text || "";
+          if (text.includes(",")) {
             _context25.n = 2;
             break;
           }
           return _context25.a(2);
         case 2:
-          _iterator5 = _createForOfIteratorHelper(indexes);
-          _context25.p = 3;
-          _iterator5.s();
-        case 4:
-          if ((_step5 = _iterator5.n()).done) {
-            _context25.n = 9;
+          spacingPlan = [];
+          idx = text.length - 1;
+        case 3:
+          if (!(idx >= 0)) {
+            _context25.n = 8;
             break;
           }
-          idx = _step5.value;
-          paragraph = paragraphs.items[idx];
-          if (paragraph) {
+          if (!(text[idx] !== ",")) {
+            _context25.n = 4;
+            break;
+          }
+          return _context25.a(3, 7);
+        case 4:
+          nextChar = (_text2 = text[idx + 1]) !== null && _text2 !== void 0 ? _text2 : "";
+          if (nextChar) {
             _context25.n = 5;
             break;
           }
-          return _context25.a(3, 8);
+          return _context25.a(3, 7);
         case 5:
-          _context25.p = 5;
-          _context25.n = 6;
-          return normalizeCommaSpacingInParagraph(context, paragraph);
+          if (!(/\s/.test(nextChar) || _engine_textUtils_js__WEBPACK_IMPORTED_MODULE_9__.QUOTES.has(nextChar) || (0,_engine_textUtils_js__WEBPACK_IMPORTED_MODULE_9__.isDigit)(nextChar))) {
+            _context25.n = 6;
+            break;
+          }
+          return _context25.a(3, 7);
         case 6:
-          _context25.n = 8;
-          break;
+          spacingPlan.push({
+            kind: "insert",
+            start: idx + 1,
+            end: idx + 2,
+            replacement: " ",
+            snippet: nextChar,
+            suggestions: [],
+            sortPos: idx + 1
+          });
         case 7:
-          _context25.p = 7;
-          _t7 = _context25.v;
-          warn("Failed to normalize comma spacing", _t7);
+          idx--;
+          _context25.n = 3;
+          break;
         case 8:
-          _context25.n = 4;
-          break;
+          if (spacingPlan.length) {
+            _context25.n = 9;
+            break;
+          }
+          return _context25.a(2);
         case 9:
-          _context25.n = 11;
-          break;
+          _context25.n = 10;
+          return getRangesForPlannedOperations(context, paragraph, text, spacingPlan, "desktop-space-after-comma-only");
         case 10:
-          _context25.p = 10;
-          _t8 = _context25.v;
-          _iterator5.e(_t8);
+          ranges = _context25.v;
+          for (i = 0; i < spacingPlan.length; i++) {
+            afterRange = ranges[i];
+            if (afterRange) {
+              afterRange.insertText(" ", Word.InsertLocation.before);
+            }
+          }
         case 11:
-          _context25.p = 11;
-          _iterator5.f();
-          return _context25.f(11);
-        case 12:
           return _context25.a(2);
       }
-    }, _callee25, null, [[5, 7], [3, 10, 11, 12]]);
+    }, _callee25);
+  }));
+  return _ensureCommaSpaceAfterInParagraph.apply(this, arguments);
+}
+function cleanupCommaSpacingForParagraphs(_x68, _x69, _x70) {
+  return _cleanupCommaSpacingForParagraphs.apply(this, arguments);
+}
+function _cleanupCommaSpacingForParagraphs() {
+  _cleanupCommaSpacingForParagraphs = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee26(context, paragraphs, indexes) {
+    var _ref36,
+      _ref36$force,
+      force,
+      _iterator6,
+      _step6,
+      idx,
+      paragraph,
+      _args26 = arguments,
+      _t7,
+      _t8;
+    return _regenerator().w(function (_context26) {
+      while (1) switch (_context26.p = _context26.n) {
+        case 0:
+          _ref36 = _args26.length > 3 && _args26[3] !== undefined ? _args26[3] : {}, _ref36$force = _ref36.force, force = _ref36$force === void 0 ? false : _ref36$force;
+          if (!(anchorProviderSupportsCharHints && !force)) {
+            _context26.n = 1;
+            break;
+          }
+          log("Skipping comma spacing cleanup – lemmatizer anchors already normalized.");
+          return _context26.a(2);
+        case 1:
+          if (indexes !== null && indexes !== void 0 && indexes.size) {
+            _context26.n = 2;
+            break;
+          }
+          return _context26.a(2);
+        case 2:
+          _iterator6 = _createForOfIteratorHelper(indexes);
+          _context26.p = 3;
+          _iterator6.s();
+        case 4:
+          if ((_step6 = _iterator6.n()).done) {
+            _context26.n = 9;
+            break;
+          }
+          idx = _step6.value;
+          paragraph = paragraphs.items[idx];
+          if (paragraph) {
+            _context26.n = 5;
+            break;
+          }
+          return _context26.a(3, 8);
+        case 5:
+          _context26.p = 5;
+          _context26.n = 6;
+          return normalizeCommaSpacingInParagraph(context, paragraph);
+        case 6:
+          _context26.n = 8;
+          break;
+        case 7:
+          _context26.p = 7;
+          _t7 = _context26.v;
+          warn("Failed to normalize comma spacing", _t7);
+        case 8:
+          _context26.n = 4;
+          break;
+        case 9:
+          _context26.n = 11;
+          break;
+        case 10:
+          _context26.p = 10;
+          _t8 = _context26.v;
+          _iterator6.e(_t8);
+        case 11:
+          _context26.p = 11;
+          _iterator6.f();
+          return _context26.f(11);
+        case 12:
+          return _context26.a(2);
+      }
+    }, _callee26, null, [[5, 7], [3, 10, 11, 12]]);
   }));
   return _cleanupCommaSpacingForParagraphs.apply(this, arguments);
 }
-function findRangeForInsert(_x69, _x70, _x71) {
+function findRangeForInsert(_x71, _x72, _x73) {
   return _findRangeForInsert.apply(this, arguments);
 }
 function _findRangeForInsert() {
-  _findRangeForInsert = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee26(context, paragraph, suggestion) {
+  _findRangeForInsert = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee27(context, paragraph, suggestion) {
     var _suggestion$snippets3, _suggestion$snippets4;
     var searchOpts, range, focusWord, wordSearch, leftFrag, leftSearch, _suggestion$snippets5, rightFrag, rightSearch;
-    return _regenerator().w(function (_context26) {
-      while (1) switch (_context26.n) {
+    return _regenerator().w(function (_context27) {
+      while (1) switch (_context27.n) {
         case 0:
           searchOpts = {
             matchCase: false,
@@ -14415,7 +14692,7 @@ function _findRangeForInsert() {
           range = null;
           focusWord = (_suggestion$snippets3 = suggestion.snippets) === null || _suggestion$snippets3 === void 0 ? void 0 : _suggestion$snippets3.focusWord;
           if (!focusWord) {
-            _context26.n = 2;
+            _context27.n = 2;
             break;
           }
           wordSearch = paragraph.getRange().search(focusWord, {
@@ -14423,7 +14700,7 @@ function _findRangeForInsert() {
             matchWholeWord: true
           });
           wordSearch.load("items");
-          _context26.n = 1;
+          _context27.n = 1;
           return context.sync();
         case 1:
           if (wordSearch.items.length) {
@@ -14432,12 +14709,12 @@ function _findRangeForInsert() {
         case 2:
           leftFrag = (((_suggestion$snippets4 = suggestion.snippets) === null || _suggestion$snippets4 === void 0 ? void 0 : _suggestion$snippets4.leftSnippet) || "").slice(-20).replace(/[\r\n]+/g, " ");
           if (!(!range && leftFrag.trim())) {
-            _context26.n = 4;
+            _context27.n = 4;
             break;
           }
           leftSearch = paragraph.getRange().search(leftFrag.trim(), searchOpts);
           leftSearch.load("items");
-          _context26.n = 3;
+          _context27.n = 3;
           return context.sync();
         case 3:
           if (leftSearch.items.length) {
@@ -14445,48 +14722,48 @@ function _findRangeForInsert() {
           }
         case 4:
           if (range) {
-            _context26.n = 6;
+            _context27.n = 6;
             break;
           }
           rightFrag = (((_suggestion$snippets5 = suggestion.snippets) === null || _suggestion$snippets5 === void 0 ? void 0 : _suggestion$snippets5.rightSnippet) || "").replace(/,/g, "").trim();
           rightFrag = rightFrag.slice(0, 8);
           if (!rightFrag) {
-            _context26.n = 6;
+            _context27.n = 6;
             break;
           }
           rightSearch = paragraph.getRange().search(rightFrag, searchOpts);
           rightSearch.load("items");
-          _context26.n = 5;
+          _context27.n = 5;
           return context.sync();
         case 5:
           if (rightSearch.items.length) {
             range = rightSearch.items[0];
           }
         case 6:
-          return _context26.a(2, range);
+          return _context27.a(2, range);
       }
-    }, _callee26);
+    }, _callee27);
   }));
   return _findRangeForInsert.apply(this, arguments);
 }
-function clearHighlightForSuggestion(_x72, _x73, _x74) {
+function clearHighlightForSuggestion(_x74, _x75, _x76) {
   return _clearHighlightForSuggestion.apply(this, arguments);
 }
 function _clearHighlightForSuggestion() {
-  _clearHighlightForSuggestion = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee27(context, paragraph, suggestion) {
+  _clearHighlightForSuggestion = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee28(context, paragraph, suggestion) {
     var _suggestion$meta21, _suggestion$charHint$7, _suggestion$charHint9, _suggestion$charHint$8, _suggestion$charHint0, _metaAnchor$highlight;
     var entry, metaAnchor, charStart, charEnd, range;
-    return _regenerator().w(function (_context27) {
-      while (1) switch (_context27.n) {
+    return _regenerator().w(function (_context28) {
+      while (1) switch (_context28.n) {
         case 0:
           if (suggestion) {
-            _context27.n = 1;
+            _context28.n = 1;
             break;
           }
-          return _context27.a(2);
+          return _context28.a(2);
         case 1:
           if (!suggestion.highlightRange) {
-            _context27.n = 2;
+            _context28.n = 2;
             break;
           }
           try {
@@ -14497,46 +14774,46 @@ function _clearHighlightForSuggestion() {
           } finally {
             suggestion.highlightRange = null;
           }
-          return _context27.a(2);
+          return _context28.a(2);
         case 2:
           entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
           metaAnchor = (_suggestion$meta21 = suggestion.meta) === null || _suggestion$meta21 === void 0 ? void 0 : _suggestion$meta21.anchor;
           if (metaAnchor) {
-            _context27.n = 3;
+            _context28.n = 3;
             break;
           }
-          return _context27.a(2);
+          return _context28.a(2);
         case 3:
           charStart = (_suggestion$charHint$7 = (_suggestion$charHint9 = suggestion.charHint) === null || _suggestion$charHint9 === void 0 ? void 0 : _suggestion$charHint9.start) !== null && _suggestion$charHint$7 !== void 0 ? _suggestion$charHint$7 : typeof metaAnchor.highlightCharStart === "number" ? metaAnchor.highlightCharStart : metaAnchor.charStart;
           charEnd = (_suggestion$charHint$8 = (_suggestion$charHint0 = suggestion.charHint) === null || _suggestion$charHint0 === void 0 ? void 0 : _suggestion$charHint0.end) !== null && _suggestion$charHint$8 !== void 0 ? _suggestion$charHint$8 : typeof metaAnchor.highlightCharEnd === "number" ? metaAnchor.highlightCharEnd : metaAnchor.charEnd;
           if (!(!paragraph || !Number.isFinite(charStart))) {
-            _context27.n = 4;
+            _context28.n = 4;
             break;
           }
-          return _context27.a(2);
+          return _context28.a(2);
         case 4:
-          _context27.n = 5;
+          _context28.n = 5;
           return getRangeForAnchorSpan(context, paragraph, entry, charStart, charEnd, "clear-highlight", metaAnchor.highlightText || ((_metaAnchor$highlight = metaAnchor.highlightAnchorTarget) === null || _metaAnchor$highlight === void 0 ? void 0 : _metaAnchor$highlight.tokenText));
         case 5:
-          range = _context27.v;
+          range = _context28.v;
           if (range) {
             range.font.highlightColor = null;
           }
         case 6:
-          return _context27.a(2);
+          return _context28.a(2);
       }
-    }, _callee27);
+    }, _callee28);
   }));
   return _clearHighlightForSuggestion.apply(this, arguments);
 }
-function clearOnlineSuggestionMarkers(_x75, _x76, _x77) {
+function clearOnlineSuggestionMarkers(_x77, _x78, _x79) {
   return _clearOnlineSuggestionMarkers.apply(this, arguments);
 }
 function _clearOnlineSuggestionMarkers() {
-  _clearOnlineSuggestionMarkers = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee28(context, suggestionsOverride, paragraphs) {
-    var usingOverride, source, clearHighlight, _iterator6, _step6, _item$suggestion, _item$paragraph, _paragraphs$items, item, suggestion, paragraph, _t9;
-    return _regenerator().w(function (_context28) {
-      while (1) switch (_context28.p = _context28.n) {
+  _clearOnlineSuggestionMarkers = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee29(context, suggestionsOverride, paragraphs) {
+    var usingOverride, source, clearHighlight, _iterator7, _step7, _item$suggestion, _item$paragraph, _paragraphs$items, item, suggestion, paragraph, _t9;
+    return _regenerator().w(function (_context29) {
+      while (1) switch (_context29.p = _context29.n) {
         case 0:
           usingOverride = Array.isArray(suggestionsOverride);
           source = usingOverride ? suggestionsOverride : pendingSuggestionsOnline;
@@ -14552,72 +14829,72 @@ function _clearOnlineSuggestionMarkers() {
             }
           };
           if (source.length) {
-            _context28.n = 2;
+            _context29.n = 2;
             break;
           }
           if (usingOverride) {
-            _context28.n = 1;
+            _context29.n = 1;
             break;
           }
           context.document.body.font.highlightColor = null;
-          _context28.n = 1;
+          _context29.n = 1;
           return context.sync();
         case 1:
-          return _context28.a(2);
+          return _context29.a(2);
         case 2:
-          _iterator6 = _createForOfIteratorHelper(source);
-          _context28.p = 3;
-          _iterator6.s();
+          _iterator7 = _createForOfIteratorHelper(source);
+          _context29.p = 3;
+          _iterator7.s();
         case 4:
-          if ((_step6 = _iterator6.n()).done) {
-            _context28.n = 9;
+          if ((_step7 = _iterator7.n()).done) {
+            _context29.n = 9;
             break;
           }
-          item = _step6.value;
+          item = _step7.value;
           suggestion = (_item$suggestion = item === null || item === void 0 ? void 0 : item.suggestion) !== null && _item$suggestion !== void 0 ? _item$suggestion : item;
           if (suggestion) {
-            _context28.n = 5;
+            _context29.n = 5;
             break;
           }
-          return _context28.a(3, 8);
+          return _context29.a(3, 8);
         case 5:
           paragraph = (_item$paragraph = item === null || item === void 0 ? void 0 : item.paragraph) !== null && _item$paragraph !== void 0 ? _item$paragraph : paragraphs === null || paragraphs === void 0 || (_paragraphs$items = paragraphs.items) === null || _paragraphs$items === void 0 ? void 0 : _paragraphs$items[suggestion.paragraphIndex];
           if (!paragraph) {
-            _context28.n = 7;
+            _context29.n = 7;
             break;
           }
-          _context28.n = 6;
+          _context29.n = 6;
           return clearHighlightForSuggestion(context, paragraph, suggestion);
         case 6:
-          _context28.n = 8;
+          _context29.n = 8;
           break;
         case 7:
           clearHighlight(suggestion);
         case 8:
-          _context28.n = 4;
+          _context29.n = 4;
           break;
         case 9:
-          _context28.n = 11;
+          _context29.n = 11;
           break;
         case 10:
-          _context28.p = 10;
-          _t9 = _context28.v;
-          _iterator6.e(_t9);
+          _context29.p = 10;
+          _t9 = _context29.v;
+          _iterator7.e(_t9);
         case 11:
-          _context28.p = 11;
-          _iterator6.f();
-          return _context28.f(11);
+          _context29.p = 11;
+          _iterator7.f();
+          return _context29.f(11);
         case 12:
-          _context28.n = 13;
+          _context29.n = 13;
           return context.sync();
         case 13:
           if (!suggestionsOverride) {
             resetPendingSuggestionsOnline();
           }
         case 14:
-          return _context28.a(2);
+          return _context29.a(2);
       }
-    }, _callee28, null, [[3, 10, 11, 12]]);
+    }, _callee29, null, [[3, 10, 11, 12]]);
   }));
   return _clearOnlineSuggestionMarkers.apply(this, arguments);
 }
@@ -14701,8 +14978,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
           return {
             kind: "insert",
             start: beforeEnd,
-            end: after.start,
-            replacement: ", ",
+            end: beforeEnd,
+            replacement: ",",
             snippet: gap || before.token
           };
         }
@@ -14720,8 +14997,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         return {
           kind: "insert",
           start: wsStart,
-          end: _after.start,
-          replacement: ", ",
+          end: wsStart,
+          replacement: ",",
           snippet: snapshotText.slice(wsStart, _after.start)
         };
       }
@@ -14729,7 +15006,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         kind: "insert",
         start: _after.start,
         end: _after.start,
-        replacement: ", ",
+        replacement: ",",
         snippet: snapshotText.slice(Math.max(0, _after.start - 1), Math.min(snapshotText.length, _after.start + 1))
       };
     }
@@ -14746,8 +15023,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         return {
           kind: "insert",
           start: _beforeEnd,
-          end: wsEnd,
-          replacement: ", ",
+          end: _beforeEnd,
+          replacement: ",",
           snippet: snapshotText.slice(_beforeEnd, wsEnd)
         };
       }
@@ -14755,7 +15032,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         kind: "insert",
         start: _beforeEnd,
         end: _beforeEnd,
-        replacement: ", ",
+        replacement: ",",
         snippet: snapshotText.slice(Math.max(0, _beforeEnd - 1), Math.min(snapshotText.length, _beforeEnd + 1))
       };
     }
@@ -14796,11 +15073,11 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   var rawPlan = [];
   var skipped = [];
   var noop = [];
-  var _iterator3 = _createForOfIteratorHelper(suggestions),
-    _step3;
+  var _iterator4 = _createForOfIteratorHelper(suggestions),
+    _step4;
   try {
-    for (_iterator3.s(); !(_step3 = _iterator3.n()).done;) {
-      var suggestion = _step3.value;
+    for (_iterator4.s(); !(_step4 = _iterator4.n()).done;) {
+      var suggestion = _step4.value;
       var op = null;
       if ((suggestion === null || suggestion === void 0 ? void 0 : suggestion.kind) === "delete") {
         op = resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion);
@@ -14821,9 +15098,9 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
       }));
     }
   } catch (err) {
-    _iterator3.e(err);
+    _iterator4.e(err);
   } finally {
-    _iterator3.f();
+    _iterator4.f();
   }
   rawPlan.sort(function (a, b) {
     if (a.start !== b.start) return b.start - a.start;
@@ -14871,12 +15148,15 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
         if (!candidate.replacement.startsWith(",")) continue;
         var start = Math.min(current.start, candidate.start);
         var end = Math.max(current.end, candidate.end);
+        var mergeSegment = snapshotText.slice(start, end);
+        // Do not coalesce across whitespace; replacing mixed spans can drop spaces in tracked mode.
+        if (/\s/.test(mergeSegment)) continue;
         plan.push({
           kind: "replace",
           start: start,
           end: end,
-          replacement: ", ",
-          snippet: snapshotText.slice(start, end) || ",",
+          replacement: ",",
+          snippet: mergeSegment || ",",
           suggestions: [].concat(_toConsumableArray(current.suggestions), _toConsumableArray(candidate.suggestions)),
           sortPos: Math.max(current.sortPos, candidate.sortPos)
         });
@@ -14898,10 +15178,10 @@ function applyAllSuggestionsOnline() {
   return _applyAllSuggestionsOnline.apply(this, arguments);
 }
 function _applyAllSuggestionsOnline() {
-  _applyAllSuggestionsOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee30() {
-    var restored, suggestionsByParagraph, _iterator7, _step7, sug, _t1;
-    return _regenerator().w(function (_context30) {
-      while (1) switch (_context30.p = _context30.n) {
+  _applyAllSuggestionsOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee31() {
+    var restored, suggestionsByParagraph, _iterator8, _step8, sug, _t1;
+    return _regenerator().w(function (_context31) {
+      while (1) switch (_context31.p = _context31.n) {
         case 0:
           if (!pendingSuggestionsOnline.length) {
             restored = restorePendingSuggestionsOnline();
@@ -14910,83 +15190,83 @@ function _applyAllSuggestionsOnline() {
             }
           }
           if (pendingSuggestionsOnline.length) {
-            _context30.n = 1;
+            _context31.n = 1;
             break;
           }
           warn("applyAllSuggestionsOnline: no pending suggestions");
-          return _context30.a(2);
+          return _context31.a(2);
         case 1:
           suggestionsByParagraph = new Map();
-          _iterator7 = _createForOfIteratorHelper(pendingSuggestionsOnline);
-          _context30.p = 2;
-          _iterator7.s();
+          _iterator8 = _createForOfIteratorHelper(pendingSuggestionsOnline);
+          _context31.p = 2;
+          _iterator8.s();
         case 3:
-          if ((_step7 = _iterator7.n()).done) {
-            _context30.n = 6;
+          if ((_step8 = _iterator8.n()).done) {
+            _context31.n = 6;
             break;
           }
-          sug = _step7.value;
+          sug = _step8.value;
           if (!(typeof (sug === null || sug === void 0 ? void 0 : sug.paragraphIndex) !== "number" || sug.paragraphIndex < 0)) {
-            _context30.n = 4;
+            _context31.n = 4;
             break;
           }
-          return _context30.a(3, 5);
+          return _context31.a(3, 5);
         case 4:
           if (!suggestionsByParagraph.has(sug.paragraphIndex)) {
             suggestionsByParagraph.set(sug.paragraphIndex, []);
           }
           suggestionsByParagraph.get(sug.paragraphIndex).push(sug);
         case 5:
-          _context30.n = 3;
+          _context31.n = 3;
           break;
         case 6:
-          _context30.n = 8;
+          _context31.n = 8;
           break;
         case 7:
-          _context30.p = 7;
-          _t1 = _context30.v;
-          _iterator7.e(_t1);
+          _context31.p = 7;
+          _t1 = _context31.v;
+          _iterator8.e(_t1);
         case 8:
-          _context30.p = 8;
-          _iterator7.f();
-          return _context30.f(8);
+          _context31.p = 8;
+          _iterator8.f();
+          return _context31.f(8);
         case 9:
           if (suggestionsByParagraph.size) {
-            _context30.n = 10;
+            _context31.n = 10;
             break;
           }
-          return _context30.a(2);
+          return _context31.a(2);
         case 10:
-          _context30.n = 11;
+          _context31.n = 11;
           return Word.run(/*#__PURE__*/function () {
-            var _ref37 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee29(context) {
-              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator8, _step8, _entry$originalText7, _step8$value, paragraphIndex, suggestions, paragraph, entry, snapshotText, sourceText, _buildParagraphOperat, plan, skipped, noop, _iterator0, _step0, _suggestion, anyApplied, appliedCount, applyFailedCount, plannedRanges, opIndex, op, range, _iterator1, _step1, suggestion, _iterator9, _step9, idx, _t0;
-              return _regenerator().w(function (_context29) {
-                while (1) switch (_context29.p = _context29.n) {
+            var _ref37 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee30(context) {
+              var paras, touchedIndexes, processedSuggestions, failedSuggestions, _iterator9, _step9, _entry$originalText7, _step9$value, paragraphIndex, suggestions, paragraph, entry, snapshotText, sourceText, _buildParagraphOperat, plan, skipped, noop, _iterator1, _step1, _suggestion, anyApplied, appliedCount, applyFailedCount, plannedRanges, opIndex, op, range, insertLocation, _iterator10, _step10, suggestion, _iterator0, _step0, idx, _t0;
+              return _regenerator().w(function (_context30) {
+                while (1) switch (_context30.p = _context30.n) {
                   case 0:
-                    _context29.n = 1;
+                    _context30.n = 1;
                     return wordOnlineAdapter.getParagraphs(context);
                   case 1:
-                    paras = _context29.v;
+                    paras = _context30.v;
                     touchedIndexes = new Set();
                     processedSuggestions = [];
                     failedSuggestions = [];
-                    _iterator8 = _createForOfIteratorHelper(suggestionsByParagraph.entries());
-                    _context29.p = 2;
-                    _iterator8.s();
+                    _iterator9 = _createForOfIteratorHelper(suggestionsByParagraph.entries());
+                    _context30.p = 2;
+                    _iterator9.s();
                   case 3:
-                    if ((_step8 = _iterator8.n()).done) {
-                      _context29.n = 11;
+                    if ((_step9 = _iterator9.n()).done) {
+                      _context30.n = 11;
                       break;
                     }
-                    _step8$value = _slicedToArray(_step8.value, 2), paragraphIndex = _step8$value[0], suggestions = _step8$value[1];
+                    _step9$value = _slicedToArray(_step9.value, 2), paragraphIndex = _step9$value[0], suggestions = _step9$value[1];
                     paragraph = paras.items[paragraphIndex];
                     if (paragraph) {
-                      _context29.n = 4;
+                      _context30.n = 4;
                       break;
                     }
                     failedSuggestions.push.apply(failedSuggestions, _toConsumableArray(suggestions));
-                    return _context29.a(3, 10);
+                    return _context30.a(3, 10);
                   case 4:
                     entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
                     snapshotText = paragraph.text || "";
@@ -15000,59 +15280,60 @@ function _applyAllSuggestionsOnline() {
                       noop: noop.length
                     });
                     failedSuggestions.push.apply(failedSuggestions, _toConsumableArray(skipped));
-                    _iterator0 = _createForOfIteratorHelper(noop);
+                    _iterator1 = _createForOfIteratorHelper(noop);
                     try {
-                      for (_iterator0.s(); !(_step0 = _iterator0.n()).done;) {
-                        _suggestion = _step0.value;
+                      for (_iterator1.s(); !(_step1 = _iterator1.n()).done;) {
+                        _suggestion = _step1.value;
                         processedSuggestions.push({
                           suggestion: _suggestion,
                           paragraph: paragraph
                         });
                       }
                     } catch (err) {
-                      _iterator0.e(err);
+                      _iterator1.e(err);
                     } finally {
-                      _iterator0.f();
+                      _iterator1.f();
                     }
                     anyApplied = false;
                     appliedCount = 0;
                     applyFailedCount = 0;
-                    _context29.n = 5;
+                    _context30.n = 5;
                     return getRangesForPlannedOperations(context, paragraph, snapshotText, plan, "apply-all-batch");
                   case 5:
-                    plannedRanges = _context29.v;
+                    plannedRanges = _context30.v;
                     opIndex = 0;
                   case 6:
                     if (!(opIndex < plan.length)) {
-                      _context29.n = 9;
+                      _context30.n = 9;
                       break;
                     }
                     op = plan[opIndex];
                     range = plannedRanges[opIndex];
                     if (range) {
-                      _context29.n = 7;
+                      _context30.n = 7;
                       break;
                     }
                     failedSuggestions.push.apply(failedSuggestions, _toConsumableArray(op.suggestions));
                     applyFailedCount++;
-                    return _context29.a(3, 8);
+                    return _context30.a(3, 8);
                   case 7:
                     try {
-                      range.insertText(op.replacement, Word.InsertLocation.replace);
+                      insertLocation = op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
+                      range.insertText(op.replacement, insertLocation);
                       anyApplied = true;
-                      _iterator1 = _createForOfIteratorHelper(op.suggestions);
+                      _iterator10 = _createForOfIteratorHelper(op.suggestions);
                       try {
-                        for (_iterator1.s(); !(_step1 = _iterator1.n()).done;) {
-                          suggestion = _step1.value;
+                        for (_iterator10.s(); !(_step10 = _iterator10.n()).done;) {
+                          suggestion = _step10.value;
                           processedSuggestions.push({
                             suggestion: suggestion,
                             paragraph: paragraph
                           });
                         }
                       } catch (err) {
-                        _iterator1.e(err);
+                        _iterator10.e(err);
                       } finally {
-                        _iterator1.f();
+                        _iterator10.f();
                       }
                       appliedCount++;
                     } catch (applyErr) {
@@ -15062,7 +15343,7 @@ function _applyAllSuggestionsOnline() {
                     }
                   case 8:
                     opIndex++;
-                    _context29.n = 6;
+                    _context30.n = 6;
                     break;
                   case 9:
                     log("applyAll result", {
@@ -15074,42 +15355,42 @@ function _applyAllSuggestionsOnline() {
                       touchedIndexes.add(paragraphIndex);
                     }
                   case 10:
-                    _context29.n = 3;
+                    _context30.n = 3;
                     break;
                   case 11:
-                    _context29.n = 13;
+                    _context30.n = 13;
                     break;
                   case 12:
-                    _context29.p = 12;
-                    _t0 = _context29.v;
-                    _iterator8.e(_t0);
+                    _context30.p = 12;
+                    _t0 = _context30.v;
+                    _iterator9.e(_t0);
                   case 13:
-                    _context29.p = 13;
-                    _iterator8.f();
-                    return _context29.f(13);
+                    _context30.p = 13;
+                    _iterator9.f();
+                    return _context30.f(13);
                   case 14:
                     if (!processedSuggestions.length) {
-                      _context29.n = 15;
+                      _context30.n = 15;
                       break;
                     }
-                    _context29.n = 15;
+                    _context30.n = 15;
                     return wordOnlineAdapter.clearHighlights(context, processedSuggestions);
                   case 15:
-                    _context29.n = 16;
+                    _context30.n = 16;
                     return cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
                       force: wordOnlineAdapter.shouldForceSpacingCleanup()
                     });
                   case 16:
-                    _iterator9 = _createForOfIteratorHelper(touchedIndexes);
+                    _iterator0 = _createForOfIteratorHelper(touchedIndexes);
                     try {
-                      for (_iterator9.s(); !(_step9 = _iterator9.n()).done;) {
-                        idx = _step9.value;
+                      for (_iterator0.s(); !(_step0 = _iterator0.n()).done;) {
+                        idx = _step0.value;
                         anchorProvider.deleteAnchors(idx);
                       }
                     } catch (err) {
-                      _iterator9.e(err);
+                      _iterator0.e(err);
                     } finally {
-                      _iterator9.f();
+                      _iterator0.f();
                     }
                     pendingSuggestionsOnline.length = 0;
                     if (failedSuggestions.length) {
@@ -15119,21 +15400,21 @@ function _applyAllSuggestionsOnline() {
                       context.document.body.font.highlightColor = null;
                       persistPendingSuggestionsOnline();
                     }
-                    _context29.n = 17;
+                    _context30.n = 17;
                     return context.sync();
                   case 17:
-                    return _context29.a(2);
+                    return _context30.a(2);
                 }
-              }, _callee29, null, [[2, 12, 13, 14]]);
+              }, _callee30, null, [[2, 12, 13, 14]]);
             }));
-            return function (_x90) {
+            return function (_x92) {
               return _ref37.apply(this, arguments);
             };
           }());
         case 11:
-          return _context30.a(2);
+          return _context31.a(2);
       }
-    }, _callee30, null, [[2, 7, 8, 9]]);
+    }, _callee31, null, [[2, 7, 8, 9]]);
   }));
   return _applyAllSuggestionsOnline.apply(this, arguments);
 }
@@ -15144,41 +15425,41 @@ function rejectAllSuggestionsOnline() {
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih
  *  ───────────────────────────────────────────────────────── */
 function _rejectAllSuggestionsOnline() {
-  _rejectAllSuggestionsOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee32() {
-    return _regenerator().w(function (_context32) {
-      while (1) switch (_context32.n) {
+  _rejectAllSuggestionsOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee33() {
+    return _regenerator().w(function (_context33) {
+      while (1) switch (_context33.n) {
         case 0:
-          _context32.n = 1;
+          _context33.n = 1;
           return Word.run(/*#__PURE__*/function () {
-            var _ref38 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee31(context) {
+            var _ref38 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee32(context) {
               var paras;
-              return _regenerator().w(function (_context31) {
-                while (1) switch (_context31.n) {
+              return _regenerator().w(function (_context32) {
+                while (1) switch (_context32.n) {
                   case 0:
                     paras = context.document.body.paragraphs;
                     paras.load("items/text");
-                    _context31.n = 1;
+                    _context32.n = 1;
                     return context.sync();
                   case 1:
-                    _context31.n = 2;
+                    _context32.n = 2;
                     return wordOnlineAdapter.clearHighlights(context, null, paras);
                   case 2:
                     context.document.body.font.highlightColor = null;
-                    _context31.n = 3;
+                    _context32.n = 3;
                     return context.sync();
                   case 3:
-                    return _context31.a(2);
+                    return _context32.a(2);
                 }
-              }, _callee31);
+              }, _callee32);
             }));
-            return function (_x91) {
+            return function (_x93) {
               return _ref38.apply(this, arguments);
             };
           }());
         case 1:
-          return _context32.a(2);
+          return _context33.a(2);
       }
-    }, _callee32);
+    }, _callee33);
   }));
   return _rejectAllSuggestionsOnline.apply(this, arguments);
 }
@@ -15186,20 +15467,20 @@ function checkDocumentText() {
   return _checkDocumentText.apply(this, arguments);
 }
 function _checkDocumentText() {
-  _checkDocumentText = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee33() {
-    return _regenerator().w(function (_context33) {
-      while (1) switch (_context33.n) {
+  _checkDocumentText = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee34() {
+    return _regenerator().w(function (_context34) {
+      while (1) switch (_context34.n) {
         case 0:
           resetNotificationFlags();
           if (!(0,_utils_host_js__WEBPACK_IMPORTED_MODULE_1__.isWordOnline)()) {
-            _context33.n = 1;
+            _context34.n = 1;
             break;
           }
-          return _context33.a(2, checkDocumentTextOnline());
+          return _context34.a(2, checkDocumentTextOnline());
         case 1:
-          return _context33.a(2, checkDocumentTextDesktop());
+          return _context34.a(2, checkDocumentTextDesktop());
       }
-    }, _callee33);
+    }, _callee34);
   }));
   return _checkDocumentText.apply(this, arguments);
 }
@@ -15207,66 +15488,77 @@ function checkDocumentTextDesktop() {
   return _checkDocumentTextDesktop.apply(this, arguments);
 }
 function _checkDocumentTextDesktop() {
-  _checkDocumentTextDesktop = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee35() {
-    var totalInserted, totalDeleted, paragraphsProcessed, apiErrors, _t14;
-    return _regenerator().w(function (_context35) {
-      while (1) switch (_context35.p = _context35.n) {
+  _checkDocumentTextDesktop = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee36() {
+    var totalInserted, totalDeleted, paragraphsProcessed, apiErrors, _t12;
+    return _regenerator().w(function (_context36) {
+      while (1) switch (_context36.p = _context36.n) {
         case 0:
           log("START checkDocumentText()");
           totalInserted = 0;
           totalDeleted = 0;
           paragraphsProcessed = 0;
           apiErrors = 0;
-          _context35.p = 1;
-          _context35.n = 2;
+          _context36.p = 1;
+          _context36.n = 2;
           return Word.run(/*#__PURE__*/function () {
-            var _ref39 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee34(context) {
-              var doc, trackToggleSupported, prevTrack, paras, documentCharOffset, idx, paragraph, sourceText, normalizedSource, trimmed, paragraphDocOffset, pStart, result, suggestions, appliedInParagraph, _iterator10, _step10, suggestion, applied, _t10, _t11, _t12, _t13;
-              return _regenerator().w(function (_context34) {
-                while (1) switch (_context34.p = _context34.n) {
+            var _ref39 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee35(context) {
+              var doc, trackToggleSupported, prevTrack, paras, documentCharOffset, idx, _anchorsEntry$origina, paragraph, sourceText, normalizedSource, trimmed, paragraphDocOffset, pStart, result, suggestions, anchorsEntry, snapshotText, sourceForPlan, _buildParagraphOperat2, plan, skipped, noop, appliedInParagraph, plannedRanges, opIndex, op, range, _op$suggestions, insertLocation, _iterator11, _step11, suggestion, _t10, _t11;
+              return _regenerator().w(function (_context35) {
+                while (1) switch (_context35.p = _context35.n) {
                   case 0:
-                    _context34.n = 1;
+                    log("Desktop phase: tracked-change guard:start");
+                    _context35.n = 1;
                     return documentHasTrackedChanges(context);
                   case 1:
-                    if (!_context34.v) {
-                      _context34.n = 2;
+                    if (!_context35.v) {
+                      _context35.n = 2;
                       break;
                     }
                     notifyTrackedChangesPresent();
-                    return _context34.a(2);
+                    return _context35.a(2);
                   case 2:
+                    log("Desktop phase: tracked-change guard:done");
                     // naloži in začasno vključi sledenje spremembam
                     doc = context.document;
                     trackToggleSupported = false;
                     prevTrack = false;
-                    _context34.p = 3;
+                    _context35.p = 3;
+                    log("Desktop phase: doc.load(trackRevisions) -> sync:start");
                     doc.load("trackRevisions");
-                    _context34.n = 4;
+                    _context35.n = 4;
                     return context.sync();
                   case 4:
+                    log("Desktop phase: doc.load(trackRevisions) -> sync:done");
                     prevTrack = doc.trackRevisions;
                     doc.trackRevisions = true;
+                    log("Desktop phase: doc.trackRevisions set -> sync:start");
+                    _context35.n = 5;
+                    return context.sync();
+                  case 5:
+                    log("Desktop phase: doc.trackRevisions set -> sync:done");
                     trackToggleSupported = true;
                     log("TrackRevisions:", prevTrack, "-> true");
-                    _context34.n = 6;
+                    _context35.n = 7;
                     break;
-                  case 5:
-                    _context34.p = 5;
-                    _t10 = _context34.v;
-                    warn("trackRevisions not available -> skip toggling", _t10);
                   case 6:
-                    _context34.p = 6;
-                    _context34.n = 7;
-                    return wordDesktopAdapter.getParagraphs(context);
+                    _context35.p = 6;
+                    _t10 = _context35.v;
+                    warn("trackRevisions not available -> skip toggling", _t10);
                   case 7:
-                    paras = _context34.v;
+                    _context35.p = 7;
+                    log("Desktop phase: getParagraphs:start");
+                    _context35.n = 8;
+                    return wordDesktopAdapter.getParagraphs(context);
+                  case 8:
+                    paras = _context35.v;
+                    log("Desktop phase: getParagraphs:done");
                     log("Paragraphs found:", paras.items.length);
                     anchorProvider.reset();
                     documentCharOffset = 0;
                     idx = 0;
-                  case 8:
+                  case 9:
                     if (!(idx < paras.items.length)) {
-                      _context34.n = 31;
+                      _context35.n = 27;
                       break;
                     }
                     paragraph = paras.items[idx];
@@ -15276,10 +15568,10 @@ function _checkDocumentTextDesktop() {
                     paragraphDocOffset = documentCharOffset;
                     documentCharOffset += sourceText.length + 1;
                     if (trimmed) {
-                      _context34.n = 10;
+                      _context35.n = 11;
                       break;
                     }
-                    _context34.n = 9;
+                    _context35.n = 10;
                     return anchorProvider.getAnchors({
                       paragraphIndex: idx,
                       originalText: sourceText,
@@ -15288,129 +15580,154 @@ function _checkDocumentTextDesktop() {
                       targetTokens: [],
                       documentOffset: paragraphDocOffset
                     });
-                  case 9:
-                    return _context34.a(3, 30);
                   case 10:
+                    return _context35.a(3, 26);
+                  case 11:
                     if (!(trimmed.length > MAX_PARAGRAPH_CHARS)) {
-                      _context34.n = 11;
+                      _context35.n = 12;
                       break;
                     }
                     notifyParagraphTooLong(idx, trimmed.length);
-                    return _context34.a(3, 30);
-                  case 11:
+                    return _context35.a(3, 26);
+                  case 12:
                     pStart = tnow();
                     paragraphsProcessed++;
                     log("P".concat(idx, ": len=").concat(sourceText.length, " | \"").concat(SNIP(trimmed), "\""));
                     result = void 0;
-                    _context34.p = 12;
-                    _context34.n = 13;
+                    _context35.p = 13;
+                    _context35.n = 14;
                     return commaEngine.analyzeParagraph({
                       paragraphIndex: idx,
                       originalText: sourceText,
                       normalizedOriginalText: normalizedSource,
                       paragraphDocOffset: paragraphDocOffset
                     });
-                  case 13:
-                    result = _context34.v;
-                    _context34.n = 15;
-                    break;
                   case 14:
-                    _context34.p = 14;
-                    _t11 = _context34.v;
+                    result = _context35.v;
+                    _context35.n = 16;
+                    break;
+                  case 15:
+                    _context35.p = 15;
+                    _t11 = _context35.v;
                     apiErrors++;
                     warn("P".concat(idx, ": engine failed"), _t11);
                     notifyApiUnavailable();
-                    return _context34.a(3, 30);
-                  case 15:
+                    return _context35.a(3, 26);
+                  case 16:
                     apiErrors += result.apiErrors;
                     suggestions = result.suggestions || [];
                     if (suggestions.length) {
-                      _context34.n = 16;
+                      _context35.n = 17;
                       break;
                     }
-                    return _context34.a(3, 30);
-                  case 16:
+                    return _context35.a(3, 26);
+                  case 17:
+                    anchorsEntry = anchorProvider.getAnchorsForParagraph(idx);
+                    snapshotText = sourceText;
+                    sourceForPlan = (_anchorsEntry$origina = anchorsEntry === null || anchorsEntry === void 0 ? void 0 : anchorsEntry.originalText) !== null && _anchorsEntry$origina !== void 0 ? _anchorsEntry$origina : sourceText;
+                    _buildParagraphOperat2 = buildParagraphOperationsPlan(snapshotText, sourceForPlan, suggestions), plan = _buildParagraphOperat2.plan, skipped = _buildParagraphOperat2.skipped, noop = _buildParagraphOperat2.noop;
+                    log("Desktop apply plan", {
+                      paragraphIndex: idx,
+                      total: suggestions.length,
+                      planned: plan.length,
+                      skipped: skipped.length,
+                      noop: noop.length
+                    });
                     appliedInParagraph = 0;
-                    _iterator10 = _createForOfIteratorHelper(suggestions);
-                    _context34.p = 17;
-                    _iterator10.s();
+                    _context35.n = 18;
+                    return getRangesForPlannedOperations(context, paragraph, snapshotText, plan, "desktop-batch");
                   case 18:
-                    if ((_step10 = _iterator10.n()).done) {
-                      _context34.n = 25;
+                    plannedRanges = _context35.v;
+                    opIndex = 0;
+                  case 19:
+                    if (!(opIndex < plan.length)) {
+                      _context35.n = 22;
                       break;
                     }
-                    suggestion = _step10.value;
-                    applied = false;
-                    _context34.p = 19;
-                    _context34.n = 20;
-                    return wordDesktopAdapter.applySuggestion(context, paragraph, suggestion);
+                    op = plan[opIndex];
+                    range = plannedRanges[opIndex];
+                    if (range) {
+                      _context35.n = 20;
+                      break;
+                    }
+                    warn("Desktop batch op skipped: range not resolved", {
+                      paragraphIndex: idx,
+                      opIndex: opIndex,
+                      kind: op === null || op === void 0 ? void 0 : op.kind
+                    });
+                    return _context35.a(3, 21);
                   case 20:
-                    applied = _context34.v;
-                    _context34.n = 22;
-                    break;
+                    try {
+                      insertLocation = op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
+                      range.insertText(op.replacement, insertLocation);
+                      appliedInParagraph += ((_op$suggestions = op.suggestions) === null || _op$suggestions === void 0 ? void 0 : _op$suggestions.length) || 1;
+                      _iterator11 = _createForOfIteratorHelper(op.suggestions || []);
+                      try {
+                        for (_iterator11.s(); !(_step11 = _iterator11.n()).done;) {
+                          suggestion = _step11.value;
+                          if (suggestion.kind === "insert") {
+                            totalInserted++;
+                          } else if (suggestion.kind === "delete") {
+                            totalDeleted++;
+                          }
+                        }
+                      } catch (err) {
+                        _iterator11.e(err);
+                      } finally {
+                        _iterator11.f();
+                      }
+                    } catch (err) {
+                      warn("Desktop batch op failed", err);
+                    }
                   case 21:
-                    _context34.p = 21;
-                    _t12 = _context34.v;
-                    warn("Desktop adapter failed to apply suggestion", _t12);
+                    opIndex++;
+                    _context35.n = 19;
+                    break;
                   case 22:
-                    if (applied) {
-                      _context34.n = 23;
-                      break;
-                    }
-                    return _context34.a(3, 24);
-                  case 23:
-                    appliedInParagraph++;
-                    if (suggestion.kind === "insert") {
-                      totalInserted++;
-                    } else if (suggestion.kind === "delete") {
-                      totalDeleted++;
-                    }
-                  case 24:
-                    _context34.n = 18;
-                    break;
-                  case 25:
-                    _context34.n = 27;
-                    break;
-                  case 26:
-                    _context34.p = 26;
-                    _t13 = _context34.v;
-                    _iterator10.e(_t13);
-                  case 27:
-                    _context34.p = 27;
-                    _iterator10.f();
-                    return _context34.f(27);
-                  case 28:
                     if (!appliedInParagraph) {
-                      _context34.n = 30;
+                      _context35.n = 26;
                       break;
                     }
-                    _context34.n = 29;
-                    return normalizeCommaSpacingInParagraph(context, paragraph);
-                  case 29:
-                    log("P".concat(idx, ": applied (ins=").concat(totalInserted, ", del=").concat(totalDeleted, ") | ").concat(Math.round(tnow() - pStart), " ms"));
-                  case 30:
-                    idx++;
-                    _context34.n = 8;
+                    if (!anchorProviderSupportsCharHints) {
+                      _context35.n = 24;
+                      break;
+                    }
+                    _context35.n = 23;
+                    return ensureCommaSpaceAfterInParagraph(context, paragraph);
+                  case 23:
+                    log("Desktop post-pass: ensured missing spaces after commas.");
+                    _context35.n = 25;
                     break;
-                  case 31:
-                    _context34.p = 31;
+                  case 24:
+                    _context35.n = 25;
+                    return normalizeCommaSpacingInParagraph(context, paragraph);
+                  case 25:
+                    log("P".concat(idx, ": applied (ins=").concat(totalInserted, ", del=").concat(totalDeleted, ") | ").concat(Math.round(tnow() - pStart), " ms"));
+                  case 26:
+                    idx++;
+                    _context35.n = 9;
+                    break;
+                  case 27:
+                    _context35.p = 27;
                     if (!trackToggleSupported) {
-                      _context34.n = 33;
+                      _context35.n = 29;
                       break;
                     }
                     doc.trackRevisions = prevTrack;
-                    _context34.n = 32;
+                    log("Desktop phase: restore trackRevisions -> sync:start");
+                    _context35.n = 28;
                     return context.sync();
-                  case 32:
+                  case 28:
+                    log("Desktop phase: restore trackRevisions -> sync:done");
                     log("TrackRevisions restored ->", prevTrack);
-                  case 33:
-                    return _context34.f(31);
-                  case 34:
-                    return _context34.a(2);
+                  case 29:
+                    return _context35.f(27);
+                  case 30:
+                    return _context35.a(2);
                 }
-              }, _callee34, null, [[19, 21], [17, 26, 27, 28], [12, 14], [6,, 31, 34], [3, 5]]);
+              }, _callee35, null, [[13, 15], [7,, 27, 30], [3, 6]]);
             }));
-            return function (_x92) {
+            return function (_x94) {
               return _ref39.apply(this, arguments);
             };
           }());
@@ -15419,16 +15736,20 @@ function _checkDocumentTextDesktop() {
           if (paragraphsProcessed > 0 && totalInserted === 0 && totalDeleted === 0 && apiErrors === 0) {
             notifyNoIssuesFound();
           }
-          _context35.n = 4;
+          _context36.n = 4;
           break;
         case 3:
-          _context35.p = 3;
-          _t14 = _context35.v;
-          errL("ERROR in checkDocumentText:", _t14);
+          _context36.p = 3;
+          _t12 = _context36.v;
+          errL("ERROR in checkDocumentText:", _t12);
         case 4:
-          return _context35.a(2);
+          _context36.p = 4;
+          flushScanNotifications();
+          return _context36.f(4);
+        case 5:
+          return _context36.a(2);
       }
-    }, _callee35, null, [[1, 3]]);
+    }, _callee36, null, [[1, 3, 4, 5]]);
   }));
   return _checkDocumentTextDesktop.apply(this, arguments);
 }
@@ -15436,38 +15757,38 @@ function checkDocumentTextOnline() {
   return _checkDocumentTextOnline.apply(this, arguments);
 }
 function _checkDocumentTextOnline() {
-  _checkDocumentTextOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee37() {
-    var paragraphsProcessed, suggestions, apiErrors, _t16;
-    return _regenerator().w(function (_context37) {
-      while (1) switch (_context37.p = _context37.n) {
+  _checkDocumentTextOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee38() {
+    var paragraphsProcessed, suggestions, apiErrors, _t14;
+    return _regenerator().w(function (_context38) {
+      while (1) switch (_context38.p = _context38.n) {
         case 0:
           log("START checkDocumentTextOnline()");
           paragraphsProcessed = 0;
           suggestions = 0;
           apiErrors = 0;
-          _context37.p = 1;
-          _context37.n = 2;
+          _context38.p = 1;
+          _context38.n = 2;
           return Word.run(/*#__PURE__*/function () {
-            var _ref40 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee36(context) {
-              var paras, documentCharOffset, idx, _result$suggestions, p, original, normalizedOriginal, trimmed, paragraphDocOffset, result, _iterator11, _step11, suggestionObj, highlighted, _t15;
-              return _regenerator().w(function (_context36) {
-                while (1) switch (_context36.p = _context36.n) {
+            var _ref40 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee37(context) {
+              var paras, documentCharOffset, idx, _result$suggestions, p, original, normalizedOriginal, trimmed, paragraphDocOffset, result, _iterator12, _step12, suggestionObj, highlighted, _t13;
+              return _regenerator().w(function (_context37) {
+                while (1) switch (_context37.p = _context37.n) {
                   case 0:
-                    _context36.n = 1;
+                    _context37.n = 1;
                     return documentHasTrackedChanges(context);
                   case 1:
-                    if (!_context36.v) {
-                      _context36.n = 2;
+                    if (!_context37.v) {
+                      _context37.n = 2;
                       break;
                     }
                     notifyTrackedChangesPresent();
-                    return _context36.a(2);
+                    return _context37.a(2);
                   case 2:
-                    _context36.n = 3;
+                    _context37.n = 3;
                     return wordOnlineAdapter.getParagraphs(context);
                   case 3:
-                    paras = _context36.v;
-                    _context36.n = 4;
+                    paras = _context37.v;
+                    _context37.n = 4;
                     return wordOnlineAdapter.clearHighlights(context, null, paras);
                   case 4:
                     resetPendingSuggestionsOnline();
@@ -15476,7 +15797,7 @@ function _checkDocumentTextOnline() {
                     idx = 0;
                   case 5:
                     if (!(idx < paras.items.length)) {
-                      _context36.n = 18;
+                      _context37.n = 18;
                       break;
                     }
                     p = paras.items[idx];
@@ -15486,10 +15807,10 @@ function _checkDocumentTextOnline() {
                     paragraphDocOffset = documentCharOffset;
                     documentCharOffset += original.length + 1;
                     if (trimmed) {
-                      _context36.n = 7;
+                      _context37.n = 7;
                       break;
                     }
-                    _context36.n = 6;
+                    _context37.n = 6;
                     return anchorProvider.getAnchors({
                       paragraphIndex: idx,
                       originalText: original,
@@ -15499,11 +15820,11 @@ function _checkDocumentTextOnline() {
                       documentOffset: paragraphDocOffset
                     });
                   case 6:
-                    return _context36.a(3, 17);
+                    return _context37.a(3, 17);
                   case 7:
                     log("P".concat(idx, " ONLINE: len=").concat(original.length, " | \"").concat(SNIP(trimmed), "\""));
                     paragraphsProcessed++;
-                    _context36.n = 8;
+                    _context37.n = 8;
                     return commaEngine.analyzeParagraph({
                       paragraphIndex: idx,
                       originalText: original,
@@ -15511,57 +15832,57 @@ function _checkDocumentTextOnline() {
                       paragraphDocOffset: paragraphDocOffset
                     });
                   case 8:
-                    result = _context36.v;
+                    result = _context37.v;
                     apiErrors += result.apiErrors;
                     if ((_result$suggestions = result.suggestions) !== null && _result$suggestions !== void 0 && _result$suggestions.length) {
-                      _context36.n = 9;
+                      _context37.n = 9;
                       break;
                     }
-                    return _context36.a(3, 17);
+                    return _context37.a(3, 17);
                   case 9:
-                    _iterator11 = _createForOfIteratorHelper(result.suggestions);
-                    _context36.p = 10;
-                    _iterator11.s();
+                    _iterator12 = _createForOfIteratorHelper(result.suggestions);
+                    _context37.p = 10;
+                    _iterator12.s();
                   case 11:
-                    if ((_step11 = _iterator11.n()).done) {
-                      _context36.n = 14;
+                    if ((_step12 = _iterator12.n()).done) {
+                      _context37.n = 14;
                       break;
                     }
-                    suggestionObj = _step11.value;
-                    _context36.n = 12;
+                    suggestionObj = _step12.value;
+                    _context37.n = 12;
                     return wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
                   case 12:
-                    highlighted = _context36.v;
+                    highlighted = _context37.v;
                     if (highlighted) {
                       suggestions++;
                     }
                   case 13:
-                    _context36.n = 11;
+                    _context37.n = 11;
                     break;
                   case 14:
-                    _context36.n = 16;
+                    _context37.n = 16;
                     break;
                   case 15:
-                    _context36.p = 15;
-                    _t15 = _context36.v;
-                    _iterator11.e(_t15);
+                    _context37.p = 15;
+                    _t13 = _context37.v;
+                    _iterator12.e(_t13);
                   case 16:
-                    _context36.p = 16;
-                    _iterator11.f();
-                    return _context36.f(16);
+                    _context37.p = 16;
+                    _iterator12.f();
+                    return _context37.f(16);
                   case 17:
                     idx++;
-                    _context36.n = 5;
+                    _context37.n = 5;
                     break;
                   case 18:
-                    _context36.n = 19;
+                    _context37.n = 19;
                     return context.sync();
                   case 19:
-                    return _context36.a(2);
+                    return _context37.a(2);
                 }
-              }, _callee36, null, [[10, 15, 16, 17]]);
+              }, _callee37, null, [[10, 15, 16, 17]]);
             }));
-            return function (_x93) {
+            return function (_x95) {
               return _ref40.apply(this, arguments);
             };
           }());
@@ -15570,16 +15891,20 @@ function _checkDocumentTextOnline() {
           if (paragraphsProcessed > 0 && suggestions === 0 && apiErrors === 0) {
             notifyNoIssuesFound();
           }
-          _context37.n = 4;
+          _context38.n = 4;
           break;
         case 3:
-          _context37.p = 3;
-          _t16 = _context37.v;
-          errL("ERROR in checkDocumentTextOnline:", _t16);
+          _context38.p = 3;
+          _t14 = _context38.v;
+          errL("ERROR in checkDocumentTextOnline:", _t14);
         case 4:
-          return _context37.a(2);
+          _context38.p = 4;
+          flushScanNotifications();
+          return _context38.f(4);
+        case 5:
+          return _context38.a(2);
       }
-    }, _callee37, null, [[1, 3]]);
+    }, _callee38, null, [[1, 3, 4, 5]]);
   }));
   return _checkDocumentTextOnline.apply(this, arguments);
 }
@@ -15687,7 +16012,7 @@ var isWordOnline = function isWordOnline() {
 /******/ 	
 /******/ 	/* webpack/runtime/getFullHash */
 /******/ 	!function() {
-/******/ 		__webpack_require__.h = function() { return "be2873bfcad756cb6521"; }
+/******/ 		__webpack_require__.h = function() { return "6484a97dbb4d45d481c5"; }
 /******/ 	}();
 /******/ 	
 /******/ 	/* webpack/runtime/global */

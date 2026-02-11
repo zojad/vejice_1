@@ -6,8 +6,8 @@
   xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
   xsi:type="TaskPaneApp">
 
-  <Id>f50716ae-c756-404f-aad6-0c1789859f30</Id>
-  <Version>1.0.0.2</Version>
+  <Id>39ccb3e5-8937-42f4-af38-6d55cbd0d938</Id>
+  <Version>1.0.0.3</Version>
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
   <DisplayName DefaultValue="Preverjanje vejic"/>
@@ -44,7 +44,6 @@
     <Requirements>
       <bt:Sets DefaultMinVersion="1.3">
         <bt:Set Name="WordApi" MinVersion="1.3"/>
-        <bt:Set Name="NotificationMessages" MinVersion="1.1"/>
       </bt:Sets>
     </Requirements>
 

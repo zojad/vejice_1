@@ -197,6 +197,66 @@ function requiresApiKey(url) {
   return typeof url === "string" && /gpu-proc1\.cjvt\.si/i.test(url);
 }
 
+const DOT_GUARD_PLACEHOLDER = "\uE000";
+const DOT_GUARD_PATTERNS = [
+  /\b(?:[\p{L}]\.\s*){2,}/gu,
+  /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g,
+  /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu,
+];
+
+function hasProblematicDotPattern(text = "") {
+  if (typeof text !== "string" || !text) return false;
+  for (const pattern of DOT_GUARD_PATTERNS) {
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
+
+function protectProblematicDots(text = "") {
+  if (typeof text !== "string" || !text) return text;
+  let protectedText = text;
+  for (const pattern of DOT_GUARD_PATTERNS) {
+    protectedText = protectedText.replace(pattern, (match) =>
+      match.replace(/\./g, DOT_GUARD_PLACEHOLDER)
+    );
+  }
+  return protectedText;
+}
+
+function unprotectText(text) {
+  if (typeof text !== "string" || !text) return text;
+  return text.replace(new RegExp(DOT_GUARD_PLACEHOLDER, "g"), ".");
+}
+
+function unprotectStringsDeep(value) {
+  if (typeof value === "string") return unprotectText(value);
+  if (Array.isArray(value)) return value.map((item) => unprotectStringsDeep(item));
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, val] of Object.entries(value)) {
+    out[key] = unprotectStringsDeep(val);
+  }
+  return out;
+}
+
+function normalizeResponsePayload(inputSentence, payload) {
+  const raw = unprotectStringsDeep({ ...(payload || {}) });
+  const correctedText = unprotectText(pickCorrectedText(inputSentence, raw));
+  if (typeof raw.source_text !== "string") raw.source_text = inputSentence;
+  if (typeof raw.target_text !== "string") raw.target_text = correctedText;
+  return { correctedText, raw };
+}
+
+function buildRequestData(sentence) {
+  return {
+    vhodna_poved: sentence,
+    hkratne_napovedi: true,
+    "ne_ozna\u010di_imen": false,
+    "prepri\u010danost_modela": 0.08,
+  };
+}
+
 async function requestPopravek(poved) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
@@ -210,12 +270,7 @@ async function requestPopravek(poved) {
   }
   const url = API_URL;
 
-  const data = {
-    vhodna_poved: poved,
-    hkratne_napovedi: true,
-    ne_označi_imen: false,
-    prepričanost_modela: 0.08,
-  };
+  const data = buildRequestData(poved);
 
   const config = {
     headers: {
@@ -230,6 +285,7 @@ async function requestPopravek(poved) {
   }
 
   const attempts = Math.max(1, API_MAX_ATTEMPTS);
+  let protectedRetryUsed = false;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const t0 = performance?.now?.() ?? Date.now();
     try {
@@ -245,10 +301,7 @@ async function requestPopravek(poved) {
       );
       const r = await axios.post(url, data, config);
       const t1 = performance?.now?.() ?? Date.now();
-      const raw = { ...(r?.data || {}) };
-      const correctedText = pickCorrectedText(poved, raw);
-      if (typeof raw.source_text !== "string") raw.source_text = poved;
-      if (typeof raw.target_text !== "string") raw.target_text = correctedText;
+      const { correctedText, raw } = normalizeResponsePayload(poved, r?.data);
 
       log(
         "OK",
@@ -272,6 +325,39 @@ async function requestPopravek(poved) {
       const t1 = performance?.now?.() ?? Date.now();
       const durationMs = Math.round(t1 - t0);
       const info = describeAxiosError(err);
+      const canTryProtectedDots =
+        !protectedRetryUsed &&
+        !USE_MOCK &&
+        typeof info?.status === "number" &&
+        info.status >= 500 &&
+        hasProblematicDotPattern(poved);
+      if (canTryProtectedDots) {
+        protectedRetryUsed = true;
+        try {
+          const protectedSentence = protectProblematicDots(poved);
+          if (protectedSentence !== poved) {
+            log("Retrying once with dot-protected payload", {
+              attempt,
+              len: poved?.length ?? 0,
+              snippet: snip(poved),
+            });
+            const protectedData = buildRequestData(protectedSentence);
+            const protectedResponse = await axios.post(url, protectedData, config);
+            const { correctedText, raw } = normalizeResponsePayload(poved, protectedResponse?.data);
+            log(
+              "OK (dot-protected)",
+              "| status:",
+              protectedResponse?.status,
+              "| changed:",
+              correctedText !== poved
+            );
+            return { correctedText, raw };
+          }
+        } catch (protectedErr) {
+          const protectedInfo = describeAxiosError(protectedErr);
+          log("ERROR (dot-protected)", { ...protectedInfo, attempt });
+        }
+      }
       const retryable = attempt < attempts && isRetryableError(info);
       log("ERROR", `${durationMs} ms`, { ...info, attempt, retryable });
       if (retryable) {
@@ -310,3 +396,7 @@ export async function popraviPovedDetailed(poved) {
     targetText: typeof raw?.target_text === "string" ? raw.target_text : correctedText,
   };
 }
+
+
+
+

@@ -23,6 +23,7 @@ module.exports = async (env, options) => {
     entry: {
       polyfill: ["core-js/stable", "regenerator-runtime/runtime"],
       commands: "./src/commands/commands.js",
+      taskpane: "./src/taskpane/taskpane.js",
     },
     output: {
       filename: "[name].js",
@@ -52,6 +53,12 @@ module.exports = async (env, options) => {
         chunks: ["polyfill", "commands"],
         inject: "body",
       }),
+      new HtmlWebpackPlugin({
+        filename: "taskpane.html",
+        template: "./src/taskpane/taskpane.html",
+        chunks: ["polyfill", "taskpane"],
+        inject: "body",
+      }),
       new webpack.DefinePlugin({
         "process.env.VEJICE_API_URL": JSON.stringify(process.env.VEJICE_API_URL || ""),
         "process.env.VEJICE_USE_MOCK": JSON.stringify(process.env.VEJICE_USE_MOCK || ""),
@@ -68,6 +75,7 @@ module.exports = async (env, options) => {
         patterns: [
           { from: "assets/*", to: "assets/[name][ext][query]" },
           { from: "src/commands/toast.html", to: "toast.html" },
+          { from: "src/taskpane/taskpane.css", to: "taskpane.css" },
           { from: "src/manifests/manifest.dev.xml", to: "manifest.dev.xml" },
           {
             from: "src/manifests/manifest.dev.xml",

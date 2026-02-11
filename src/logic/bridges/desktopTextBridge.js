@@ -7,9 +7,11 @@ export class DesktopTextBridge extends TextBridge {
       applyDeleteSuggestion,
       forceSpacingCleanup: false,
       normalizationProfile: {
-        collapseWhitespace: true,
-        normalizeQuotes: true,
-        normalizeDashes: true,
+        // Keep desktop mapping as literal as possible; Win32 text offsets are
+        // sensitive to canonical rewrites and can drift with aggressive normalization.
+        collapseWhitespace: false,
+        normalizeQuotes: false,
+        normalizeDashes: false,
         normalizeEllipsis: false,
       },
     });
