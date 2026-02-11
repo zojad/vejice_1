@@ -7,7 +7,7 @@
   xsi:type="TaskPaneApp">
 
   <Id>f50716ae-c756-404f-aad6-0c1789859f30</Id>
-  <Version>1.0.0.1</Version>
+  <Version>1.0.0.2</Version>
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
   <DisplayName DefaultValue="Preverjanje vejic"/>
