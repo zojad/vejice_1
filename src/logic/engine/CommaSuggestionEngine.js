@@ -544,6 +544,10 @@ function splitParagraphIntoChunks(
   );
   const sentences = [];
   let start = 0;
+  const sentenceLeadClosers = /[\])"'Â»â€â€™]/;
+  const lowerLetter = /\p{Ll}/u;
+  const upperLetter = /\p{Lu}/u;
+  const letterOrDigit = /[\p{L}\d]/u;
 
   const pushSentence = (contentEnd, gapEnd = contentEnd) => {
     if (typeof contentEnd !== "number" || contentEnd <= start) {
@@ -554,6 +558,35 @@ function splitParagraphIntoChunks(
     start = gapEnd ?? contentEnd;
   };
 
+  const readPrevToken = (dotIndex) => {
+    let end = dotIndex;
+    while (end > 0 && /\s/.test(protectedText[end - 1])) end--;
+    let tokenStart = end;
+    while (tokenStart > 0 && letterOrDigit.test(protectedText[tokenStart - 1])) tokenStart--;
+    return protectedText.slice(tokenStart, end);
+  };
+
+  const nextNonSpaceIndex = (fromIndex) => {
+    let idx = fromIndex;
+    while (idx < protectedText.length && /\s/.test(protectedText[idx])) idx++;
+    return idx;
+  };
+
+  const shouldSplitOnDot = (dotIndex) => {
+    const prevToken = readPrevToken(dotIndex);
+    const isShortLowerAbbrev =
+      prevToken.length > 0 &&
+      prevToken.length <= 3 &&
+      !upperLetter.test(prevToken) &&
+      lowerLetter.test(prevToken);
+    if (isShortLowerAbbrev) return false;
+
+    let idx = nextNonSpaceIndex(dotIndex + 1);
+    while (idx < protectedText.length && sentenceLeadClosers.test(protectedText[idx])) idx++;
+    if (idx >= protectedText.length) return true;
+    return upperLetter.test(protectedText[idx]);
+  };
+
   for (let i = 0; i < protectedText.length; i++) {
     const ch = protectedText[i];
     if (ch === "\n") {
@@ -561,6 +594,9 @@ function splitParagraphIntoChunks(
       continue;
     }
     if (/[.!?]/.test(ch)) {
+      if (ch === "." && !shouldSplitOnDot(i)) {
+        continue;
+      }
       let contentEnd = i + 1;
       while (contentEnd < protectedText.length && /[\])"'»”’]+/.test(protectedText[contentEnd])) {
         contentEnd++;
