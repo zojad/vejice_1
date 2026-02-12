@@ -55,7 +55,9 @@ const CHUNK_API_ERROR_MESSAGE =
 const PARAGRAPH_NON_COMMA_MESSAGE =
   "API je spremenil več kot vejice. Preglejte odstavek.";
 const TRACKED_CHANGES_PRESENT_MESSAGE =
-  "Najprej sprejmite ali zavrnite obstoječe spremembe (Track Changes), nato ponovno zaženite preverjanje.";
+  "Najprej sprejmite ali zavrnite obstoječe spremembe (Track Changes) in nato ponovno zaženite preverjanje.";
+const TRACK_CHANGES_REQUIRED_MESSAGE =
+  "Vključite Sledenje spremembam (Track Changes) in poskusite znova.";
 const API_UNAVAILABLE_MESSAGE =
   "Storitev CJVT Vejice trenutno ni na voljo. Znova poskusite kasneje.";
 const NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajočih ali napačnih vejic.";
@@ -382,6 +384,11 @@ function notifyParagraphNonCommaChanges(paragraphIndex, original, corrected) {
 function notifyTrackedChangesPresent() {
   warn("Tracked changes present – aborting check");
   queueScanNotification(TRACKED_CHANGES_PRESENT_MESSAGE);
+}
+
+function notifyTrackChangesRequired() {
+  warn("Track changes disabled – aborting check");
+  queueScanNotification(TRACK_CHANGES_REQUIRED_MESSAGE);
 }
 
 let apiFailureNotified = false;
@@ -2415,153 +2422,140 @@ async function checkDocumentTextDesktop() {
         return;
       }
       log("Desktop phase: tracked-change guard:done");
-      // naloži in začasno vključi sledenje spremembam
+
+      // On desktop we require the user to enable Track Changes manually.
       const doc = context.document;
-      let trackToggleSupported = false;
-      let prevTrack = false;
       try {
         log("Desktop phase: doc.load(trackRevisions) -> sync:start");
         doc.load("trackRevisions");
         await context.sync();
         log("Desktop phase: doc.load(trackRevisions) -> sync:done");
-        prevTrack = doc.trackRevisions;
-        doc.trackRevisions = true;
-        log("Desktop phase: doc.trackRevisions set -> sync:start");
-        await context.sync();
-        log("Desktop phase: doc.trackRevisions set -> sync:done");
-        trackToggleSupported = true;
-        log("TrackRevisions:", prevTrack, "-> true");
+        if (!doc.trackRevisions) {
+          notifyTrackChangesRequired();
+          return;
+        }
       } catch (trackErr) {
-        warn("trackRevisions not available -> skip toggling", trackErr);
+        warn("trackRevisions not available -> require manual enablement", trackErr);
+        notifyTrackChangesRequired();
+        return;
       }
 
-      try {
-        log("Desktop phase: getParagraphs:start");
-        const paras = await wordDesktopAdapter.getParagraphs(context);
-        log("Desktop phase: getParagraphs:done");
-        log("Paragraphs found:", paras.items.length);
-        anchorProvider.reset();
-        let documentCharOffset = 0;
+      log("Desktop phase: getParagraphs:start");
+      const paras = await wordDesktopAdapter.getParagraphs(context);
+      log("Desktop phase: getParagraphs:done");
+      log("Paragraphs found:", paras.items.length);
+      anchorProvider.reset();
+      let documentCharOffset = 0;
 
-        for (let idx = 0; idx < paras.items.length; idx++) {
-          const paragraph = paras.items[idx];
-          const sourceText = paragraph.text || "";
-          const normalizedSource = normalizeParagraphWhitespace(sourceText);
-          const trimmed = normalizedSource.trim();
-          const paragraphDocOffset = documentCharOffset;
-          documentCharOffset += sourceText.length + 1;
-          if (!trimmed) {
-            await anchorProvider.getAnchors({
-              paragraphIndex: idx,
-              originalText: sourceText,
-              correctedText: sourceText,
-              sourceTokens: [],
-              targetTokens: [],
-              documentOffset: paragraphDocOffset,
-            });
-            continue;
-          }
-          if (trimmed.length > MAX_PARAGRAPH_CHARS) {
-            notifyParagraphTooLong(idx, trimmed.length);
-            continue;
-          }
-
-          const pStart = tnow();
-          paragraphsProcessed++;
-          log(`P${idx}: len=${sourceText.length} | "${SNIP(trimmed)}"`);
-
-          let result;
-          try {
-            result = await commaEngine.analyzeParagraph({
-              paragraphIndex: idx,
-              originalText: sourceText,
-              normalizedOriginalText: normalizedSource,
-              paragraphDocOffset,
-            });
-          } catch (err) {
-            apiErrors++;
-            warn(`P${idx}: engine failed`, err);
-            notifyApiUnavailable();
-            continue;
-          }
-          apiErrors += result.apiErrors;
-          nonCommaSkips += result.nonCommaSkips || 0;
-          const suggestions = result.suggestions || [];
-          if (!suggestions.length) continue;
-
-          const anchorsEntry = anchorProvider.getAnchorsForParagraph(idx);
-          const snapshotText = sourceText;
-          const sourceForPlan = anchorsEntry?.originalText ?? sourceText;
-          const { plan, skipped, noop } = buildParagraphOperationsPlan(
-            snapshotText,
-            sourceForPlan,
-            suggestions
-          );
-          log("Desktop apply plan", {
+      for (let idx = 0; idx < paras.items.length; idx++) {
+        const paragraph = paras.items[idx];
+        const sourceText = paragraph.text || "";
+        const normalizedSource = normalizeParagraphWhitespace(sourceText);
+        const trimmed = normalizedSource.trim();
+        const paragraphDocOffset = documentCharOffset;
+        documentCharOffset += sourceText.length + 1;
+        if (!trimmed) {
+          await anchorProvider.getAnchors({
             paragraphIndex: idx,
-            total: suggestions.length,
-            planned: plan.length,
-            skipped: skipped.length,
-            noop: noop.length,
+            originalText: sourceText,
+            correctedText: sourceText,
+            sourceTokens: [],
+            targetTokens: [],
+            documentOffset: paragraphDocOffset,
           });
+          continue;
+        }
+        if (trimmed.length > MAX_PARAGRAPH_CHARS) {
+          notifyParagraphTooLong(idx, trimmed.length);
+          continue;
+        }
 
-          let appliedInParagraph = 0;
-          const plannedRanges = await getRangesForPlannedOperations(
-            context,
-            paragraph,
-            snapshotText,
-            plan,
-            "desktop-batch"
-          );
-          for (let opIndex = 0; opIndex < plan.length; opIndex++) {
-            const op = plan[opIndex];
-            const range = plannedRanges[opIndex];
-            if (!range) {
-              warn("Desktop batch op skipped: range not resolved", {
-                paragraphIndex: idx,
-                opIndex,
-                kind: op?.kind,
-              });
-              continue;
-            }
-            try {
-              const insertLocation =
-                op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
-              range.insertText(op.replacement, insertLocation);
-              appliedInParagraph += op.suggestions?.length || 1;
-              for (const suggestion of op.suggestions || []) {
-                if (suggestion.kind === "insert") {
-                  totalInserted++;
-                } else if (suggestion.kind === "delete") {
-                  totalDeleted++;
-                }
-              }
-            } catch (err) {
-              warn("Desktop batch op failed", err);
-            }
+        const pStart = tnow();
+        paragraphsProcessed++;
+        log(`P${idx}: len=${sourceText.length} | "${SNIP(trimmed)}"`);
+
+        let result;
+        try {
+          result = await commaEngine.analyzeParagraph({
+            paragraphIndex: idx,
+            originalText: sourceText,
+            normalizedOriginalText: normalizedSource,
+            paragraphDocOffset,
+          });
+        } catch (err) {
+          apiErrors++;
+          warn(`P${idx}: engine failed`, err);
+          notifyApiUnavailable();
+          continue;
+        }
+        apiErrors += result.apiErrors;
+        nonCommaSkips += result.nonCommaSkips || 0;
+        const suggestions = result.suggestions || [];
+        if (!suggestions.length) continue;
+
+        const anchorsEntry = anchorProvider.getAnchorsForParagraph(idx);
+        const snapshotText = sourceText;
+        const sourceForPlan = anchorsEntry?.originalText ?? sourceText;
+        const { plan, skipped, noop } = buildParagraphOperationsPlan(
+          snapshotText,
+          sourceForPlan,
+          suggestions
+        );
+        log("Desktop apply plan", {
+          paragraphIndex: idx,
+          total: suggestions.length,
+          planned: plan.length,
+          skipped: skipped.length,
+          noop: noop.length,
+        });
+
+        let appliedInParagraph = 0;
+        const plannedRanges = await getRangesForPlannedOperations(
+          context,
+          paragraph,
+          snapshotText,
+          plan,
+          "desktop-batch"
+        );
+        for (let opIndex = 0; opIndex < plan.length; opIndex++) {
+          const op = plan[opIndex];
+          const range = plannedRanges[opIndex];
+          if (!range) {
+            warn("Desktop batch op skipped: range not resolved", {
+              paragraphIndex: idx,
+              opIndex,
+              kind: op?.kind,
+            });
+            continue;
           }
-          if (appliedInParagraph) {
-            if (anchorProviderSupportsCharHints) {
-              await ensureCommaSpaceAfterInParagraph(context, paragraph);
-              log("Desktop post-pass: ensured missing spaces after commas.");
-            } else {
-              await normalizeCommaSpacingInParagraph(context, paragraph);
+          try {
+            const insertLocation =
+              op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
+            range.insertText(op.replacement, insertLocation);
+            appliedInParagraph += op.suggestions?.length || 1;
+            for (const suggestion of op.suggestions || []) {
+              if (suggestion.kind === "insert") {
+                totalInserted++;
+              } else if (suggestion.kind === "delete") {
+                totalDeleted++;
+              }
             }
-            log(
-              `P${idx}: applied (ins=${totalInserted}, del=${totalDeleted}) | ${Math.round(
-                tnow() - pStart
-              )} ms`
-            );
+          } catch (err) {
+            warn("Desktop batch op failed", err);
           }
         }
-      } finally {
-        // povrni sledenje spremembam
-        if (trackToggleSupported) {
-          doc.trackRevisions = prevTrack;
-          log("Desktop phase: restore trackRevisions -> sync:start");
-          await context.sync();
-          log("Desktop phase: restore trackRevisions -> sync:done");
-          log("TrackRevisions restored ->", prevTrack);
+        if (appliedInParagraph) {
+          if (anchorProviderSupportsCharHints) {
+            await ensureCommaSpaceAfterInParagraph(context, paragraph);
+            log("Desktop post-pass: ensured missing spaces after commas.");
+          } else {
+            await normalizeCommaSpacingInParagraph(context, paragraph);
+          }
+          log(
+            `P${idx}: applied (ins=${totalInserted}, del=${totalDeleted}) | ${Math.round(
+              tnow() - pStart
+            )} ms`
+          );
         }
       }
     });
