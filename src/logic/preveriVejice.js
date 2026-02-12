@@ -2001,6 +2001,38 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     return { start, token };
   };
 
+  const isQuoteOrSpaceBoundary = (value) =>
+    typeof value === "string" && /^[\s"'«»“”„’)\]]+$/.test(value);
+  // In Word content, angled quotes can surface in either direction around boundaries.
+  // Treat both « and » as quote chars when normalizing insert positions.
+  const isClosingQuoteOrCloser = (char) => /["'«»”’)\]]/.test(char || "");
+  const isOpeningQuoteOrOpener = (char) => /["'«»“„(\[]/.test(char || "");
+  const normalizeInsertPosForQuoteBoundary = (pos) => {
+    if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
+    let left = pos - 1;
+    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    let right = pos;
+    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    if (
+      left >= 0 &&
+      right < snapshotText.length &&
+      isClosingQuoteOrCloser(snapshotText[left]) &&
+      isOpeningQuoteOrOpener(snapshotText[right])
+    ) {
+      return left + 1;
+    }
+    // Also catch insert positions that land at the start of the next word:
+    // ...'<space>'Word  -> move comma after the closing quote.
+    if (left >= 0 && isOpeningQuoteOrOpener(snapshotText[left])) {
+      let prev = left - 1;
+      while (prev >= 0 && /\s/.test(snapshotText[prev])) prev--;
+      if (prev >= 0 && isClosingQuoteOrCloser(snapshotText[prev])) {
+        return prev + 1;
+      }
+    }
+    return pos;
+  };
+
   // Best path: replace exact whitespace gap between before/after anchors.
   if (beforeAnchor && afterAnchor) {
     const before = findStartForAnchor(beforeAnchor, true);
@@ -2013,12 +2045,33 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         if (/^\s*,\s*$/.test(gap)) {
           return { kind: "noop" };
         }
-        // If there are non-whitespace chars in the gap, anchors are not adjacent; don't noop.
+        // Normal adjacency gap: whitespace-only.
         if (!/[^\s]/.test(gap)) {
           return {
             kind: "insert",
-            start: beforeEnd,
-            end: beforeEnd,
+            start: normalizeInsertPosForQuoteBoundary(beforeEnd),
+            end: normalizeInsertPosForQuoteBoundary(beforeEnd),
+            replacement: ",",
+            snippet: gap || before.token,
+          };
+        }
+        // Quote boundary adjacency (e.g. "'foo' 'bar'"): insert after closing quote.
+        if (isQuoteOrSpaceBoundary(gap)) {
+          let insertPos = beforeEnd;
+          while (
+            insertPos < after.start &&
+            isClosingQuoteOrCloser(snapshotText[insertPos])
+          ) {
+            insertPos++;
+          }
+          const boundarySegment = snapshotText.slice(insertPos, after.start);
+          if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
+            return { kind: "noop" };
+          }
+          return {
+            kind: "insert",
+            start: normalizeInsertPosForQuoteBoundary(insertPos),
+            end: normalizeInsertPosForQuoteBoundary(insertPos),
             replacement: ",",
             snippet: gap || before.token,
           };
@@ -2036,18 +2089,19 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       if (wsStart < after.start) {
         return {
           kind: "insert",
-          start: wsStart,
-          end: wsStart,
+          start: normalizeInsertPosForQuoteBoundary(wsStart),
+          end: normalizeInsertPosForQuoteBoundary(wsStart),
           replacement: ",",
           snippet: snapshotText.slice(wsStart, after.start),
         };
       }
+      const safePos = normalizeInsertPosForQuoteBoundary(after.start);
       return {
         kind: "insert",
-        start: after.start,
-        end: after.start,
+        start: safePos,
+        end: safePos,
         replacement: ",",
-        snippet: snapshotText.slice(Math.max(0, after.start - 1), Math.min(snapshotText.length, after.start + 1)),
+        snippet: snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1)),
       };
     }
   }
@@ -2062,18 +2116,19 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       if (wsEnd > beforeEnd) {
         return {
           kind: "insert",
-          start: beforeEnd,
-          end: beforeEnd,
+          start: normalizeInsertPosForQuoteBoundary(beforeEnd),
+          end: normalizeInsertPosForQuoteBoundary(beforeEnd),
           replacement: ",",
           snippet: snapshotText.slice(beforeEnd, wsEnd),
         };
       }
+      const safePos = normalizeInsertPosForQuoteBoundary(beforeEnd);
       return {
         kind: "insert",
-        start: beforeEnd,
-        end: beforeEnd,
+        start: safePos,
+        end: safePos,
         replacement: ",",
-        snippet: snapshotText.slice(Math.max(0, beforeEnd - 1), Math.min(snapshotText.length, beforeEnd + 1)),
+        snippet: snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1)),
       };
     }
   }
@@ -2352,6 +2407,7 @@ async function checkDocumentTextDesktop() {
   let totalDeleted = 0;
   let paragraphsProcessed = 0;
   let apiErrors = 0;
+  let nonCommaSkips = 0;
 
   try {
     await Word.run(async (context) => {
@@ -2431,6 +2487,7 @@ async function checkDocumentTextDesktop() {
             continue;
           }
           apiErrors += result.apiErrors;
+          nonCommaSkips += result.nonCommaSkips || 0;
           const suggestions = result.suggestions || [];
           if (!suggestions.length) continue;
 
@@ -2519,9 +2576,17 @@ async function checkDocumentTextDesktop() {
       "| deleted:",
       totalDeleted,
       "| apiErrors:",
-      apiErrors
+      apiErrors,
+      "| nonCommaSkips:",
+      nonCommaSkips
     );
-    if (paragraphsProcessed > 0 && totalInserted === 0 && totalDeleted === 0 && apiErrors === 0) {
+    if (
+      paragraphsProcessed > 0 &&
+      totalInserted === 0 &&
+      totalDeleted === 0 &&
+      apiErrors === 0 &&
+      nonCommaSkips === 0
+    ) {
       notifyNoIssuesFound();
     }
   } catch (e) {
@@ -2536,6 +2601,7 @@ async function checkDocumentTextOnline() {
   let paragraphsProcessed = 0;
   let suggestions = 0;
   let apiErrors = 0;
+  let nonCommaSkips = 0;
 
   try {
     await Word.run(async (context) => {
@@ -2577,8 +2643,10 @@ async function checkDocumentTextOnline() {
           originalText: original,
           normalizedOriginalText: normalizedOriginal,
           paragraphDocOffset,
+          conservativeSentenceFallback: true,
         });
         apiErrors += result.apiErrors;
+        nonCommaSkips += result.nonCommaSkips || 0;
         if (!result.suggestions?.length) continue;
         for (const suggestionObj of result.suggestions) {
           const highlighted = await wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
@@ -2597,9 +2665,11 @@ async function checkDocumentTextOnline() {
       "| suggestions:",
       suggestions,
       "| apiErrors:",
-      apiErrors
+      apiErrors,
+      "| nonCommaSkips:",
+      nonCommaSkips
     );
-    if (paragraphsProcessed > 0 && suggestions === 0 && apiErrors === 0) {
+    if (paragraphsProcessed > 0 && suggestions === 0 && apiErrors === 0 && nonCommaSkips === 0) {
       notifyNoIssuesFound();
     }
   } catch (e) {

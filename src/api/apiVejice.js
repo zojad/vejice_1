@@ -198,8 +198,10 @@ function requiresApiKey(url) {
 }
 
 const DOT_GUARD_PLACEHOLDER = "\uE000";
+const DATE_DOT_PATTERN = /\b(\d{1,2})\.\s*(\d{1,2})(?:\.\s*(\d{2,4}))?\b/g;
+const INITIALS_DOT_PATTERN = /\b(?:[\p{L}]\.\s*){2,}/gu;
 const DOT_GUARD_PATTERNS = [
-  /\b(?:[\p{L}]\.\s*){2,}/gu,
+  INITIALS_DOT_PATTERN,
   /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g,
   /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu,
 ];
@@ -222,6 +224,11 @@ function protectProblematicDots(text = "") {
     );
   }
   return protectedText;
+}
+
+function protectDateDots(text = "") {
+  if (typeof text !== "string" || !text) return text;
+  return text.replace(DATE_DOT_PATTERN, (match) => match.replace(/\./g, DOT_GUARD_PLACEHOLDER));
 }
 
 function unprotectText(text) {
@@ -270,7 +277,8 @@ async function requestPopravek(poved) {
   }
   const url = API_URL;
 
-  const data = buildRequestData(poved);
+  const primaryRequestSentence = protectDateDots(poved);
+  const data = buildRequestData(primaryRequestSentence);
 
   const config = {
     headers: {
@@ -293,9 +301,9 @@ async function requestPopravek(poved) {
         "POST",
         url,
         "| len:",
-        poved?.length ?? 0,
+        primaryRequestSentence?.length ?? 0,
         "| snippet:",
-        snip(poved),
+        snip(primaryRequestSentence),
         "| attempt:",
         attempt
       );

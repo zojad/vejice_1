@@ -20,6 +20,7 @@ const LEMMA_CHUNK_SOFT_MAX_CHARS = 900;
 const LEMMA_CHUNK_MAX_UNITS = 3;
 const LEMMA_SPLIT_WINDOW_CHARS = 180;
 const LEMMA_MIN_SEGMENT_CHARS = 120;
+const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -107,6 +108,7 @@ export class CommaSuggestionEngine {
     normalizedOriginalText,
     paragraphDocOffset,
     forceSentenceChunks = false,
+    conservativeSentenceFallback = false,
   }) {
     const paragraphText = typeof originalText === "string" ? originalText : "";
     const forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
@@ -142,12 +144,14 @@ export class CommaSuggestionEngine {
     if (!Array.isArray(chunks) || !chunks.length) {
       chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
         preferWholeParagraph: !useSentenceChunks,
+        conservativePack: useSentenceChunks && conservativeSentenceFallback,
       });
     }
     if (!chunks.length) {
       return {
         suggestions: [],
         apiErrors: 0,
+        nonCommaSkips: 0,
         processedAny: false,
         anchorsEntry: await this.anchorProvider.getAnchors({
           paragraphIndex,
@@ -258,6 +262,7 @@ export class CommaSuggestionEngine {
         normalizedOriginalText,
         paragraphDocOffset,
         forceSentenceChunks: true,
+        conservativeSentenceFallback,
       });
     }
 
@@ -273,6 +278,7 @@ export class CommaSuggestionEngine {
       return {
         suggestions: [],
         apiErrors,
+        nonCommaSkips: nonCommaChunkSkips,
         processedAny: false,
         anchorsEntry,
       };
@@ -429,12 +435,14 @@ export class CommaSuggestionEngine {
         normalizedOriginalText,
         paragraphDocOffset,
         forceSentenceChunks: true,
+        conservativeSentenceFallback,
       });
     }
 
     return {
       suggestions,
       apiErrors,
+      nonCommaSkips: nonCommaChunkSkips,
       processedAny: Boolean(suggestions.length),
       anchorsEntry,
       correctedParagraph,
@@ -526,7 +534,7 @@ function buildTokenHint(meta) {
 function splitParagraphIntoChunks(
   text = "",
   maxLen = MAX_PARAGRAPH_CHARS,
-  { preferWholeParagraph = true } = {}
+  { preferWholeParagraph = true, conservativePack = false } = {}
 ) {
   const safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
@@ -555,7 +563,7 @@ function splitParagraphIntoChunks(
   protectedText = protectDots(protectedText, /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g);
   protectedText = protectDots(
     protectedText,
-    /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu
+    /\b(?:npr|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu
   );
   const sentences = [];
   let start = 0;
@@ -651,7 +659,9 @@ function splitParagraphIntoChunks(
     mergedSentences.push({ ...sentence });
   }
 
-  return mergedSentences.map((sentence, index) => {
+  const sentenceUnits = conservativePack ? packLemmaUnits(mergedSentences, maxLen) : mergedSentences;
+
+  return sentenceUnits.map((sentence, index) => {
     const gapEnd = sentence.gapEnd ?? sentence.end;
     const length = sentence.end - sentence.start;
     return {
@@ -674,14 +684,145 @@ async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGR
   if (!anchorProvider || typeof anchorProvider.fetchLemmaTokens !== "function") {
     return null;
   }
+  const mode = resolveLemmaSplitMode();
+  if (mode === "off") return null;
   try {
     const lemmaTokens = await anchorProvider.fetchLemmaTokens(safeText);
-    const chunks = buildChunksFromLemmaTokens(safeText, lemmaTokens, maxLen);
+    let splitTokens = lemmaTokens;
+    const nativeQuality = evaluateLemmaOffsetsQuality(safeText, lemmaTokens);
+    if (nativeQuality.coverage < LEMMA_SPLIT_CONFIDENCE_THRESHOLD) {
+      const reconstructed = reconstructLemmaOffsets(safeText, lemmaTokens);
+      if (mode === "safe" && reconstructed.confidence < LEMMA_SPLIT_CONFIDENCE_THRESHOLD) {
+        if (isDeepDebugEnabled()) {
+          console.log(
+            "[Vejice Split]",
+            "lemma split fallback -> low reconstruction confidence",
+            reconstructed
+          );
+        }
+        return null;
+      }
+      if (reconstructed.tokens.length) {
+        splitTokens = reconstructed.tokens;
+      }
+      if (isDeepDebugEnabled()) {
+        console.log("[Vejice Split]", "reconstructed lemma offsets", {
+          mode,
+          nativeCoverage: nativeQuality.coverage,
+          reconstructedConfidence: reconstructed.confidence,
+          tokenCount: splitTokens.length,
+        });
+      }
+    } else if (isDeepDebugEnabled()) {
+      console.log("[Vejice Split]", "native lemma offsets used", nativeQuality);
+    }
+    const chunks = buildChunksFromLemmaTokens(safeText, splitTokens, maxLen);
     if (!Array.isArray(chunks) || !chunks.length) return null;
     return chunks;
   } catch (_err) {
     return null;
   }
+}
+
+function resolveLemmaSplitMode() {
+  const windowMode =
+    typeof window !== "undefined" && typeof window.__VEJICE_LEMMA_SPLIT_MODE === "string"
+      ? window.__VEJICE_LEMMA_SPLIT_MODE.trim().toLowerCase()
+      : "";
+  if (windowMode === "off" || windowMode === "safe" || windowMode === "force") {
+    return windowMode;
+  }
+  const envMode =
+    typeof process !== "undefined" && typeof process.env?.VEJICE_LEMMA_SPLIT_MODE === "string"
+      ? process.env.VEJICE_LEMMA_SPLIT_MODE.trim().toLowerCase()
+      : "";
+  if (envMode === "off" || envMode === "safe" || envMode === "force") {
+    return envMode;
+  }
+  return "safe";
+}
+
+function evaluateLemmaOffsetsQuality(text, tokens) {
+  const safeText = typeof text === "string" ? text : "";
+  const eligible = Array.isArray(tokens)
+    ? tokens.filter((token) => typeof token?.text === "string" && token.text.trim()).length
+    : 0;
+  const valid = Array.isArray(tokens)
+    ? tokens.filter(
+        (token) =>
+          typeof token?.start === "number" &&
+          typeof token?.end === "number" &&
+          token.start >= 0 &&
+          token.end > token.start &&
+          token.end <= safeText.length
+      ).length
+    : 0;
+  return {
+    eligible,
+    valid,
+    coverage: eligible > 0 ? valid / eligible : 0,
+  };
+}
+
+function reconstructLemmaOffsets(text = "", tokens = []) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!Array.isArray(tokens) || !tokens.length || !safeText) {
+    return { tokens: [], confidence: 0, mapped: 0, eligible: 0 };
+  }
+
+  let cursor = 0;
+  let mapped = 0;
+  let eligible = 0;
+  const reconstructed = tokens.map((token) => {
+    if (!token || typeof token !== "object") return token;
+    const tokenText = typeof token.text === "string" ? token.text : "";
+    if (!tokenText.trim()) return token;
+    eligible++;
+
+    const hasNativeOffsets =
+      typeof token.start === "number" &&
+      typeof token.end === "number" &&
+      token.start >= 0 &&
+      token.end > token.start &&
+      token.end <= safeText.length;
+    if (hasNativeOffsets && token.start >= cursor) {
+      cursor = token.end;
+      mapped++;
+      return token;
+    }
+
+    const exactIndex = safeText.indexOf(tokenText, cursor);
+    if (exactIndex >= 0) {
+      mapped++;
+      cursor = exactIndex + tokenText.length;
+      return {
+        ...token,
+        start: exactIndex,
+        end: exactIndex + tokenText.length,
+      };
+    }
+
+    const normalized = tokenText.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
+    if (!normalized) return token;
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(^|[^\\p{L}\\d])(${escaped})(?=$|[^\\p{L}\\d])`, "giu");
+    const slice = safeText.slice(cursor);
+    const match = regex.exec(slice);
+    if (!match) return token;
+    const relIndex = match.index + (match[1] ? match[1].length : 0);
+    const start = cursor + relIndex;
+    const end = start + match[2].length;
+    mapped++;
+    cursor = end;
+    return {
+      ...token,
+      start,
+      end,
+    };
+  });
+
+  const confidence = eligible > 0 ? mapped / eligible : 0;
+  return { tokens: reconstructed, confidence, mapped, eligible };
 }
 
 function buildChunksFromLemmaTokens(text = "", lemmaTokens = [], maxLen = MAX_PARAGRAPH_CHARS) {
