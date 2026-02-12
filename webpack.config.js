@@ -84,6 +84,14 @@ module.exports = async (env, options) => {
               return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
             },
           },
+          { from: "src/manifests/manifest.web.xml", to: "manifest.web.xml" },
+          {
+            from: "src/manifests/manifest.web.xml",
+            to: "manifest.web.prod.xml",
+            transform(content) {
+              return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
+            },
+          },
         ],
       }),
     ],
