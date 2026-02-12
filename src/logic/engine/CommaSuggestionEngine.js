@@ -15,6 +15,11 @@ import {
 const MAX_PARAGRAPH_CHARS = 3000;
 const PARAGRAPH_FIRST_MAX_CHARS = 1200;
 const MIN_CHUNK_MERGE_CHARS = 20;
+const LEMMA_CHUNK_TARGET_CHARS = 650;
+const LEMMA_CHUNK_SOFT_MAX_CHARS = 900;
+const LEMMA_CHUNK_MAX_UNITS = 3;
+const LEMMA_SPLIT_WINDOW_CHARS = 180;
+const LEMMA_MIN_SEGMENT_CHARS = 120;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -126,9 +131,19 @@ export class CommaSuggestionEngine {
           final: {},
         }
       : null;
-    const chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
-      preferWholeParagraph: !useSentenceChunks,
-    });
+    let chunks = null;
+    if (useSentenceChunks) {
+      chunks = await splitParagraphIntoChunksWithLemmas(
+        originalText,
+        MAX_PARAGRAPH_CHARS,
+        this.anchorProvider
+      );
+    }
+    if (!Array.isArray(chunks) || !chunks.length) {
+      chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
+        preferWholeParagraph: !useSentenceChunks,
+      });
+    }
     if (!chunks.length) {
       return {
         suggestions: [],
@@ -651,6 +666,239 @@ function splitParagraphIntoChunks(
       tooLong: length > maxLen,
     };
   });
+}
+
+async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGRAPH_CHARS, anchorProvider) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!safeText) return null;
+  if (!anchorProvider || typeof anchorProvider.fetchLemmaTokens !== "function") {
+    return null;
+  }
+  try {
+    const lemmaTokens = await anchorProvider.fetchLemmaTokens(safeText);
+    const chunks = buildChunksFromLemmaTokens(safeText, lemmaTokens, maxLen);
+    if (!Array.isArray(chunks) || !chunks.length) return null;
+    return chunks;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function buildChunksFromLemmaTokens(text = "", lemmaTokens = [], maxLen = MAX_PARAGRAPH_CHARS) {
+  if (!Array.isArray(lemmaTokens) || !lemmaTokens.length) return null;
+  const tokens = lemmaTokens
+    .filter(
+      (token) =>
+        token &&
+        typeof token.start === "number" &&
+        typeof token.end === "number" &&
+        token.start >= 0 &&
+        token.end > token.start &&
+        token.end <= text.length
+    )
+    .sort((a, b) => a.start - b.start);
+  if (!tokens.length) return null;
+
+  const sentences = [];
+  let sentenceStart = 0;
+  const closerRegex = /[\])"'»”’]/;
+  const pushSentence = (contentEnd, gapEnd = contentEnd) => {
+    if (typeof contentEnd !== "number" || contentEnd <= sentenceStart) {
+      sentenceStart = Math.max(sentenceStart, gapEnd ?? contentEnd ?? sentenceStart);
+      return;
+    }
+    sentences.push({ start: sentenceStart, end: contentEnd, gapEnd: gapEnd ?? contentEnd });
+    sentenceStart = gapEnd ?? contentEnd;
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const current = tokens[i];
+    const next = tokens[i + 1] || null;
+    if (!isSentenceBoundaryToken(current, next)) continue;
+
+    let contentEnd = current.end;
+    while (contentEnd < text.length && closerRegex.test(text[contentEnd])) contentEnd++;
+    let gapEnd = contentEnd;
+    while (gapEnd < text.length && /\s/.test(text[gapEnd])) gapEnd++;
+    pushSentence(contentEnd, gapEnd);
+  }
+  if (sentenceStart < text.length) {
+    sentences.push({
+      start: sentenceStart,
+      end: text.length,
+      gapEnd: text.length,
+    });
+  }
+
+  const mergedSentences = [];
+  for (const sentence of sentences) {
+    const sentenceLen = Math.max(0, (sentence.end ?? 0) - (sentence.start ?? 0));
+    const previous = mergedSentences[mergedSentences.length - 1];
+    if (
+      previous &&
+      sentenceLen > 0 &&
+      sentenceLen < MIN_CHUNK_MERGE_CHARS &&
+      sentence.end > previous.end &&
+      sentence.end - previous.start <= maxLen
+    ) {
+      previous.end = sentence.end;
+      previous.gapEnd = sentence.gapEnd ?? sentence.end;
+      continue;
+    }
+    mergedSentences.push({ ...sentence });
+  }
+
+  const expandedUnits = [];
+  for (const unit of mergedSentences) {
+    const parts = splitLargeLemmaUnit(text, unit, maxLen);
+    if (parts && parts.length) {
+      expandedUnits.push(...parts);
+    } else {
+      expandedUnits.push(unit);
+    }
+  }
+  const packedUnits = packLemmaSentenceUnits(expandedUnits, maxLen);
+
+  return packedUnits.map((sentence, index) => {
+    const gapEnd = sentence.gapEnd ?? sentence.end;
+    const length = sentence.end - sentence.start;
+    return {
+      index,
+      start: sentence.start,
+      end: sentence.end,
+      length,
+      text: text.slice(sentence.start, sentence.end),
+      trailing: text.slice(sentence.end, gapEnd),
+      tooLong: length > maxLen,
+    };
+  });
+}
+
+function splitLargeLemmaUnit(text, unit, maxLen) {
+  if (!unit) return null;
+  const hardCap = Math.max(LEMMA_CHUNK_TARGET_CHARS, Math.min(maxLen, LEMMA_CHUNK_SOFT_MAX_CHARS));
+  const unitLength = Math.max(0, (unit.end ?? 0) - (unit.start ?? 0));
+  if (unitLength <= hardCap) return [unit];
+
+  const segments = [];
+  let cursor = unit.start;
+  const absoluteEnd = unit.end;
+  while (absoluteEnd - cursor > hardCap) {
+    const target = cursor + hardCap;
+    const minSplit = Math.min(absoluteEnd - 1, cursor + LEMMA_MIN_SEGMENT_CHARS);
+    const maxSplit = Math.min(absoluteEnd - 1, target + LEMMA_SPLIT_WINDOW_CHARS);
+    let splitAt = -1;
+
+    for (let i = target; i <= maxSplit; i++) {
+      const ch = text[i];
+      if (ch === "," || ch === ";" || ch === ":") {
+        splitAt = i + 1;
+        break;
+      }
+    }
+    if (splitAt < 0) {
+      for (let i = Math.max(minSplit, target - LEMMA_SPLIT_WINDOW_CHARS); i >= minSplit; i--) {
+        const ch = text[i];
+        if (ch === "," || ch === ";" || ch === ":") {
+          splitAt = i + 1;
+          break;
+        }
+      }
+    }
+    if (splitAt < 0) {
+      for (let i = target; i <= maxSplit; i++) {
+        if (/\s/.test(text[i] || "")) {
+          splitAt = i + 1;
+          break;
+        }
+      }
+    }
+    if (splitAt < 0) {
+      splitAt = Math.min(absoluteEnd, target);
+    }
+    if (splitAt <= minSplit) {
+      splitAt = Math.min(absoluteEnd, cursor + hardCap);
+    }
+
+    let gapEnd = splitAt;
+    while (gapEnd < absoluteEnd && /\s/.test(text[gapEnd] || "")) gapEnd++;
+    segments.push({ start: cursor, end: splitAt, gapEnd });
+    cursor = gapEnd;
+    if (cursor >= absoluteEnd) break;
+  }
+  if (cursor < absoluteEnd) {
+    segments.push({
+      start: cursor,
+      end: absoluteEnd,
+      gapEnd: unit.gapEnd ?? absoluteEnd,
+    });
+  }
+  return segments.filter((seg) => seg.end > seg.start);
+}
+
+function packLemmaSentenceUnits(units, maxLen) {
+  if (!Array.isArray(units) || !units.length) return [];
+  const hardCap = Math.max(LEMMA_CHUNK_TARGET_CHARS, Math.min(maxLen, LEMMA_CHUNK_SOFT_MAX_CHARS));
+  const packed = [];
+  let current = null;
+  let unitCount = 0;
+
+  const pushCurrent = () => {
+    if (!current) return;
+    packed.push(current);
+    current = null;
+    unitCount = 0;
+  };
+
+  for (const unit of units) {
+    if (!current) {
+      current = { ...unit };
+      unitCount = 1;
+      continue;
+    }
+    const candidateLen = (unit.end ?? 0) - (current.start ?? 0);
+    const currentLen = (current.end ?? 0) - (current.start ?? 0);
+    const unitLen = (unit.end ?? 0) - (unit.start ?? 0);
+    const canMerge =
+      unitCount < LEMMA_CHUNK_MAX_UNITS &&
+      candidateLen <= maxLen &&
+      candidateLen <= hardCap &&
+      (currentLen < LEMMA_CHUNK_TARGET_CHARS || unitLen < 180);
+    if (canMerge) {
+      current.end = unit.end;
+      current.gapEnd = unit.gapEnd ?? unit.end;
+      unitCount++;
+      continue;
+    }
+    pushCurrent();
+    current = { ...unit };
+    unitCount = 1;
+  }
+  pushCurrent();
+  return packed;
+}
+
+function isSentenceBoundaryToken(currentToken, nextToken) {
+  const raw = typeof currentToken?.text === "string" ? currentToken.text : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  const withoutClosers = trimmed.replace(/[\])"'»”’]+$/g, "");
+  const endChar = withoutClosers.slice(-1);
+  if (!/[.!?]/.test(endChar)) return false;
+  if (endChar === "?" || endChar === "!") return true;
+
+  const base = withoutClosers.replace(/[.!?]+$/g, "").trim();
+  const shortLowerAbbrev =
+    base.length > 0 &&
+    base.length <= 3 &&
+    /\p{Ll}/u.test(base) &&
+    !/\p{Lu}/u.test(base);
+  if (shortLowerAbbrev) return false;
+  if (!nextToken || typeof nextToken.text !== "string") return true;
+  const nextText = nextToken.text.trim();
+  const first = nextText ? nextText[0] : "";
+  if (!first) return true;
+  return /\p{Lu}/u.test(first);
 }
 
 function rekeyTokensInternal(tokens, prefix) {
