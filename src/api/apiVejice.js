@@ -203,7 +203,8 @@ const INITIALS_DOT_PATTERN = /\b(?:[\p{L}]\.\s*){2,}/gu;
 const DOT_GUARD_PATTERNS = [
   INITIALS_DOT_PATTERN,
   /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g,
-  /\b(?:npr|itd|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu,
+  /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec)\./giu,
+  /\b(?:d\.\s*o\.\s*o\.|d\.\s*d\.|s\.\s*p\.|d\.\s*n\.\s*o\.|k\.\s*d\.)/giu,
 ];
 
 function hasProblematicDotPattern(text = "") {

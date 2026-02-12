@@ -7,7 +7,7 @@
   xsi:type="TaskPaneApp">
 
   <Id>39ccb3e5-8937-42f4-af38-6d55cbd0d938</Id>
-  <Version>1.0.0.3</Version>
+  <Version>1.0.0.4</Version>
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
   <DisplayName DefaultValue="Preverjanje vejic"/>
@@ -78,38 +78,6 @@
                   </Action>
                 </Control>
 
-                <Control xsi:type="Button" id="AcceptAll">
-                  <Label resid="AcceptAll.Label"/>
-                  <Supertip>
-                    <Title resid="AcceptAll.Label"/>
-                    <Description resid="AcceptAll.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="GroupIcon.16x16"/>
-                    <bt:Image size="32" resid="GroupIcon.32x32"/>
-                    <bt:Image size="80" resid="GroupIcon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>acceptAllChanges</FunctionName>
-                  </Action>
-                </Control>
-
-                <Control xsi:type="Button" id="RejectAll">
-                  <Label resid="RejectAll.Label"/>
-                  <Supertip>
-                    <Title resid="RejectAll.Label"/>
-                    <Description resid="RejectAll.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="GroupIcon.16x16"/>
-                    <bt:Image size="32" resid="GroupIcon.32x32"/>
-                    <bt:Image size="80" resid="GroupIcon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>rejectAllChanges</FunctionName>
-                  </Action>
-                </Control>
-
               </Group>
             </OfficeTab>
           </ExtensionPoint>
@@ -131,14 +99,10 @@
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
         <bt:String id="CheckVejice.Label"   DefaultValue="Preveri vejice"/>
-        <bt:String id="AcceptAll.Label"     DefaultValue="Sprejmi spremembe"/>
-        <bt:String id="RejectAll.Label"     DefaultValue="Zavrni spremembe"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
         <bt:String id="CheckVejice.Tooltip" DefaultValue="Preverite rabo vejic v dokumentu."/>
-        <bt:String id="AcceptAll.Tooltip"   DefaultValue="Sprejmi vse predlagane spremembe."/>
-        <bt:String id="RejectAll.Tooltip"   DefaultValue="Zavrni vse predlagane spremembe."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

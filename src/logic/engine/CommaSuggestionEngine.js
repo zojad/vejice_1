@@ -563,7 +563,11 @@ function splitParagraphIntoChunks(
   protectedText = protectDots(protectedText, /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g);
   protectedText = protectDots(
     protectedText,
-    /\b(?:npr|ipd|oz|tj|dr|mr|ga|gos|prim)\./giu
+    /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec)\./giu
+  );
+  protectedText = protectDots(
+    protectedText,
+    /\b(?:d\.\s*o\.\s*o\.|d\.\s*d\.|s\.\s*p\.|d\.\s*n\.\s*o\.|k\.\s*d\.)/giu
   );
   const sentences = [];
   let start = 0;
