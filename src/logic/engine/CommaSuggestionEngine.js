@@ -21,6 +21,8 @@ const LEMMA_CHUNK_MAX_UNITS = 3;
 const LEMMA_SPLIT_WINDOW_CHARS = 180;
 const LEMMA_MIN_SEGMENT_CHARS = 120;
 const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
+const API_RECHUNK_MAX_DEPTH = 2;
+const API_RECHUNK_MIN_CHARS = 260;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -176,7 +178,7 @@ export class CommaSuggestionEngine {
     let apiErrors = 0;
     let nonCommaChunkSkips = 0;
 
-    for (const chunk of chunks) {
+    const processChunk = async (chunk, depth = 0) => {
       const meta = {
         chunk,
         correctedText: chunk.normalizedText,
@@ -191,19 +193,27 @@ export class CommaSuggestionEngine {
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        continue;
+        return;
       }
       let detail = null;
       try {
         detail = await this.apiClient.popraviPovedDetailed(chunk.normalizedText || chunk.text);
       } catch (apiErr) {
+        const retryChunks = splitFailedChunkForRetry(chunk, depth);
+        if (Array.isArray(retryChunks) && retryChunks.length > 1) {
+          processedMeta.pop();
+          for (const retryChunk of retryChunks) {
+            await processChunk(retryChunk, depth + 1);
+          }
+          return;
+        }
         apiErrors++;
         this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
         meta.syntheticTokens = tokenizeForAnchoring(
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        continue;
+        return;
       }
       const correctedChunk = detail.correctedText;
       if (debugEnabled && debugDump) {
@@ -232,7 +242,7 @@ export class CommaSuggestionEngine {
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        continue;
+        return;
       }
       meta.detail = detail;
       meta.correctedText = correctedChunk;
@@ -243,7 +253,7 @@ export class CommaSuggestionEngine {
       const diffOps = collapseDuplicateDiffOps(
         filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
       );
-      if (!meta.detail && !diffOps.length) continue;
+      if (!meta.detail && !diffOps.length) return;
       chunkDetails.push({
         chunk,
         metaRef: meta,
@@ -251,6 +261,10 @@ export class CommaSuggestionEngine {
         correctedChunk,
         diffOps,
       });
+    };
+
+    for (const chunk of chunks) {
+      await processChunk(chunk, 0);
     }
 
     const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
@@ -531,6 +545,74 @@ function buildTokenHint(meta) {
   };
 }
 
+function splitFailedChunkForRetry(chunk, depth = 0) {
+  if (!chunk || typeof chunk.text !== "string") return null;
+  if (depth >= API_RECHUNK_MAX_DEPTH) return null;
+  const chunkLen = chunk.length || chunk.text.length || 0;
+  if (chunkLen < API_RECHUNK_MIN_CHARS) return null;
+
+  // Retry by sentence units only so failures skip at sentence granularity.
+  // We intentionally avoid word/length slicing because it loses context.
+  const splitChunks = splitParagraphIntoChunks(chunk.text, MAX_PARAGRAPH_CHARS, {
+    preferWholeParagraph: false,
+    conservativePack: false,
+  });
+  if (!Array.isArray(splitChunks) || splitChunks.length <= 1) return null;
+
+  const parentNormalized = chunk.normalizedText || chunk.text;
+  return splitChunks.map((subChunk, index) => {
+    const subTextWithTrailing =
+      (subChunk.text || "") + (typeof subChunk.trailing === "string" ? subChunk.trailing : "");
+    const relativeStart = subChunk.start || 0;
+    const absoluteStart = chunk.start + relativeStart;
+    const normalizedText = parentNormalized.substr(relativeStart, subTextWithTrailing.length);
+    return {
+      index: `${chunk.index}.${index + 1}`,
+      start: absoluteStart,
+      end: absoluteStart + subTextWithTrailing.length,
+      length: subTextWithTrailing.length,
+      text: subTextWithTrailing,
+      trailing: "",
+      tooLong: subTextWithTrailing.length > MAX_PARAGRAPH_CHARS,
+      normalizedText,
+    };
+  });
+}
+
+function splitChunkByLength(text = "", maxLen = API_RECHUNK_MIN_CHARS) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!safeText) return [];
+  const hardMax = Math.max(120, Number(maxLen) || API_RECHUNK_MIN_CHARS);
+  const chunks = [];
+  let cursor = 0;
+
+  while (cursor < safeText.length) {
+    let end = Math.min(cursor + hardMax, safeText.length);
+    if (end < safeText.length) {
+      const windowStart = Math.max(cursor + 80, cursor);
+      const windowText = safeText.slice(windowStart, end);
+      const breakMatch = /([.!?;:]\s+|,\s+|\s+)(?!.*([.!?;:]\s+|,\s+|\s+))/u.exec(windowText);
+      if (breakMatch && typeof breakMatch.index === "number") {
+        end = windowStart + breakMatch.index + breakMatch[0].length;
+      }
+    }
+    if (end <= cursor) {
+      end = Math.min(cursor + hardMax, safeText.length);
+    }
+    chunks.push({
+      index: chunks.length,
+      start: cursor,
+      end,
+      length: end - cursor,
+      text: safeText.slice(cursor, end),
+      trailing: "",
+      tooLong: end - cursor > MAX_PARAGRAPH_CHARS,
+    });
+    cursor = end;
+  }
+  return chunks;
+}
+
 function splitParagraphIntoChunks(
   text = "",
   maxLen = MAX_PARAGRAPH_CHARS,
@@ -663,7 +745,7 @@ function splitParagraphIntoChunks(
     mergedSentences.push({ ...sentence });
   }
 
-  const sentenceUnits = conservativePack ? packLemmaUnits(mergedSentences, maxLen) : mergedSentences;
+  const sentenceUnits = conservativePack ? packLemmaSentenceUnits(mergedSentences, maxLen) : mergedSentences;
 
   return sentenceUnits.map((sentence, index) => {
     const gapEnd = sentence.gapEnd ?? sentence.end;

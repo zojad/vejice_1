@@ -51,7 +51,7 @@ const LONG_PARAGRAPH_MESSAGE =
 const LONG_SENTENCE_MESSAGE =
   "Poved je predolga za preverjanje. Razdelite jo na krajše povedi in poskusite znova.";
 const CHUNK_API_ERROR_MESSAGE =
-  "Nekaterih povedi ni bilo mogoče preveriti zaradi napake strežnika. Ostale povedi so bile preverjene.";
+  "Nekatere povedi niso bile pregledane.";
 const PARAGRAPH_NON_COMMA_MESSAGE =
   "API je spremenil več kot vejice. Preglejte odstavek.";
 const TRACKED_CHANGES_PRESENT_MESSAGE =
@@ -296,19 +296,17 @@ function notifySentenceTooLong(paragraphIndex, length) {
 }
 
 function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
-  const paragraphLabel = paragraphIndex + 1;
-  const chunkLabel = chunkIndex + 1;
-  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: ${CHUNK_API_ERROR_MESSAGE}`;
   warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
-  queueScanNotification(msg);
+  if (chunkApiFailureNotified) return;
+  chunkApiFailureNotified = true;
+  queueScanNotification(CHUNK_API_ERROR_MESSAGE);
 }
 
 function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, corrected) {
-  const paragraphLabel = paragraphIndex + 1;
-  const chunkLabel = chunkIndex + 1;
-  const msg = `Odstavek ${paragraphLabel}, poved ${chunkLabel}: API je spremenil več kot vejice. Preglejte poved ročno.`;
   warn("Sentence skipped due to non-comma changes", { paragraphIndex, chunkIndex, original, corrected });
-  queueScanNotification(msg);
+  if (chunkApiFailureNotified) return;
+  chunkApiFailureNotified = true;
+  queueScanNotification(CHUNK_API_ERROR_MESSAGE);
 }
 
 const anchorProvider = createAnchorProvider();
