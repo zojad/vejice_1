@@ -14,7 +14,7 @@
   "scripts": {
     "build": "webpack --mode production",
     "build:dev": "webpack --mode development",
-    "dev-server": "webpack serve --mode development",
+    "dev-server": "node scripts/start-dev-server.js",
     "lint": "office-addin-lint check",
     "lint:fix": "office-addin-lint fix",
     "prettier": "office-addin-lint prettier",
@@ -22,6 +22,7 @@
     "signout": "office-addin-dev-settings m365-account logout",
     "start": "office-addin-debugging start docs/manifest.dev.xml",
     "start:web": "office-addin-debugging start docs/manifest.web.xml web",
+    "start:web:manual": "npm-run-all -p proxy:lemmas proxy:vejice dev-server",
     "stop": "office-addin-debugging stop docs/manifest.dev.xml",
     "stop:web": "office-addin-debugging stop docs/manifest.web.xml",
     "validate": "office-addin-manifest validate docs/manifest.dev.xml",

@@ -191,6 +191,14 @@ function createServer() {
 }
 
 const server = createServer();
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.log(`[lemmatizer-proxy] Port ${PORT} already in use. Reusing existing proxy.`);
+    process.exit(0);
+  }
+  console.error("[lemmatizer-proxy] Server error:", err.message);
+  process.exit(1);
+});
 server.listen(PORT, () => {
   console.log(`[lemmatizer-proxy] Listening on port ${PORT}`);
   console.log(`[lemmatizer-proxy] Forwarding to ${TARGET_URL}`);

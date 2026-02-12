@@ -161,6 +161,14 @@ function createServer() {
 }
 
 const server = createServer();
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.log(`[vejice-api-proxy] Port ${PORT} already in use. Reusing existing proxy.`);
+    process.exit(0);
+  }
+  console.error("[vejice-api-proxy] Server error:", err.message);
+  process.exit(1);
+});
 server.listen(PORT, () => {
   console.log(`[vejice-api-proxy] Listening on port ${PORT}`);
   console.log(`[vejice-api-proxy] Forwarding to configured upstream`);
