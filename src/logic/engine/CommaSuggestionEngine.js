@@ -21,6 +21,7 @@ const LEMMA_CHUNK_MAX_UNITS = 3;
 const LEMMA_SPLIT_WINDOW_CHARS = 180;
 const LEMMA_MIN_SEGMENT_CHARS = 120;
 const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
+const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 260;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
@@ -772,6 +773,15 @@ async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGR
   }
   const mode = resolveLemmaSplitMode();
   if (mode === "off") return null;
+  if (mode !== "force" && !shouldUseLemmaSplitHeuristic(safeText, maxLen)) {
+    if (isDeepDebugEnabled()) {
+      console.log("[Vejice Split]", "lemma split skipped by heuristic", {
+        mode,
+        length: safeText.length,
+      });
+    }
+    return null;
+  }
   try {
     const lemmaTokens = await anchorProvider.fetchLemmaTokens(safeText);
     let splitTokens = lemmaTokens;
@@ -826,6 +836,38 @@ function resolveLemmaSplitMode() {
     return envMode;
   }
   return "safe";
+}
+
+function shouldUseLemmaSplitHeuristic(text = "", maxLen = MAX_PARAGRAPH_CHARS) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!safeText) return false;
+  if (safeText.length >= Math.min(maxLen, LEMMA_HEURISTIC_MIN_LEN)) return true;
+
+  const initialAbbrevHits = countMatches(/\b(?:[\p{L}]\.\s*){2,}/gu, safeText);
+  if (initialAbbrevHits >= 1) return true;
+
+  const dateHits = countMatches(/\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g, safeText);
+  if (dateHits >= 1) return true;
+
+  const commonAbbrevHits = countMatches(
+    /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec)\./giu,
+    safeText
+  );
+  if (commonAbbrevHits >= 2) return true;
+
+  return false;
+}
+
+function countMatches(regex, text) {
+  if (!(regex instanceof RegExp) || typeof text !== "string" || !text) return 0;
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  const pattern = new RegExp(regex.source, flags);
+  let count = 0;
+  while (pattern.exec(text)) {
+    count++;
+    if (count > 1000) break;
+  }
+  return count;
 }
 
 function evaluateLemmaOffsetsQuality(text, tokens) {

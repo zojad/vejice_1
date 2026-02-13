@@ -38,7 +38,7 @@ const API_URL = resolveApiUrl();
 const API_KEY =
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
-const API_MAX_ATTEMPTS = 3;
+const DEFAULT_API_MAX_ATTEMPTS = 2;
 const API_RETRY_DELAY_MS = 400;
 
 const boolFromString = (value) => {
@@ -206,6 +206,85 @@ const DOT_GUARD_PATTERNS = [
   /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec)\./giu,
   /\b(?:d\.\s*o\.\s*o\.|d\.\s*d\.|s\.\s*p\.|d\.\s*n\.\s*o\.|k\.\s*d\.)/giu,
 ];
+function numberFromUnknown(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function resolveFeatureFlag({ windowKeys = [], envKey, defaultValue }) {
+  if (typeof window !== "undefined") {
+    for (const key of windowKeys) {
+      if (!key) continue;
+      const parsed = boolFromString(window[key]);
+      if (typeof parsed === "boolean") return parsed;
+    }
+  }
+  if (typeof process !== "undefined" && envKey) {
+    const parsed = boolFromString(process.env?.[envKey]);
+    if (typeof parsed === "boolean") return parsed;
+  }
+  return defaultValue;
+}
+
+function resolveApiMaxAttempts() {
+  const winValue =
+    typeof window !== "undefined"
+      ? numberFromUnknown(
+          window.__VEJICE_API_MAX_ATTEMPTS ?? window.__VEJICE_MAX_API_ATTEMPTS__
+        )
+      : undefined;
+  const envValue =
+    typeof process !== "undefined"
+      ? numberFromUnknown(
+          process.env?.VEJICE_API_MAX_ATTEMPTS ?? process.env?.VEJICE_MAX_API_ATTEMPTS
+        )
+      : undefined;
+  const resolved = winValue ?? envValue ?? DEFAULT_API_MAX_ATTEMPTS;
+  return Math.max(1, Math.min(5, Math.round(resolved)));
+}
+
+const API_MAX_ATTEMPTS = resolveApiMaxAttempts();
+const ENABLE_NORMALIZED_TRANSPORT_RETRY = resolveFeatureFlag({
+  windowKeys: [
+    "__VEJICE_ENABLE_NORMALIZED_TRANSPORT_RETRY__",
+    "__VEJICE_NORMALIZED_TRANSPORT_RETRY__",
+  ],
+  envKey: "VEJICE_ENABLE_NORMALIZED_TRANSPORT_RETRY",
+  defaultValue: false,
+});
+const ENABLE_OG_COMPAT_RETRY = resolveFeatureFlag({
+  windowKeys: ["__VEJICE_ENABLE_OG_COMPAT_RETRY__", "__VEJICE_OG_COMPAT_RETRY__"],
+  envKey: "VEJICE_ENABLE_OG_COMPAT_RETRY",
+  defaultValue: false,
+});
+
+const TRANSPORT_SPACE_LIKE_CHARS = new Set([
+  "\u00A0",
+  "\u1680",
+  "\u2000",
+  "\u2001",
+  "\u2002",
+  "\u2003",
+  "\u2004",
+  "\u2005",
+  "\u2006",
+  "\u2007",
+  "\u2008",
+  "\u2009",
+  "\u200A",
+  "\u202F",
+  "\u205F",
+  "\u3000",
+]);
+const TRANSPORT_DASH_LIKE_CHARS = new Set(["\u2013", "\u2014", "\u2212"]);
+const TRANSPORT_QUOTE_LIKE_CHARS = new Set(["\u00AB", "\u00BB"]);
+const TRANSPORT_ZERO_WIDTH_OR_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\u200C\u200D\u2060\uFEFF]/u;
 
 function hasProblematicDotPattern(text = "") {
   if (typeof text !== "string" || !text) return false;
@@ -214,6 +293,62 @@ function hasProblematicDotPattern(text = "") {
     if (pattern.test(text)) return true;
   }
   return false;
+}
+
+function normalizeTransportText(text = "") {
+  if (typeof text !== "string" || !text) {
+    return { text: typeof text === "string" ? text : "", replacements: [] };
+  }
+  const chars = Array.from(text);
+  const replacements = [];
+  for (let i = 0; i < chars.length; i++) {
+    const original = chars[i];
+    let next = original;
+    if (TRANSPORT_SPACE_LIKE_CHARS.has(original)) {
+      next = " ";
+    } else if (TRANSPORT_DASH_LIKE_CHARS.has(original)) {
+      next = "-";
+    } else if (TRANSPORT_QUOTE_LIKE_CHARS.has(original)) {
+      next = '"';
+    } else if (TRANSPORT_ZERO_WIDTH_OR_CONTROL.test(original)) {
+      next = " ";
+    }
+    if (next !== original) {
+      replacements.push({ index: i, from: original, to: next });
+      chars[i] = next;
+    }
+  }
+  return { text: chars.join(""), replacements };
+}
+
+function hasTransportNormalizationOpportunity(text = "") {
+  const normalized = normalizeTransportText(text);
+  return normalized.text !== text;
+}
+
+function restoreOriginalTypography(originalText = "", normalizedSource = "", correctedText = "") {
+  if (
+    typeof originalText !== "string" ||
+    typeof normalizedSource !== "string" ||
+    typeof correctedText !== "string" ||
+    !originalText
+  ) {
+    return { text: correctedText, restoredChars: 0 };
+  }
+  const correctedChars = Array.from(correctedText);
+  const sourceChars = Array.from(normalizedSource);
+  const originalChars = Array.from(originalText);
+  if (correctedChars.length !== sourceChars.length || originalChars.length !== sourceChars.length) {
+    return { text: correctedText, restoredChars: 0 };
+  }
+  let restoredChars = 0;
+  for (let i = 0; i < sourceChars.length; i++) {
+    if (sourceChars[i] === originalChars[i]) continue;
+    if (correctedChars[i] !== sourceChars[i]) continue;
+    correctedChars[i] = originalChars[i];
+    restoredChars++;
+  }
+  return { text: correctedChars.join(""), restoredChars };
 }
 
 function protectProblematicDots(text = "") {
@@ -265,6 +400,23 @@ function buildRequestData(sentence) {
   };
 }
 
+function buildOgCompatPayloads(sentence) {
+  return [
+    {
+      mode: "minimal_underscore",
+      data: { vhodna_poved: sentence },
+    },
+    {
+      mode: "minimal_space",
+      data: { "vhodna poved": sentence },
+    },
+    {
+      mode: "minimal_no_parallel",
+      data: { vhodna_poved: sentence, hkratne_napovedi: false },
+    },
+  ];
+}
+
 async function requestPopravek(poved) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
@@ -295,6 +447,8 @@ async function requestPopravek(poved) {
 
   const attempts = Math.max(1, API_MAX_ATTEMPTS);
   let protectedRetryUsed = false;
+  let ogCompatRetryUsed = false;
+  let normalizedRetryUsed = false;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const t0 = performance?.now?.() ?? Date.now();
     try {
@@ -365,6 +519,90 @@ async function requestPopravek(poved) {
         } catch (protectedErr) {
           const protectedInfo = describeAxiosError(protectedErr);
           log("ERROR (dot-protected)", { ...protectedInfo, attempt });
+        }
+      }
+      const canTryOgCompat =
+        ENABLE_OG_COMPAT_RETRY &&
+        !ogCompatRetryUsed &&
+        !USE_MOCK &&
+        typeof info?.status === "number" &&
+        info.status >= 500;
+      if (canTryOgCompat) {
+        ogCompatRetryUsed = true;
+        const compatPayloads = buildOgCompatPayloads(poved);
+        for (const compat of compatPayloads) {
+          try {
+            log("Retrying once with OG-compatible payload", {
+              attempt,
+              mode: compat.mode,
+              len: poved?.length ?? 0,
+              snippet: snip(poved),
+            });
+            const compatResponse = await axios.post(url, compat.data, config);
+            const { correctedText, raw } = normalizeResponsePayload(poved, compatResponse?.data);
+            raw.og_compat = { used: true, mode: compat.mode };
+            log("OK (OG-compatible)", {
+              status: compatResponse?.status,
+              mode: compat.mode,
+              changed: correctedText !== poved,
+            });
+            return { correctedText, raw };
+          } catch (compatErr) {
+            const compatInfo = describeAxiosError(compatErr);
+            log("ERROR (OG-compatible)", { ...compatInfo, attempt, mode: compat.mode });
+          }
+        }
+      }
+      const canTryNormalizedTransport =
+        ENABLE_NORMALIZED_TRANSPORT_RETRY &&
+        !normalizedRetryUsed &&
+        !USE_MOCK &&
+        typeof info?.status === "number" &&
+        info.status >= 500 &&
+        hasTransportNormalizationOpportunity(poved);
+      if (canTryNormalizedTransport) {
+        normalizedRetryUsed = true;
+        try {
+          const normalized = normalizeTransportText(poved);
+          if (normalized.text !== poved) {
+            const normalizedSentence = protectDateDots(normalized.text);
+            log("Retrying once with normalized transport payload", {
+              attempt,
+              len: poved?.length ?? 0,
+              snippet: snip(poved),
+              replacements: normalized.replacements.length,
+            });
+            const normalizedData = buildRequestData(normalizedSentence);
+            const normalizedResponse = await axios.post(url, normalizedData, config);
+            const normalizedResult = normalizeResponsePayload(
+              normalized.text,
+              normalizedResponse?.data
+            );
+            const restored = restoreOriginalTypography(
+              poved,
+              normalized.text,
+              normalizedResult.correctedText
+            );
+            const raw = {
+              ...normalizedResult.raw,
+              source_text: poved,
+              target_text: restored.text,
+              transport_normalization: {
+                used: true,
+                replacements: normalized.replacements.length,
+                restored_chars: restored.restoredChars,
+              },
+            };
+            log("OK (normalized transport)", {
+              status: normalizedResponse?.status,
+              changed: restored.text !== poved,
+              restoredChars: restored.restoredChars,
+            });
+            return { correctedText: restored.text, raw };
+          }
+        } catch (normalizedErr) {
+          const normalizedInfo = describeAxiosError(normalizedErr);
+          log("ERROR (normalized transport)", { ...normalizedInfo, attempt });
         }
       }
       const retryable = attempt < attempts && isRetryableError(info);
