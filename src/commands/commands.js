@@ -6,6 +6,7 @@ import {
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
   getPendingSuggestionsOnline,
+  isDocumentCheckInProgress,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
 
@@ -66,6 +67,34 @@ const showCommandToast = (message) => {
   );
 };
 let isCheckRunning = false;
+let isCommandBusy = false;
+
+const syncRibbonButtonState = async () => {
+  if (typeof Office === "undefined" || !Office?.ribbon?.requestUpdate) return;
+  const checkRunning = Boolean(isCheckRunning || isDocumentCheckInProgress?.());
+  const disableApplyButtons = Boolean(checkRunning || isCommandBusy);
+  try {
+    await Office.ribbon.requestUpdate({
+      tabs: [
+        {
+          id: "TabHome",
+          groups: [
+            {
+              id: "VejiceGroup",
+              controls: [
+                { id: "CheckVejice", enabled: true },
+                { id: "AcceptAll", enabled: !disableApplyButtons },
+                { id: "RejectAll", enabled: !disableApplyButtons },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  } catch (err) {
+    log("Ribbon state update skipped:", err?.message || err);
+  }
+};
 
 const tryAutoOpenTaskpane = async () => {
   if (typeof Office === "undefined") return;
@@ -137,6 +166,7 @@ if (typeof window !== "undefined" && typeof resolvedMock === "boolean") {
 Office.onReady(() => {
   log("Office ready | Host:", Office?.context?.host, "| Platform:", Office?.platform);
   tryAutoOpenTaskpane();
+  syncRibbonButtonState();
 });
 
 // —————————————————————————————————————————————
@@ -153,6 +183,8 @@ window.checkDocumentText = async (event) => {
     return;
   }
   isCheckRunning = true;
+  isCommandBusy = true;
+  await syncRibbonButtonState();
   try {
     await runCheckVejice();
     log("DONE: checkDocumentText |", Math.round(tnow() - t0), "ms");
@@ -160,6 +192,8 @@ window.checkDocumentText = async (event) => {
     errL("checkDocumentText failed:", err);
   } finally {
     isCheckRunning = false;
+    isCommandBusy = false;
+    await syncRibbonButtonState();
     done(event, "checkDocumentText");
     log("event.completed(): checkDocumentText");
   }
@@ -168,6 +202,21 @@ window.checkDocumentText = async (event) => {
 window.acceptAllChanges = async (event) => {
   const t0 = tnow();
   log("CLICK: Sprejmi spremembe (acceptAllChanges)");
+  if (isDocumentCheckInProgress()) {
+    log("acceptAllChanges ignored: check in progress");
+    showCommandToast("Počakajte, da se preverjanje konča.");
+    done(event, "acceptAllChanges");
+    log("event.completed(): acceptAllChanges");
+    return;
+  }
+  if (isCommandBusy) {
+    log("acceptAllChanges ignored: another command is running");
+    done(event, "acceptAllChanges");
+    log("event.completed(): acceptAllChanges");
+    return;
+  }
+  isCommandBusy = true;
+  await syncRibbonButtonState();
   try {
     if (isWordOnline()) {
       const pendingBefore = getPendingSuggestionsOnline(true)?.length ?? 0;
@@ -201,6 +250,8 @@ window.acceptAllChanges = async (event) => {
       errL("acceptAllChanges failed:", err);
     }
   } finally {
+    isCommandBusy = false;
+    await syncRibbonButtonState();
     done(event, "acceptAllChanges");
     log("event.completed(): acceptAllChanges");
   }
@@ -209,6 +260,21 @@ window.acceptAllChanges = async (event) => {
 window.rejectAllChanges = async (event) => {
   const t0 = tnow();
   log("CLICK: Zavrni spremembe (rejectAllChanges)");
+  if (isDocumentCheckInProgress()) {
+    log("rejectAllChanges ignored: check in progress");
+    showCommandToast("Počakajte, da se preverjanje konča.");
+    done(event, "rejectAllChanges");
+    log("event.completed(): rejectAllChanges");
+    return;
+  }
+  if (isCommandBusy) {
+    log("rejectAllChanges ignored: another command is running");
+    done(event, "rejectAllChanges");
+    log("event.completed(): rejectAllChanges");
+    return;
+  }
+  isCommandBusy = true;
+  await syncRibbonButtonState();
   try {
     if (isWordOnline()) {
       await rejectAllSuggestionsOnline();
@@ -238,6 +304,8 @@ window.rejectAllChanges = async (event) => {
       errL("rejectAllChanges failed:", err);
     }
   } finally {
+    isCommandBusy = false;
+    await syncRibbonButtonState();
     done(event, "rejectAllChanges");
     log("event.completed(): rejectAllChanges");
   }

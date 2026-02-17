@@ -285,6 +285,9 @@ const TRANSPORT_SPACE_LIKE_CHARS = new Set([
 const TRANSPORT_DASH_LIKE_CHARS = new Set(["\u2013", "\u2014", "\u2212"]);
 const TRANSPORT_QUOTE_LIKE_CHARS = new Set(["\u00AB", "\u00BB"]);
 const TRANSPORT_ZERO_WIDTH_OR_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\u200C\u200D\u2060\uFEFF]/u;
+const PRIVATE_USE_CHAR = /[\uE000-\uF8FF]/u;
+const PRIVATE_USE_CHAR_GLOBAL = /[\uE000-\uF8FF]/gu;
+const PRIVATE_USE_BETWEEN_DIGITS = /(\d)\s*[\uE000-\uF8FF]\s*(\d)/gu;
 
 function hasProblematicDotPattern(text = "") {
   if (typeof text !== "string" || !text) return false;
@@ -293,6 +296,26 @@ function hasProblematicDotPattern(text = "") {
     if (pattern.test(text)) return true;
   }
   return false;
+}
+
+function normalizeKnownProblematicChars(text = "") {
+  if (typeof text !== "string" || !text || !PRIVATE_USE_CHAR.test(text)) {
+    return { text: typeof text === "string" ? text : "", replacedDateSeparators: 0, replacedPrivateUse: 0 };
+  }
+
+  let replacedDateSeparators = 0;
+  const withDateSeparators = text.replace(PRIVATE_USE_BETWEEN_DIGITS, (_, left, right) => {
+    replacedDateSeparators++;
+    return `${left}. ${right}`;
+  });
+
+  let replacedPrivateUse = 0;
+  const normalized = withDateSeparators.replace(PRIVATE_USE_CHAR_GLOBAL, () => {
+    replacedPrivateUse++;
+    return " ";
+  });
+
+  return { text: normalized, replacedDateSeparators, replacedPrivateUse };
 }
 
 function normalizeTransportText(text = "") {
@@ -319,6 +342,26 @@ function normalizeTransportText(text = "") {
     }
   }
   return { text: chars.join(""), replacements };
+}
+
+function buildPrimaryRequestPayload(sentence = "") {
+  const problematic = normalizeKnownProblematicChars(sentence);
+  const dotProtected = protectProblematicDots(problematic.text);
+  return {
+    requestSentence: dotProtected,
+    canonicalSource: problematic.text,
+    transportSource: problematic.text,
+    problematicStats: {
+      replacedDateSeparators: problematic.replacedDateSeparators,
+      replacedPrivateUse: problematic.replacedPrivateUse,
+    },
+    transportReplacements: 0,
+    dotProtected: dotProtected !== problematic.text,
+    sanitized:
+      problematic.replacedDateSeparators > 0 ||
+      problematic.replacedPrivateUse > 0 ||
+      dotProtected !== sentence,
+  };
 }
 
 function hasTransportNormalizationOpportunity(text = "") {
@@ -430,7 +473,8 @@ async function requestPopravek(poved) {
   }
   const url = API_URL;
 
-  const primaryRequestSentence = protectDateDots(poved);
+  const primaryPayload = buildPrimaryRequestPayload(poved);
+  const primaryRequestSentence = primaryPayload.requestSentence;
   const data = buildRequestData(primaryRequestSentence);
 
   const config = {
@@ -452,6 +496,14 @@ async function requestPopravek(poved) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const t0 = performance?.now?.() ?? Date.now();
     try {
+      if (attempt === 1 && primaryPayload.sanitized) {
+        log("Primary payload pre-sanitized", {
+          replacedDateSeparators: primaryPayload.problematicStats.replacedDateSeparators,
+          replacedPrivateUse: primaryPayload.problematicStats.replacedPrivateUse,
+          transportReplacements: primaryPayload.transportReplacements,
+          dotProtected: primaryPayload.dotProtected,
+        });
+      }
       log(
         "POST",
         url,
@@ -464,7 +516,31 @@ async function requestPopravek(poved) {
       );
       const r = await axios.post(url, data, config);
       const t1 = performance?.now?.() ?? Date.now();
-      const { correctedText, raw } = normalizeResponsePayload(poved, r?.data);
+      const normalizedResult = normalizeResponsePayload(primaryPayload.transportSource, r?.data);
+      const restoredTypography =
+        primaryPayload.transportReplacements > 0
+          ? restoreOriginalTypography(
+              primaryPayload.canonicalSource,
+              primaryPayload.transportSource,
+              normalizedResult.correctedText
+            )
+          : { text: normalizedResult.correctedText, restoredChars: 0 };
+      const correctedText = restoredTypography.text;
+      const raw = {
+        ...normalizedResult.raw,
+        source_text: poved,
+        target_text: correctedText,
+      };
+      if (primaryPayload.sanitized) {
+        raw.pre_sanitization = {
+          used: true,
+          replaced_date_separators: primaryPayload.problematicStats.replacedDateSeparators,
+          replaced_private_use: primaryPayload.problematicStats.replacedPrivateUse,
+          transport_replacements: primaryPayload.transportReplacements,
+          restored_chars: restoredTypography.restoredChars,
+          dot_protected: primaryPayload.dotProtected,
+        };
+      }
 
       log(
         "OK",

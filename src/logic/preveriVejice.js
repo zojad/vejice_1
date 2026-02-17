@@ -39,12 +39,20 @@ const MAX_AUTOFIX_PASSES =
 
 const HIGHLIGHT_INSERT = "#FFF9C4"; // light yellow
 const HIGHLIGHT_DELETE = "#FFCDD2"; // light red
+const VEJICE_MARKER_INSERT_UNDERLINE = "Wavy";
+const VEJICE_MARKER_DELETE_UNDERLINE = "Wavy";
+const VEJICE_MARKER_INSERT_UNDERLINE_COLOR = "#E67E22";
+const VEJICE_MARKER_DELETE_UNDERLINE_COLOR = "#D32F2F";
+const VEJICE_MARKER_TAG_PREFIX = "vejice.marker.";
+const VEJICE_MARKER_TITLE = "Vejice Marker";
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const WORD_CHAR_REGEX = /[\p{L}\d]/u;
 const MAX_NORMALIZATION_PROBES = 20;
 
 const pendingSuggestionsOnline = [];
-const PENDING_SUGGESTIONS_STORAGE_KEY = "vejice.pendingSuggestionsOnline.v1";
+const onlineMarkerBaselineByKey = new Map();
+const PENDING_SUGGESTIONS_STORAGE_BASE_KEY = "vejice.pendingSuggestionsOnline.v1";
+const PENDING_SUGGESTIONS_SESSION_KEY = "vejice.pendingSuggestionsSessionId.v1";
 const MAX_PARAGRAPH_CHARS = 3000; //???
 const LONG_PARAGRAPH_MESSAGE =
   "Odstavek je predolg za preverjanje. Razdelite ga na krajše povedi in poskusite znova.";
@@ -61,11 +69,19 @@ const TRACK_CHANGES_REQUIRED_MESSAGE =
 const API_UNAVAILABLE_MESSAGE =
   "Storitev CJVT Vejice trenutno ni na voljo. Znova poskusite kasneje.";
 const NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajočih ali napačnih vejic.";
+const MARKER_RENDER_FAILED_MESSAGE =
+  "Napake so bile najdene, vendar jih v Word Online ni bilo mogoče označiti.";
+const ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS = 3;
+const ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS = 12;
+const ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
+const DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE = true;
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
 const pendingScanNotifications = [];
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
+let charSpanRangeResolutionDisabled = isWordOnline() && DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE;
+let charSpanRangeDisableLogged = false;
 
 function parseBooleanFlag(value) {
   if (typeof value === "boolean") return value;
@@ -119,6 +135,7 @@ function createAnchorProvider() {
 }
 function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
+  onlineMarkerBaselineByKey.clear();
   persistPendingSuggestionsOnline();
 }
 function addPendingSuggestionOnline(suggestion) {
@@ -147,8 +164,107 @@ function toSerializableSuggestion(suggestion) {
     snippets: suggestion.snippets,
     meta: suggestion.meta,
     originalPos: suggestion.originalPos,
+    previousHighlightColor: suggestion.previousHighlightColor,
+    highlightBaselineKey: suggestion.highlightBaselineKey,
+    previousUnderline: suggestion.previousUnderline,
+    previousUnderlineColor: suggestion.previousUnderlineColor,
+    underlineBaselineKey: suggestion.underlineBaselineKey,
+    markerChannel: suggestion.markerChannel,
+    markerId: suggestion.markerId,
+    markerTag: suggestion.markerTag,
   };
   return serializable;
+}
+
+function hashForStorageKey(value = "") {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function resolvePendingSuggestionsStorageScope() {
+  const docUrl =
+    typeof Office !== "undefined" && typeof Office?.context?.document?.url === "string"
+      ? Office.context.document.url.trim()
+      : "";
+  if (docUrl) {
+    return `doc.${hashForStorageKey(docUrl.toLowerCase())}`;
+  }
+  if (typeof window !== "undefined") {
+    try {
+      const storage = window.sessionStorage;
+      if (storage) {
+        let sessionId = storage.getItem(PENDING_SUGGESTIONS_SESSION_KEY);
+        if (!sessionId) {
+          sessionId = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+          storage.setItem(PENDING_SUGGESTIONS_SESSION_KEY, sessionId);
+        }
+        return `session.${sessionId}`;
+      }
+    } catch (_err) {
+      // Ignore sessionStorage access failures.
+    }
+  }
+  return "session.default";
+}
+
+function getPendingSuggestionsStorageKey() {
+  return `${PENDING_SUGGESTIONS_STORAGE_BASE_KEY}.${resolvePendingSuggestionsStorageScope()}`;
+}
+
+function getSuggestionConfidenceLevel(suggestion) {
+  const level = suggestion?.meta?.confidence?.level;
+  if (level === "high" || level === "medium" || level === "low") return level;
+  return "medium";
+}
+
+function confidenceLevelRank(level) {
+  if (level === "high") return 3;
+  if (level === "medium") return 2;
+  return 1;
+}
+
+function isSuggestionAutoApplyEligibleOnline(suggestion) {
+  const level = getSuggestionConfidenceLevel(suggestion);
+  return confidenceLevelRank(level) >= confidenceLevelRank(ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL);
+}
+
+function toConfidenceLogEntry(suggestion) {
+  return {
+    id: suggestion?.id,
+    paragraphIndex: suggestion?.paragraphIndex,
+    kind: suggestion?.kind,
+    level: getSuggestionConfidenceLevel(suggestion),
+    score: suggestion?.meta?.confidence?.score ?? null,
+    reasons: Array.isArray(suggestion?.meta?.confidence?.reasons)
+      ? suggestion.meta.confidence.reasons
+      : [],
+  };
+}
+
+function buildReasonIdSummary(suggestions, maxIdsPerReason = 20) {
+  const summary = {};
+  for (const suggestion of suggestions || []) {
+    const reasons = Array.isArray(suggestion?.meta?.confidence?.reasons)
+      ? suggestion.meta.confidence.reasons
+      : ["no_confidence_reason"];
+    const uniqueReasons = reasons.length ? [...new Set(reasons)] : ["no_confidence_reason"];
+    for (const reason of uniqueReasons) {
+      if (!summary[reason]) {
+        summary[reason] = {
+          count: 0,
+          ids: [],
+        };
+      }
+      summary[reason].count += 1;
+      if (summary[reason].ids.length < maxIdsPerReason && suggestion?.id) {
+        summary[reason].ids.push(suggestion.id);
+      }
+    }
+  }
+  return summary;
 }
 
 function persistPendingSuggestionsOnline() {
@@ -156,14 +272,15 @@ function persistPendingSuggestionsOnline() {
   try {
     const storage = window.localStorage;
     if (!storage) return;
+    const storageKey = getPendingSuggestionsStorageKey();
     if (!pendingSuggestionsOnline.length) {
-      storage.removeItem(PENDING_SUGGESTIONS_STORAGE_KEY);
+      storage.removeItem(storageKey);
       return;
     }
     const payload = pendingSuggestionsOnline
       .map((sug) => toSerializableSuggestion(sug))
       .filter(Boolean);
-    storage.setItem(PENDING_SUGGESTIONS_STORAGE_KEY, JSON.stringify(payload));
+    storage.setItem(storageKey, JSON.stringify(payload));
   } catch (storageErr) {
     warn("persistPendingSuggestionsOnline failed", storageErr);
   }
@@ -175,7 +292,7 @@ function restorePendingSuggestionsOnline() {
   try {
     const storage = window.localStorage;
     if (!storage) return 0;
-    const raw = storage.getItem(PENDING_SUGGESTIONS_STORAGE_KEY);
+    const raw = storage.getItem(getPendingSuggestionsStorageKey());
     if (!raw) return 0;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return 0;
@@ -217,6 +334,31 @@ if (typeof window !== "undefined") {
 }
 
 let toastDialog = null;
+let onlineScanInProgress = false;
+let documentCheckInProgress = false;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForOnlineScanCompletion({ timeoutMs = 120000, pollMs = 80 } = {}) {
+  if (!onlineScanInProgress) return true;
+  const startedAt = Date.now();
+  warn("Waiting for active online scan to complete before apply/reject.");
+  while (onlineScanInProgress && Date.now() - startedAt < timeoutMs) {
+    await sleep(pollMs);
+  }
+  if (onlineScanInProgress) {
+    warn("Timed out while waiting for online scan completion.");
+    return false;
+  }
+  return true;
+}
+
+export function isDocumentCheckInProgress() {
+  return Boolean(documentCheckInProgress || onlineScanInProgress);
+}
+
 function showToastNotification(message) {
   if (!message) return;
   if (typeof Office === "undefined" || !Office.context?.ui?.displayDialogAsync) {
@@ -597,6 +739,13 @@ async function getRangeForCharacterSpan(
   reason = "span",
   fallbackSnippet
 ) {
+  if (charSpanRangeResolutionDisabled) {
+    if (!charSpanRangeDisableLogged) {
+      log("Char-span range resolution disabled; using search/ordinal fallback markers");
+      charSpanRangeDisableLogged = true;
+    }
+    return null;
+  }
   if (!paragraph || typeof paragraph.getRange !== "function") return null;
   if (!Number.isFinite(charStart) || charStart < 0) return null;
   const text = typeof paragraphText === "string" ? paragraphText : paragraph.text || "";
@@ -631,6 +780,13 @@ async function getRangeForCharacterSpan(
     const idx = Math.min(occurrence, matches.items.length - 1);
     return matches.items[idx];
   } catch (err) {
+    if (isWordOnline() && String(err?.code || err?.message || "").includes("InvalidRequest")) {
+      charSpanRangeResolutionDisabled = true;
+      if (!charSpanRangeDisableLogged) {
+        warn("Disabling char-span range resolution after InvalidRequest; fallback mode enabled");
+        charSpanRangeDisableLogged = true;
+      }
+    }
     warn(`getRangeForCharacterSpan(${reason}) failed`, err);
   }
   return null;
@@ -969,11 +1125,381 @@ async function deleteCommaAt(context, paragraph, original, atOriginalPos) {
 }
 
 async function highlightSuggestionOnline(context, paragraph, suggestion) {
-  if (!suggestion) return false;
-  if (suggestion.kind === "delete") {
-    return highlightDeleteSuggestion(context, paragraph, suggestion);
+  try {
+    if (!suggestion) return false;
+    if (suggestion.kind === "delete") {
+      return highlightDeleteSuggestion(context, paragraph, suggestion);
+    }
+    return highlightInsertSuggestion(context, paragraph, suggestion);
+  } catch (err) {
+    warn("highlightSuggestionOnline failed; skipping marker", err);
+    return false;
   }
-  return highlightInsertSuggestion(context, paragraph, suggestion);
+}
+
+function normalizeHighlightColorValue(color) {
+  if (typeof color !== "string") return null;
+  const trimmed = color.trim();
+  if (!trimmed) return null;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "none" || lowered === "nocolor" || lowered === "no color") return null;
+  return trimmed;
+}
+
+function normalizeHighlightColorForCompare(color) {
+  const normalized = normalizeHighlightColorValue(color);
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+function normalizeHighlightColorToken(color) {
+  const normalized = normalizeHighlightColorForCompare(color);
+  if (!normalized) return null;
+  return normalized.replace(/\s+/g, "");
+}
+
+function normalizeUnderlineStyleValue(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "none") return null;
+  return trimmed;
+}
+
+function normalizeUnderlineStyleForCompare(value) {
+  const normalized = normalizeUnderlineStyleValue(value);
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+function isVejiceMarkerHighlightColor(color) {
+  const token = normalizeHighlightColorToken(color);
+  if (!token) return false;
+
+  const insertToken = normalizeHighlightColorToken(HIGHLIGHT_INSERT);
+  const deleteToken = normalizeHighlightColorToken(HIGHLIGHT_DELETE);
+  const insertSet = new Set([
+    insertToken,
+    "#fff9c4",
+    "#ffff00",
+    "#ff0",
+    "yellow",
+  ]);
+  const deleteSet = new Set([
+    deleteToken,
+    "#ffcdd2",
+    "#ff0000",
+    "#f00",
+    "red",
+    "pink",
+  ]);
+  return insertSet.has(token) || deleteSet.has(token);
+}
+
+function isVejiceMarkerStyle(underline, underlineColor) {
+  const style = normalizeUnderlineStyleForCompare(underline);
+  const color = normalizeHighlightColorForCompare(underlineColor);
+  if (!style) return false;
+  const insertStyle = normalizeUnderlineStyleForCompare(VEJICE_MARKER_INSERT_UNDERLINE);
+  const deleteStyle = normalizeUnderlineStyleForCompare(VEJICE_MARKER_DELETE_UNDERLINE);
+  const insertColor = normalizeHighlightColorForCompare(VEJICE_MARKER_INSERT_UNDERLINE_COLOR);
+  const deleteColor = normalizeHighlightColorForCompare(VEJICE_MARKER_DELETE_UNDERLINE_COLOR);
+  if (!color) {
+    return style === insertStyle || style === deleteStyle;
+  }
+  return (
+    (style === insertStyle && color === insertColor) ||
+    (style === deleteStyle && color === deleteColor)
+  );
+}
+
+function getSuggestionMarkerFormat(suggestion) {
+  if (suggestion?.kind === "delete") {
+    return {
+      underline: VEJICE_MARKER_DELETE_UNDERLINE,
+      underlineColor: VEJICE_MARKER_DELETE_UNDERLINE_COLOR,
+    };
+  }
+  return {
+    underline: VEJICE_MARKER_INSERT_UNDERLINE,
+    underlineColor: VEJICE_MARKER_INSERT_UNDERLINE_COLOR,
+  };
+}
+
+function getSuggestionMarkerHighlightColor(suggestion) {
+  return suggestion?.kind === "delete" ? HIGHLIGHT_DELETE : HIGHLIGHT_INSERT;
+}
+
+function sanitizeMarkerIdPart(value) {
+  if (value === null || typeof value === "undefined") return "";
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized;
+}
+
+function buildSuggestionMarkerId(suggestion) {
+  const paragraphIndex = Number.isFinite(suggestion?.paragraphIndex) ? suggestion.paragraphIndex : "p";
+  const kind = sanitizeMarkerIdPart(suggestion?.kind || "op");
+  const opPos =
+    suggestion?.meta?.op?.originalPos ??
+    suggestion?.meta?.op?.pos ??
+    suggestion?.charHint?.start ??
+    "x";
+  const baseId = sanitizeMarkerIdPart(suggestion?.id);
+  const raw = [baseId, `p${paragraphIndex}`, kind, `at${opPos}`].filter(Boolean).join("-");
+  if (raw) return raw.slice(0, 120);
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getSuggestionMarkerTag(suggestion, { create = false } = {}) {
+  if (!suggestion || typeof suggestion !== "object") return null;
+  const existingTag = typeof suggestion.markerTag === "string" ? suggestion.markerTag.trim() : "";
+  if (existingTag.startsWith(VEJICE_MARKER_TAG_PREFIX)) {
+    if (!suggestion.markerId) {
+      suggestion.markerId = existingTag.slice(VEJICE_MARKER_TAG_PREFIX.length);
+    }
+    return existingTag;
+  }
+  const existingId = sanitizeMarkerIdPart(suggestion.markerId);
+  if (existingId) {
+    const tag = `${VEJICE_MARKER_TAG_PREFIX}${existingId}`;
+    suggestion.markerId = existingId;
+    suggestion.markerTag = tag;
+    return tag;
+  }
+  if (!create) return null;
+  const generated = buildSuggestionMarkerId(suggestion);
+  const tag = `${VEJICE_MARKER_TAG_PREFIX}${generated}`;
+  suggestion.markerId = generated;
+  suggestion.markerTag = tag;
+  return tag;
+}
+
+function resetSuggestionMarkerState(suggestion, { releaseBaseline = true } = {}) {
+  if (!suggestion || typeof suggestion !== "object") return;
+  suggestion.highlightRange = null;
+  suggestion.previousHighlightColor = null;
+  suggestion.previousUnderline = null;
+  suggestion.previousUnderlineColor = null;
+  suggestion.markerChannel = null;
+  suggestion.markerTag = null;
+  if (releaseBaseline) {
+    releaseMarkerBaselineForSuggestion(suggestion);
+  }
+}
+
+function buildSuggestionHighlightKey(suggestion) {
+  const paragraphIndex = suggestion?.paragraphIndex;
+  const anchor = suggestion?.meta?.anchor || {};
+  const startRaw =
+    suggestion?.charHint?.start ??
+    anchor.highlightCharStart ??
+    anchor.charStart ??
+    anchor.targetCharStart ??
+    -1;
+  const endRaw =
+    suggestion?.charHint?.end ??
+    anchor.highlightCharEnd ??
+    anchor.charEnd ??
+    anchor.targetCharEnd ??
+    startRaw + 1;
+  if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) return null;
+  if (!Number.isFinite(startRaw) || startRaw < 0) return null;
+  const start = Math.floor(startRaw);
+  const end = Number.isFinite(endRaw) && endRaw > start ? Math.floor(endRaw) : start + 1;
+  return `${paragraphIndex}:${start}:${end}`;
+}
+
+function captureMarkerBaselineForSuggestion(suggestion, currentUnderline, currentUnderlineColor) {
+  const key =
+    suggestion?.underlineBaselineKey ||
+    suggestion?.highlightBaselineKey ||
+    buildSuggestionHighlightKey(suggestion);
+  suggestion.underlineBaselineKey = key;
+  suggestion.highlightBaselineKey = key;
+  if (!key) {
+    const fallbackUnderline = normalizeUnderlineStyleValue(currentUnderline);
+    const fallbackUnderlineColor = normalizeHighlightColorValue(currentUnderlineColor);
+    if (isVejiceMarkerStyle(fallbackUnderline, fallbackUnderlineColor)) {
+      suggestion.previousUnderline = null;
+      suggestion.previousUnderlineColor = null;
+    } else {
+      suggestion.previousUnderline = fallbackUnderline;
+      suggestion.previousUnderlineColor = fallbackUnderlineColor;
+    }
+    suggestion.previousHighlightColor = null;
+    return;
+  }
+  const existing = onlineMarkerBaselineByKey.get(key);
+  if (existing) {
+    existing.refCount += 1;
+    suggestion.previousUnderline = existing.underline;
+    suggestion.previousUnderlineColor = existing.underlineColor;
+    suggestion.previousHighlightColor = null;
+    return;
+  }
+  const capturedUnderline = normalizeUnderlineStyleValue(currentUnderline);
+  const capturedUnderlineColor = normalizeHighlightColorValue(currentUnderlineColor);
+  const baselineUnderline = isVejiceMarkerStyle(capturedUnderline, capturedUnderlineColor)
+    ? null
+    : capturedUnderline;
+  const baselineUnderlineColor = isVejiceMarkerStyle(capturedUnderline, capturedUnderlineColor)
+    ? null
+    : capturedUnderlineColor;
+  onlineMarkerBaselineByKey.set(key, {
+    underline: baselineUnderline,
+    underlineColor: baselineUnderlineColor,
+    refCount: 1,
+  });
+  suggestion.previousUnderline = baselineUnderline;
+  suggestion.previousUnderlineColor = baselineUnderlineColor;
+  suggestion.previousHighlightColor = null;
+}
+
+function releaseMarkerBaselineForSuggestion(suggestion) {
+  const key = suggestion?.underlineBaselineKey || suggestion?.highlightBaselineKey;
+  if (!key) return;
+  const existing = onlineMarkerBaselineByKey.get(key);
+  if (existing) {
+    existing.refCount -= 1;
+    if (existing.refCount <= 0) {
+      onlineMarkerBaselineByKey.delete(key);
+    }
+  }
+  suggestion.underlineBaselineKey = null;
+  suggestion.highlightBaselineKey = null;
+}
+
+function getSuggestionRestoreMarkerFormat(suggestion) {
+  const key = suggestion?.underlineBaselineKey || suggestion?.highlightBaselineKey;
+  if (key && onlineMarkerBaselineByKey.has(key)) {
+    const cached = onlineMarkerBaselineByKey.get(key);
+    const underline = normalizeUnderlineStyleValue(cached?.underline);
+    const underlineColor = normalizeHighlightColorValue(cached?.underlineColor);
+    if (isVejiceMarkerStyle(underline, underlineColor)) {
+      return { underline: null, underlineColor: null };
+    }
+    return { underline, underlineColor };
+  }
+  const fallbackUnderline = normalizeUnderlineStyleValue(suggestion?.previousUnderline);
+  const fallbackUnderlineColor = normalizeHighlightColorValue(
+    suggestion?.previousUnderlineColor ?? suggestion?.previousHighlightColor
+  );
+  if (isVejiceMarkerStyle(fallbackUnderline, fallbackUnderlineColor)) {
+    return { underline: null, underlineColor: null };
+  }
+  return { underline: fallbackUnderline, underlineColor: fallbackUnderlineColor };
+}
+
+function toWordUnderline(value) {
+  const normalized = normalizeUnderlineStyleValue(value);
+  return normalized || "None";
+}
+
+async function applySuggestionMarkerFormat(context, range, suggestion) {
+  if (isWordOnline()) {
+    const markerHighlightColor = getSuggestionMarkerHighlightColor(suggestion);
+    const markerTag = getSuggestionMarkerTag(suggestion, { create: true });
+    let markerRange = range;
+    let markerControl = null;
+    let markerViaContentControl = false;
+    try {
+      markerRange.font.load("highlightColor");
+      await context.sync();
+      const existingHighlightColor = normalizeHighlightColorValue(markerRange.font.highlightColor);
+      // Preserve the user's exact original highlight (including yellow).
+      suggestion.previousHighlightColor = existingHighlightColor;
+      suggestion.previousUnderline = null;
+      suggestion.previousUnderlineColor = null;
+      suggestion.underlineBaselineKey = null;
+      suggestion.highlightBaselineKey = null;
+    } catch (captureErr) {
+      warn("marker: failed to capture previous highlight color", captureErr);
+      suggestion.previousHighlightColor = null;
+    }
+    if (markerTag) {
+      try {
+        markerControl = markerRange.insertContentControl();
+        markerControl.tag = markerTag;
+        markerControl.title = VEJICE_MARKER_TITLE;
+        markerRange = markerControl.getRange("Content");
+        markerViaContentControl = true;
+      } catch (tagErr) {
+        warn("marker: failed to create tagged content control", tagErr);
+      }
+    }
+    try {
+      suggestion.markerChannel = "highlight";
+      markerRange.font.highlightColor = markerHighlightColor;
+      if (markerViaContentControl) {
+        suggestion.highlightRange = null;
+      } else {
+        context.trackedObjects.add(markerRange);
+        suggestion.highlightRange = markerRange;
+      }
+      await context.sync();
+      return true;
+    } catch (applyErr) {
+      warn("marker: failed to apply marker format", applyErr);
+      try {
+        if (markerControl) {
+          markerControl.delete(true);
+        }
+      } catch (_controlCleanupErr) {
+        // ignore cleanup failures
+      }
+      try {
+        if (suggestion.highlightRange) {
+          context.trackedObjects.remove(suggestion.highlightRange);
+        }
+      } catch (_cleanupErr) {
+        // ignore cleanup failures
+      }
+      suggestion.highlightRange = null;
+      return false;
+    }
+  }
+
+  const marker = getSuggestionMarkerFormat(suggestion);
+  try {
+    suggestion.markerChannel = "underline";
+    range.font.load("underline");
+    await context.sync();
+    captureMarkerBaselineForSuggestion(suggestion, range.font.underline, null);
+  } catch (captureErr) {
+    warn("marker: failed to capture previous underline style", captureErr);
+    suggestion.previousUnderline = null;
+    suggestion.previousUnderlineColor = null;
+    suggestion.previousHighlightColor = null;
+    suggestion.underlineBaselineKey =
+      suggestion.underlineBaselineKey || suggestion.highlightBaselineKey || buildSuggestionHighlightKey(suggestion);
+    suggestion.highlightBaselineKey = suggestion.highlightBaselineKey || buildSuggestionHighlightKey(suggestion);
+  }
+  try {
+    range.font.underline = marker.underline;
+    try {
+      range.font.underlineColor = marker.underlineColor;
+    } catch (_err) {
+      // Some Word Online hosts do not support underlineColor reliably.
+    }
+    context.trackedObjects.add(range);
+    suggestion.highlightRange = range;
+    await context.sync();
+    return true;
+  } catch (applyErr) {
+    warn("marker: failed to apply marker format", applyErr);
+    try {
+      if (suggestion.highlightRange) {
+        context.trackedObjects.remove(suggestion.highlightRange);
+      }
+    } catch (_cleanupErr) {
+      // ignore cleanup failures
+    }
+    suggestion.highlightRange = null;
+    return false;
+  }
 }
 
 function countCommasUpTo(text, pos) {
@@ -985,52 +1511,57 @@ function countCommasUpTo(text, pos) {
 }
 
 async function highlightDeleteSuggestion(context, paragraph, suggestion) {
-  const paragraphText = suggestion.meta?.originalText ?? paragraph.text ?? "";
-  const meta = suggestion.meta?.anchor || {};
-  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
-  const charStart =
-    suggestion.charHint?.start ?? meta.charStart ?? suggestion.meta?.op?.originalPos ?? -1;
-  const charEnd =
-    suggestion.charHint?.end ??
-    meta.charEnd ??
-    (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
-  const highlightText = meta.highlightText ?? suggestion.meta?.highlightText ?? ",";
-  let targetRange = null;
+  try {
+    const paragraphText = suggestion.meta?.originalText ?? paragraph.text ?? "";
+    const meta = suggestion.meta?.anchor || {};
+    const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+    const charStart =
+      suggestion.charHint?.start ?? meta.charStart ?? suggestion.meta?.op?.originalPos ?? -1;
+    const charEnd =
+      suggestion.charHint?.end ??
+      meta.charEnd ??
+      (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
+    const highlightText = meta.highlightText ?? suggestion.meta?.highlightText ?? ",";
+    let targetRange = null;
 
-  if (Number.isFinite(charStart) && charStart >= 0) {
-    targetRange = await getRangeForAnchorSpan(
-      context,
-      paragraph,
-      entry,
-      charStart,
-      charEnd,
-      "highlight-delete",
-      highlightText
-    );
+    if (Number.isFinite(charStart) && charStart >= 0) {
+      targetRange = await getRangeForAnchorSpan(
+        context,
+        paragraph,
+        entry,
+        charStart,
+        charEnd,
+        "highlight-delete",
+        highlightText
+      );
+    }
+
+    if (!targetRange) {
+      targetRange = await findCommaRangeByOrdinal(context, paragraph, paragraphText, suggestion.meta?.op);
+      if (!targetRange) return false;
+    }
+
+    const applied = await applySuggestionMarkerFormat(context, targetRange, suggestion);
+    if (!applied) return false;
+    addPendingSuggestionOnline(suggestion);
+    return true;
+  } catch (err) {
+    warn("highlightDeleteSuggestion failed; skipping marker", err);
+    return false;
   }
-
-  if (!targetRange) {
-    targetRange = await findCommaRangeByOrdinal(context, paragraph, paragraphText, suggestion.meta?.op);
-    if (!targetRange) return false;
-  }
-
-  targetRange.font.highlightColor = HIGHLIGHT_DELETE;
-  context.trackedObjects.add(targetRange);
-  suggestion.highlightRange = targetRange;
-  addPendingSuggestionOnline(suggestion);
-  return true;
 }
 
 async function highlightInsertSuggestion(context, paragraph, suggestion) {
-  const corrected = suggestion.meta?.correctedText ?? paragraph.text ?? "";
-  const anchor = suggestion.meta?.anchor || {};
-  const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
-  const rawLeft = suggestion.snippets?.leftSnippet ?? corrected.slice(0, suggestion.meta?.op?.pos ?? 0);
-  const rawRight = suggestion.snippets?.rightSnippet ?? corrected.slice(suggestion.meta?.op?.pos ?? 0);
-  const lastWord = extractLastWord(rawLeft || "");
-  let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
-  const searchOpts = { matchCase: false, matchWholeWord: false };
-  let range = null;
+  try {
+    const corrected = suggestion.meta?.correctedText ?? paragraph.text ?? "";
+    const anchor = suggestion.meta?.anchor || {};
+    const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+    const rawLeft = suggestion.snippets?.leftSnippet ?? corrected.slice(0, suggestion.meta?.op?.pos ?? 0);
+    const rawRight = suggestion.snippets?.rightSnippet ?? corrected.slice(suggestion.meta?.op?.pos ?? 0);
+    const lastWord = extractLastWord(rawLeft || "");
+    let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
+    const searchOpts = { matchCase: false, matchWholeWord: false };
+    let range = null;
 
   const resolveAnchorEnd = (candidate) => {
     if (!Number.isFinite(candidate?.charStart) || candidate.charStart < 0) return null;
@@ -1120,35 +1651,43 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     }
   }
 
-  if (!range) return false;
+    if (!range) return false;
 
-  try {
-    range = range.getRange("Content");
+    try {
+      range = range.getRange("Content");
+    } catch (err) {
+      warn("highlight insert: failed to focus range", err);
+    }
+
+    const applied = await applySuggestionMarkerFormat(context, range, suggestion);
+    if (!applied) return false;
+    addPendingSuggestionOnline(suggestion);
+    return true;
   } catch (err) {
-    warn("highlight insert: failed to focus range", err);
+    warn("highlightInsertSuggestion failed; skipping marker", err);
+    return false;
   }
-
-  range.font.highlightColor = HIGHLIGHT_INSERT;
-  context.trackedObjects.add(range);
-  suggestion.highlightRange = range;
-  addPendingSuggestionOnline(suggestion);
-  return true;
 }
 
 async function findCommaRangeByOrdinal(context, paragraph, original, op) {
-  const ordinal = countCommasUpTo(original, op.pos);
-  if (ordinal <= 0) {
-    warn("highlight delete: no comma ordinal", op);
+  try {
+    const ordinal = countCommasUpTo(original, op.pos);
+    if (ordinal <= 0) {
+      warn("highlight delete: no comma ordinal", op);
+      return null;
+    }
+    const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
+    commaSearch.load("items");
+    await context.sync();
+    if (!commaSearch.items.length || ordinal > commaSearch.items.length) {
+      warn("highlight delete: comma search out of range");
+      return null;
+    }
+    return commaSearch.items[ordinal - 1];
+  } catch (err) {
+    warn("findCommaRangeByOrdinal failed", err);
     return null;
   }
-  const commaSearch = paragraph.getRange().search(",", { matchCase: false, matchWholeWord: false });
-  commaSearch.load("items");
-  await context.sync();
-  if (!commaSearch.items.length || ordinal > commaSearch.items.length) {
-    warn("highlight delete: comma search out of range");
-    return null;
-  }
-  return commaSearch.items[ordinal - 1];
 }
 
 function extractLastWord(text) {
@@ -1814,13 +2353,150 @@ async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes, { 
   }
 }
 
+const HIGHLIGHT_SCRUB_DELIMITERS = [
+  " ",
+  "\t",
+  "\r",
+  "\n",
+  ",",
+  ".",
+  ";",
+  ":",
+  "!",
+  "?",
+  "(",
+  ")",
+  "[",
+  "]",
+  "{",
+  "}",
+  "\"",
+  "'",
+  "«",
+  "»",
+  "…",
+  "—",
+  "–",
+  "-",
+];
+
+async function clearResidualVejiceHighlightsInParagraph(context, paragraph) {
+  if (!paragraph || typeof paragraph.getRange !== "function") return;
+  try {
+    const contentRange = paragraph.getRange("Content");
+    const textRanges = contentRange.getTextRanges(HIGHLIGHT_SCRUB_DELIMITERS, false);
+    textRanges.load("items/font/underline,items/font/highlightColor");
+    contentRange.font.load("underline,highlightColor");
+    await context.sync();
+
+    let changed = false;
+    for (const range of textRanges.items || []) {
+      if (isVejiceMarkerStyle(range?.font?.underline, null)) {
+        range.font.underline = "None";
+        try {
+          range.font.underlineColor = null;
+        } catch (_err) {
+          // ignore: underlineColor not supported on some hosts
+        }
+        changed = true;
+      }
+      if (isVejiceMarkerHighlightColor(range?.font?.highlightColor)) {
+        range.font.highlightColor = null;
+        changed = true;
+      }
+    }
+    if (isVejiceMarkerStyle(contentRange?.font?.underline, null)) {
+      contentRange.font.underline = "None";
+      try {
+        contentRange.font.underlineColor = null;
+      } catch (_err) {
+        // ignore: underlineColor not supported on some hosts
+      }
+      changed = true;
+    }
+    if (isVejiceMarkerHighlightColor(contentRange?.font?.highlightColor)) {
+      contentRange.font.highlightColor = null;
+      changed = true;
+    }
+    if (changed) {
+      await context.sync();
+    }
+  } catch (err) {
+    warn("Residual highlight scrub failed", err);
+  }
+}
+
+async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, indexes) {
+  if (!indexes?.size) return;
+  for (const idx of indexes) {
+    const paragraph = paragraphs?.items?.[idx];
+    await clearResidualVejiceHighlightsInParagraph(context, paragraph);
+  }
+}
+
+async function clearAllHighlightsForParagraphs(context, paragraphs, indexes) {
+  if (!indexes?.size) return;
+  try {
+    for (const idx of indexes) {
+      const paragraph = paragraphs?.items?.[idx];
+      if (!paragraph || typeof paragraph.getRange !== "function") continue;
+      paragraph.getRange("Content").font.highlightColor = null;
+    }
+    await context.sync();
+  } catch (err) {
+    warn("clearAllHighlightsForParagraphs failed", err);
+  }
+}
+
+async function clearAddinMarkerFormattingOnRanges(context, ranges) {
+  const validRanges = Array.isArray(ranges)
+    ? ranges.filter((range) => range && range.font)
+    : [];
+  if (!validRanges.length) return 0;
+  try {
+    for (const range of validRanges) {
+      range.font.load("underline,highlightColor");
+    }
+    await context.sync();
+    let changed = 0;
+    for (const range of validRanges) {
+      const isHighlightMarker = isVejiceMarkerHighlightColor(range?.font?.highlightColor);
+      const isUnderlineMarker = isVejiceMarkerStyle(range?.font?.underline, null);
+      if (!isHighlightMarker && !isUnderlineMarker) continue;
+      if (isHighlightMarker) {
+        range.font.highlightColor = null;
+      }
+      if (isUnderlineMarker) {
+        range.font.underline = "None";
+        try {
+          range.font.underlineColor = null;
+        } catch (_err) {
+          // ignore: underlineColor not supported on some hosts
+        }
+      }
+      changed += 1;
+    }
+    if (changed > 0) {
+      await context.sync();
+    }
+    return changed;
+  } catch (err) {
+    warn("clearAddinMarkerFormattingOnRanges failed", err);
+    return 0;
+  }
+}
+
 async function findRangeForInsert(context, paragraph, suggestion) {
   const searchOpts = { matchCase: false, matchWholeWord: false };
   let range = null;
+  const corrected = suggestion?.meta?.correctedText ?? paragraph.text ?? "";
+  const rawLeft = suggestion?.snippets?.leftSnippet ?? corrected.slice(0, suggestion?.meta?.op?.pos ?? 0);
+  const rawRight = suggestion?.snippets?.rightSnippet ?? corrected.slice(suggestion?.meta?.op?.pos ?? 0);
+  const lastWord = extractLastWord(rawLeft || "");
+  const leftFrag = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
 
-  const focusWord = suggestion.snippets?.focusWord;
-  if (focusWord) {
-    const wordSearch = paragraph.getRange().search(focusWord, {
+  if (lastWord) {
+    const wordSearch = paragraph.getRange().search(lastWord, {
       matchCase: false,
       matchWholeWord: true,
     });
@@ -1830,8 +2506,6 @@ async function findRangeForInsert(context, paragraph, suggestion) {
       range = wordSearch.items[wordSearch.items.length - 1];
     }
   }
-
-  let leftFrag = (suggestion.snippets?.leftSnippet || "").slice(-20).replace(/[\r\n]+/g, " ");
 
   if (!range && leftFrag.trim()) {
     const leftSearch = paragraph.getRange().search(leftFrag.trim(), searchOpts);
@@ -1843,7 +2517,7 @@ async function findRangeForInsert(context, paragraph, suggestion) {
   }
 
   if (!range) {
-    let rightFrag = (suggestion.snippets?.rightSnippet || "").replace(/,/g, "").trim();
+    let rightFrag = (rawRight || "").replace(/,/g, "").trim();
     rightFrag = rightFrag.slice(0, 8);
     if (rightFrag) {
       const rightSearch = paragraph.getRange().search(rightFrag, searchOpts);
@@ -1859,21 +2533,70 @@ async function findRangeForInsert(context, paragraph, suggestion) {
 }
 
 async function clearHighlightForSuggestion(context, paragraph, suggestion) {
-  if (!suggestion) return;
+  if (!suggestion) return false;
+  const restoreMarker = getSuggestionRestoreMarkerFormat(suggestion);
+  const restoreWordUnderline = toWordUnderline(restoreMarker?.underline);
+  const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
+  if (isWordOnline()) {
+    const markerTag = getSuggestionMarkerTag(suggestion, { create: false });
+    if (markerTag) {
+      try {
+        const controls = context.document.body.contentControls.getByTag(markerTag);
+        controls.load("items");
+        await context.sync();
+        if (controls.items.length) {
+          for (const control of controls.items) {
+            const controlRange = control.getRange("Content");
+            if (suggestion.markerChannel === "highlight") {
+              controlRange.font.highlightColor = suggestion.previousHighlightColor || null;
+            } else {
+              controlRange.font.underline = restoreWordUnderline;
+              try {
+                controlRange.font.underlineColor = restoreWordUnderlineColor;
+              } catch (_err) {
+                // ignore: underlineColor not supported on some hosts
+              }
+            }
+            control.delete(true);
+          }
+          await context.sync();
+          resetSuggestionMarkerState(suggestion);
+          return true;
+        }
+      } catch (tagErr) {
+        warn("clearHighlightForSuggestion: failed via marker tag", tagErr);
+      }
+    }
+  }
   if (suggestion.highlightRange) {
+    let clearedViaTrackedRange = false;
     try {
-      suggestion.highlightRange.font.highlightColor = null;
+      if (suggestion.markerChannel === "highlight") {
+        suggestion.highlightRange.font.highlightColor = suggestion.previousHighlightColor || null;
+      } else {
+        suggestion.highlightRange.font.underline = restoreWordUnderline;
+        try {
+          suggestion.highlightRange.font.underlineColor = restoreWordUnderlineColor;
+        } catch (_err) {
+          // ignore: underlineColor not supported on some hosts
+        }
+      }
       context.trackedObjects.remove(suggestion.highlightRange);
+      clearedViaTrackedRange = true;
     } catch (err) {
       warn("clearHighlightForSuggestion: failed via highlightRange", err);
-    } finally {
-      suggestion.highlightRange = null;
     }
-    return;
+    if (clearedViaTrackedRange) {
+      resetSuggestionMarkerState(suggestion);
+      return true;
+    }
   }
   const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
   const metaAnchor = suggestion.meta?.anchor;
-  if (!metaAnchor) return;
+  if (!metaAnchor) {
+    resetSuggestionMarkerState(suggestion);
+    return false;
+  }
   const charStart =
     suggestion.charHint?.start ??
     (typeof metaAnchor.highlightCharStart === "number"
@@ -1882,19 +2605,45 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
   const charEnd =
     suggestion.charHint?.end ??
     (typeof metaAnchor.highlightCharEnd === "number" ? metaAnchor.highlightCharEnd : metaAnchor.charEnd);
-  if (!paragraph || !Number.isFinite(charStart)) return;
-  const range = await getRangeForAnchorSpan(
-    context,
-    paragraph,
-    entry,
-    charStart,
-    charEnd,
-    "clear-highlight",
-    metaAnchor.highlightText || metaAnchor.highlightAnchorTarget?.tokenText
-  );
-  if (range) {
-    range.font.highlightColor = null;
+  if (!paragraph) {
+    resetSuggestionMarkerState(suggestion);
+    return false;
   }
+
+  let range = null;
+  if (Number.isFinite(charStart)) {
+    range = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      entry,
+      charStart,
+      charEnd,
+      "clear-highlight",
+      metaAnchor.highlightText || metaAnchor.highlightAnchorTarget?.tokenText
+    );
+  }
+  // Fallbacks: when highlight was created via snippet/ordinal path, anchor lookup can miss.
+  if (!range && suggestion?.kind === "insert") {
+    range = await findRangeForInsert(context, paragraph, suggestion);
+  }
+  if (!range && suggestion?.kind === "delete") {
+    const liveText = paragraph.text || suggestion?.meta?.originalText || "";
+    range = await findCommaRangeByOrdinal(context, paragraph, liveText, suggestion?.meta?.op || {});
+  }
+  if (range) {
+    if (suggestion.markerChannel === "highlight") {
+      range.font.highlightColor = suggestion.previousHighlightColor || null;
+    } else {
+      range.font.underline = restoreWordUnderline;
+      try {
+        range.font.underlineColor = restoreWordUnderlineColor;
+      } catch (_err) {
+        // ignore: underlineColor not supported on some hosts
+      }
+    }
+  }
+  resetSuggestionMarkerState(suggestion);
+  return Boolean(range);
 }
 async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs) {
   const usingOverride = Array.isArray(suggestionsOverride);
@@ -1902,18 +2651,29 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
   const clearHighlight = (sug) => {
     if (!sug?.highlightRange) return;
     try {
-      sug.highlightRange.font.highlightColor = null;
+      if (sug.markerChannel === "highlight") {
+        sug.highlightRange.font.highlightColor = sug.previousHighlightColor || null;
+      } else {
+        const restoreMarker = getSuggestionRestoreMarkerFormat(sug);
+        sug.highlightRange.font.underline = toWordUnderline(restoreMarker?.underline);
+        try {
+          sug.highlightRange.font.underlineColor = normalizeHighlightColorValue(
+            restoreMarker?.underlineColor
+          );
+        } catch (_err) {
+          // ignore: underlineColor not supported on some hosts
+        }
+      }
       context.trackedObjects.remove(sug.highlightRange);
     } catch (err) {
       warn("Failed to clear highlight", err);
     } finally {
-      sug.highlightRange = null;
+      resetSuggestionMarkerState(sug);
     }
   };
 
   if (!source.length) {
     if (!usingOverride) {
-      context.document.body.font.highlightColor = null;
       await context.sync();
     }
     return;
@@ -1924,6 +2684,9 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     const paragraph = item?.paragraph ?? paragraphs?.items?.[suggestion.paragraphIndex];
     if (paragraph) {
       await clearHighlightForSuggestion(context, paragraph, suggestion);
+      // After text edits, metadata-based range lookup can fail due shifted offsets.
+      // Always clear tracked highlight objects as a fallback so stale highlights don't remain.
+      clearHighlight(suggestion);
     } else {
       clearHighlight(suggestion);
     }
@@ -1980,14 +2743,17 @@ function findWordTokenStartByHintInText(text, rawToken, hintIndex, occurrence) {
   return best;
 }
 
+const COMPANY_ABBREV_PATTERN = /\b(?:d\.\s*o\.\s*o\.|s\.\s*p\.|d\.\s*d\.|k\.\s*d\.|d\.\s*n\.\s*o\.)\b/iu;
+
 function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion) {
   const meta = suggestion?.meta?.anchor;
-  if (!meta) return null;
+  if (!meta) return { op: null, skipReason: "insert_missing_anchor_meta" };
+  let skipReason = "insert_unresolved";
 
   const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
   const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
 
-  const findStartForAnchor = (anchor, preferEnd = false) => {
+  const findStartForAnchor = (anchor, preferEnd = false, reasonOnMissing = "insert_anchor_token_unresolved") => {
     if (!anchor?.tokenText) return { start: -1, token: null };
     const token = (anchor.tokenText || "").trim().replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
     if (!token || /[^\p{L}\d]/u.test(token)) return { start: -1, token: null };
@@ -2003,6 +2769,9 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       mappedHint,
       anchor.textOccurrence ?? anchor.tokenIndex ?? 0
     );
+    if (start < 0) {
+      skipReason = reasonOnMissing;
+    }
     return { start, token };
   };
 
@@ -2038,27 +2807,74 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     return pos;
   };
 
+  const hasCompanyAbbreviationNear = (center, radius = 72) => {
+    if (!Number.isFinite(center) || center < 0 || center > snapshotText.length) return false;
+    const start = Math.max(0, center - radius);
+    const end = Math.min(snapshotText.length, center + radius);
+    return COMPANY_ABBREV_PATTERN.test(snapshotText.slice(start, end));
+  };
+  const resolveCompanyInsertFallback = () => {
+    const sourceAnchor =
+      meta.sourceTokenAt ?? meta.sourceTokenBefore ?? meta.sourceTokenAfter ?? meta.highlightAnchorTarget;
+    const charStart =
+      suggestion?.charHint?.start ??
+      meta.charStart ??
+      sourceAnchor?.charStart ??
+      suggestion?.meta?.op?.originalPos ??
+      -1;
+    if (!Number.isFinite(charStart) || charStart < 0) {
+      skipReason = "insert_fallback_no_char_hint";
+      return null;
+    }
+    const mapped = mapIndexAcrossCanonical(sourceText, snapshotText, charStart);
+    if (!Number.isFinite(mapped) || mapped < 0 || mapped > snapshotText.length) {
+      skipReason = "insert_fallback_mapped_pos_invalid";
+      return null;
+    }
+    if (!hasCompanyAbbreviationNear(mapped)) {
+      skipReason = "insert_fallback_company_form_not_detected";
+      return null;
+    }
+    let pos = mapped;
+    if (pos > 0 && pos < snapshotText.length && /[\p{L}\d]/u.test(snapshotText[pos - 1]) && /[\p{L}\d]/u.test(snapshotText[pos])) {
+      while (pos < snapshotText.length && /[\p{L}\d.]/u.test(snapshotText[pos])) pos++;
+    }
+    pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, pos)));
+    const left = snapshotText.slice(Math.max(0, pos - 3), pos);
+    const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
+    if (/,\s*$/.test(left) || /^\s*,/.test(right)) {
+      return { kind: "noop" };
+    }
+    return {
+      kind: "insert",
+      start: pos,
+      end: pos,
+      replacement: ",",
+      snippet: snapshotText.slice(Math.max(0, pos - 6), Math.min(snapshotText.length, pos + 6)),
+    };
+  };
+
   // Best path: replace exact whitespace gap between before/after anchors.
   if (beforeAnchor && afterAnchor) {
-    const before = findStartForAnchor(beforeAnchor, true);
-    const after = findStartForAnchor(afterAnchor, false);
+    const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
+    const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
     if (before.start >= 0 && after.start >= 0) {
       const beforeEnd = before.start + before.token.length;
       if (beforeEnd <= after.start) {
         const gap = snapshotText.slice(beforeEnd, after.start);
         // Only treat as already satisfied when the direct token gap is just comma+spaces.
         if (/^\s*,\s*$/.test(gap)) {
-          return { kind: "noop" };
+          return { op: { kind: "noop" }, skipReason: null };
         }
         // Normal adjacency gap: whitespace-only.
         if (!/[^\s]/.test(gap)) {
-          return {
+          return { op: {
             kind: "insert",
             start: normalizeInsertPosForQuoteBoundary(beforeEnd),
             end: normalizeInsertPosForQuoteBoundary(beforeEnd),
             replacement: ",",
             snippet: gap || before.token,
-          };
+          }, skipReason: null };
         }
         // Quote boundary adjacency (e.g. "'foo' 'bar'"): insert after closing quote.
         if (isQuoteOrSpaceBoundary(gap)) {
@@ -2071,79 +2887,186 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
           }
           const boundarySegment = snapshotText.slice(insertPos, after.start);
           if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
-            return { kind: "noop" };
+            return { op: { kind: "noop" }, skipReason: null };
           }
-          return {
+          return { op: {
             kind: "insert",
             start: normalizeInsertPosForQuoteBoundary(insertPos),
             end: normalizeInsertPosForQuoteBoundary(insertPos),
             replacement: ",",
             snippet: gap || before.token,
-          };
+          }, skipReason: null };
         }
+        skipReason = "insert_gap_contains_nonspace_content";
       }
+      skipReason = "insert_before_after_order_invalid";
     }
   }
 
   // Secondary path: normalize whitespace right before "after" token.
   if (afterAnchor) {
-    const after = findStartForAnchor(afterAnchor, false);
+    const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
     if (after.start > 0) {
       let wsStart = after.start;
       while (wsStart > 0 && /\s/.test(snapshotText[wsStart - 1])) wsStart--;
       if (wsStart < after.start) {
-        return {
+        return { op: {
           kind: "insert",
           start: normalizeInsertPosForQuoteBoundary(wsStart),
           end: normalizeInsertPosForQuoteBoundary(wsStart),
           replacement: ",",
           snippet: snapshotText.slice(wsStart, after.start),
-        };
+        }, skipReason: null };
       }
       const safePos = normalizeInsertPosForQuoteBoundary(after.start);
-      return {
+      return { op: {
         kind: "insert",
         start: safePos,
         end: safePos,
         replacement: ",",
         snippet: snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1)),
-      };
+      }, skipReason: null };
     }
   }
 
   // Secondary path: normalize whitespace right after "before" token.
   if (beforeAnchor) {
-    const before = findStartForAnchor(beforeAnchor, true);
+    const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
     if (before.start >= 0) {
       const beforeEnd = before.start + before.token.length;
       let wsEnd = beforeEnd;
       while (wsEnd < snapshotText.length && /\s/.test(snapshotText[wsEnd])) wsEnd++;
       if (wsEnd > beforeEnd) {
-        return {
+        return { op: {
           kind: "insert",
           start: normalizeInsertPosForQuoteBoundary(beforeEnd),
           end: normalizeInsertPosForQuoteBoundary(beforeEnd),
           replacement: ",",
           snippet: snapshotText.slice(beforeEnd, wsEnd),
-        };
+        }, skipReason: null };
       }
       const safePos = normalizeInsertPosForQuoteBoundary(beforeEnd);
-      return {
+      return { op: {
         kind: "insert",
         start: safePos,
         end: safePos,
         replacement: ",",
         snippet: snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1)),
-      };
+      }, skipReason: null };
     }
   }
 
-  return null;
+  const fallbackOp = resolveCompanyInsertFallback();
+  if (fallbackOp) return { op: fallbackOp, skipReason: null };
+  return { op: null, skipReason };
+}
+
+function isProtectedAbbreviationComma(snapshotText = "", commaIndex = -1) {
+  if (typeof snapshotText !== "string" || !snapshotText || !Number.isFinite(commaIndex) || commaIndex < 1) {
+    return false;
+  }
+  if (snapshotText[commaIndex] !== ",") return false;
+  const left = snapshotText.slice(Math.max(0, commaIndex - 24), commaIndex + 1);
+  const normalized = left.replace(/\s+/g, "");
+  return /\b(?:itd|itn|ipd|idr|npr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag)\.,$/iu.test(normalized);
+}
+
+function normalizeDeleteContextToken(rawToken) {
+  const tokenRaw = typeof rawToken === "string" ? rawToken.trim() : "";
+  const token = tokenRaw.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
+  if (!token || /[^\p{L}\d]/u.test(token)) return null;
+  return token;
+}
+
+function isSafeGapBetweenTokenAndComma(gap = "", direction = "before") {
+  if (typeof gap !== "string") return false;
+  if (direction === "before") {
+    return /^[\s"'Â»â€â€™)\]]*$/.test(gap);
+  }
+  return /^[\s"'Â«â€œâ€žâ€˜(\[]*$/.test(gap);
+}
+
+function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex) {
+  const meta = suggestion?.meta?.anchor;
+  if (!meta || typeof snapshotText !== "string" || !snapshotText) return false;
+  const beforeAnchor = meta.sourceTokenBefore ?? meta.sourceTokenAt ?? meta.highlightAnchorTarget ?? null;
+  const afterAnchor = meta.sourceTokenAfter ?? meta.sourceTokenAt ?? meta.highlightAnchorTarget ?? null;
+  let checked = 0;
+
+  if (beforeAnchor?.tokenText) {
+    const token = normalizeDeleteContextToken(beforeAnchor.tokenText);
+    if (token) {
+      const sourceHint = Number.isFinite(beforeAnchor.charStart)
+        ? beforeAnchor.charStart
+        : Number.isFinite(beforeAnchor.charEnd)
+          ? beforeAnchor.charEnd - token.length
+          : null;
+      const mappedHint =
+        Number.isFinite(sourceHint) && typeof sourceText === "string"
+          ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+          : null;
+      const start = findWordTokenStartByHintInText(
+        snapshotText,
+        token,
+        mappedHint,
+        beforeAnchor.textOccurrence ?? beforeAnchor.tokenIndex ?? 0
+      );
+      checked++;
+      if (start < 0) return false;
+      const end = start + token.length;
+      const gap = snapshotText.slice(end, commaIndex);
+      if (end > commaIndex || !isSafeGapBetweenTokenAndComma(gap, "before")) return false;
+    }
+  }
+
+  if (afterAnchor?.tokenText) {
+    const token = normalizeDeleteContextToken(afterAnchor.tokenText);
+    if (token) {
+      const sourceHint = Number.isFinite(afterAnchor.charStart)
+        ? afterAnchor.charStart
+        : Number.isFinite(afterAnchor.charEnd)
+          ? afterAnchor.charEnd - token.length
+          : null;
+      const mappedHint =
+        Number.isFinite(sourceHint) && typeof sourceText === "string"
+          ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+          : null;
+      const start = findWordTokenStartByHintInText(
+        snapshotText,
+        token,
+        mappedHint,
+        afterAnchor.textOccurrence ?? afterAnchor.tokenIndex ?? 0
+      );
+      checked++;
+      if (start < 0) return false;
+      const gap = snapshotText.slice(commaIndex + 1, start);
+      if (start <= commaIndex || !isSafeGapBetweenTokenAndComma(gap, "after")) return false;
+    }
+  }
+
+  // If no clean tokens are available, fallback to char-mapping confidence only.
+  return true;
+}
+
+function findNearestNonSpaceIndex(text = "", start = 0, step = 1) {
+  if (typeof text !== "string" || !text.length) return -1;
+  for (let i = start; i >= 0 && i < text.length; i += step) {
+    if (!/\s/u.test(text[i])) return i;
+  }
+  return -1;
+}
+
+function hasWordBoundaryAroundComma(snapshotText, commaIndex) {
+  if (typeof snapshotText !== "string" || !snapshotText.length) return false;
+  const leftIdx = findNearestNonSpaceIndex(snapshotText, commaIndex - 1, -1);
+  const rightIdx = findNearestNonSpaceIndex(snapshotText, commaIndex + 1, 1);
+  if (leftIdx < 0 || rightIdx < 0) return false;
+  return /\p{L}|\p{N}/u.test(snapshotText[leftIdx]) && /\p{L}|\p{N}/u.test(snapshotText[rightIdx]);
 }
 
 function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion) {
   const meta = suggestion?.meta?.anchor;
-  if (!meta) return null;
+  if (!meta) return { op: null, skipReason: "delete_missing_anchor_meta" };
   const sourceAnchor =
     meta.sourceTokenAt ?? meta.sourceTokenBefore ?? meta.sourceTokenAfter ?? meta.highlightAnchorTarget;
   const charStart =
@@ -2152,11 +3075,12 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
     sourceAnchor?.charStart ??
     suggestion?.meta?.op?.originalPos ??
     -1;
-  if (!Number.isFinite(charStart) || charStart < 0) return null;
+  if (!Number.isFinite(charStart) || charStart < 0) return { op: null, skipReason: "delete_missing_char_hint" };
 
   const mappedStart = mapIndexAcrossCanonical(sourceText, snapshotText, charStart);
   let commaIndex = -1;
-  for (let delta = 0; delta <= 3; delta++) {
+  const maxDelta = 1;
+  for (let delta = 0; delta <= maxDelta; delta++) {
     const left = mappedStart - delta;
     const right = mappedStart + delta;
     if (left >= 0 && snapshotText[left] === ",") {
@@ -2168,14 +3092,22 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
       break;
     }
   }
-  if (commaIndex < 0) return null;
-  return {
+  if (commaIndex < 0) return { op: null, skipReason: "delete_comma_not_found_near_hint" };
+  if (isProtectedAbbreviationComma(snapshotText, commaIndex)) return { op: null, skipReason: "delete_protected_abbreviation" };
+  if (!hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex)) {
+    const charAligned = Math.abs(commaIndex - mappedStart) <= 1;
+    const safeBoundary = hasWordBoundaryAroundComma(snapshotText, commaIndex);
+    if (!(charAligned && safeBoundary)) {
+      return { op: null, skipReason: "delete_context_mismatch" };
+    }
+  }
+  return { op: {
     kind: "delete",
     start: commaIndex,
     end: commaIndex + 1,
     replacement: "",
     snippet: ",",
-  };
+  }, skipReason: null };
 }
 
 function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
@@ -2184,15 +3116,19 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   const noop = [];
 
   for (const suggestion of suggestions) {
-    let op = null;
+    let opResult = { op: null, skipReason: "planner_unknown" };
     if (suggestion?.kind === "delete") {
-      op = resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion);
+      opResult = resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion);
     } else {
-      op = resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion);
+      opResult = resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion);
     }
+    const op = opResult?.op ?? null;
 
     if (!op) {
-      skipped.push(suggestion);
+      skipped.push({
+        suggestion,
+        reason: opResult?.skipReason || "planner_unresolved",
+      });
       continue;
     }
     if (op.kind === "noop") {
@@ -2278,7 +3214,44 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   return { plan, skipped, noop };
 }
 
+function summarizeSkippedReasons(skipped = []) {
+  const summary = {};
+  for (const item of skipped) {
+    const reason = item?.reason || "planner_unresolved";
+    summary[reason] = (summary[reason] || 0) + 1;
+  }
+  return summary;
+}
+
+function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
+  const suggestion = skippedItem?.suggestion || {};
+  const meta = suggestion?.meta?.anchor || {};
+  const hintStart =
+    suggestion?.charHint?.start ??
+    meta?.charStart ??
+    meta?.sourceTokenAt?.charStart ??
+    meta?.sourceTokenBefore?.charStart ??
+    meta?.sourceTokenAfter?.charStart ??
+    -1;
+  const start = Number.isFinite(hintStart) ? Math.max(0, hintStart) : -1;
+  const from = start >= 0 ? Math.max(0, start - 24) : 0;
+  const to = start >= 0 ? Math.min(sourceText.length, start + 40) : Math.min(sourceText.length, 64);
+  return {
+    reason: skippedItem?.reason || "planner_unresolved",
+    id: suggestion?.id ?? null,
+    kind: suggestion?.kind ?? null,
+    hintStart: start,
+    preview: (sourceText || "").slice(from, to),
+  };
+}
+
 export async function applyAllSuggestionsOnline() {
+  const scanCompleted = await waitForOnlineScanCompletion();
+  if (!scanCompleted) {
+    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.");
+    flushScanNotifications();
+    return;
+  }
   if (!pendingSuggestionsOnline.length) {
     const restored = restorePendingSuggestionsOnline();
     if (restored > 0) {
@@ -2289,8 +3262,42 @@ export async function applyAllSuggestionsOnline() {
     warn("applyAllSuggestionsOnline: no pending suggestions");
     return;
   }
-  const suggestionsByParagraph = new Map();
+  const autoApplySuggestions = [];
+  const retainedSuggestions = [];
   for (const sug of pendingSuggestionsOnline) {
+    if (isSuggestionAutoApplyEligibleOnline(sug)) {
+      autoApplySuggestions.push(sug);
+    } else {
+      retainedSuggestions.push(sug);
+    }
+  }
+  log("applyAll confidence gate", {
+    minLevel: ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL,
+    totalPending: pendingSuggestionsOnline.length,
+    autoApply: autoApplySuggestions.length,
+    retainedForReview: retainedSuggestions.length,
+  });
+  if (retainedSuggestions.length) {
+    const retainedByLevel = retainedSuggestions.reduce(
+      (acc, sug) => {
+        const level = getSuggestionConfidenceLevel(sug);
+        acc[level] = (acc[level] || 0) + 1;
+        return acc;
+      },
+      { high: 0, medium: 0, low: 0 }
+    );
+    log("applyAll retained by confidence", retainedByLevel);
+    const retainedDetails = retainedSuggestions
+      .slice(0, 50)
+      .map((sug) => toConfidenceLogEntry(sug));
+    log("applyAll retained details (first 50)", retainedDetails);
+  }
+  if (!autoApplySuggestions.length) {
+    warn("applyAllSuggestionsOnline: no eligible suggestions after confidence gate");
+    return;
+  }
+  const suggestionsByParagraph = new Map();
+  for (const sug of autoApplySuggestions) {
     if (typeof sug?.paragraphIndex !== "number" || sug.paragraphIndex < 0) continue;
     if (!suggestionsByParagraph.has(sug.paragraphIndex)) {
       suggestionsByParagraph.set(sug.paragraphIndex, []);
@@ -2302,14 +3309,22 @@ export async function applyAllSuggestionsOnline() {
     const paras = await wordOnlineAdapter.getParagraphs(context);
     const touchedIndexes = new Set();
     const processedSuggestions = [];
+    const droppedSuggestions = [];
     const failedSuggestions = [];
-
     for (const [paragraphIndex, suggestions] of suggestionsByParagraph.entries()) {
       const paragraph = paras.items[paragraphIndex];
       if (!paragraph) {
         failedSuggestions.push(...suggestions);
         continue;
       }
+      // Re-resolve and clear highlights in the current context.
+      // Do not rely on old tracked ranges from prior Word.run contexts.
+      let directlyClearedMarkers = 0;
+      for (const suggestion of suggestions) {
+        const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion);
+        if (cleared) directlyClearedMarkers += 1;
+      }
+      await context.sync();
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
       const snapshotText = paragraph.text || "";
       const sourceText = entry?.originalText ?? snapshotText;
@@ -2320,8 +3335,24 @@ export async function applyAllSuggestionsOnline() {
         planned: plan.length,
         skipped: skipped.length,
         noop: noop.length,
+        skippedByReason: summarizeSkippedReasons(skipped),
       });
-      failedSuggestions.push(...skipped);
+      if (skipped.length) {
+        const skippedDetails = skipped
+          .slice(0, 10)
+          .map((item) => buildSkippedSuggestionLogEntry(item, sourceText));
+        log(
+          "applyAll skipped details",
+          skippedDetails
+        );
+        log("applyAll skipped details json", JSON.stringify(skippedDetails));
+        if (typeof window !== "undefined") {
+          window.__VEJICE_LAST_APPLYALL_SKIPPED__ = skippedDetails;
+        }
+      }
+      for (const skippedItem of skipped) {
+        droppedSuggestions.push({ suggestion: skippedItem.suggestion, paragraph });
+      }
       for (const suggestion of noop) {
         processedSuggestions.push({ suggestion, paragraph });
       }
@@ -2336,6 +3367,12 @@ export async function applyAllSuggestionsOnline() {
         plan,
         "apply-all-batch"
       );
+      if (directlyClearedMarkers > 0) {
+        log("applyAll marker cleanup", {
+          paragraphIndex,
+          directClearedMarkers: directlyClearedMarkers,
+        });
+      }
       for (let opIndex = 0; opIndex < plan.length; opIndex++) {
         const op = plan[opIndex];
         const range = plannedRanges[opIndex];
@@ -2364,9 +3401,9 @@ export async function applyAllSuggestionsOnline() {
         touchedIndexes.add(paragraphIndex);
       }
     }
-    if (processedSuggestions.length) {
-      await wordOnlineAdapter.clearHighlights(context, processedSuggestions);
-    }
+    // Highlights are already cleared before text edits in this apply-all flow.
+    // A second metadata-based clear pass can fail on shifted ranges in Word Online.
+    // Skip post-apply clear to avoid invalid-range RichApi failures.
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
       force: wordOnlineAdapter.shouldForceSpacingCleanup(),
     });
@@ -2374,24 +3411,48 @@ export async function applyAllSuggestionsOnline() {
       anchorProvider.deleteAnchors(idx);
     }
     pendingSuggestionsOnline.length = 0;
+    if (retainedSuggestions.length) {
+      pendingSuggestionsOnline.push(...retainedSuggestions);
+    }
     if (failedSuggestions.length) {
       pendingSuggestionsOnline.push(...failedSuggestions);
       persistPendingSuggestionsOnline();
     } else {
-      context.document.body.font.highlightColor = null;
       persistPendingSuggestionsOnline();
+    }
+    if (pendingSuggestionsOnline.length) {
+      log("applyAll final pending by confidence reason", {
+        totalPending: pendingSuggestionsOnline.length,
+        byReason: buildReasonIdSummary(pendingSuggestionsOnline),
+      });
+    } else {
+      log("applyAll final pending by confidence reason", {
+        totalPending: 0,
+        byReason: {},
+      });
     }
     await context.sync();
   });
 }
 
 export async function rejectAllSuggestionsOnline() {
+  const scanCompleted = await waitForOnlineScanCompletion();
+  if (!scanCompleted) {
+    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.");
+    flushScanNotifications();
+    return;
+  }
+  if (!pendingSuggestionsOnline.length) {
+    const restored = restorePendingSuggestionsOnline();
+    if (restored > 0) {
+      log(`rejectAllSuggestionsOnline: restored ${restored} pending suggestions from storage`);
+    }
+  }
   await Word.run(async (context) => {
     const paras = context.document.body.paragraphs;
     paras.load("items/text");
     await context.sync();
     await wordOnlineAdapter.clearHighlights(context, null, paras);
-    context.document.body.font.highlightColor = null;
     await context.sync();
   });
 }
@@ -2399,11 +3460,22 @@ export async function rejectAllSuggestionsOnline() {
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih
  *  ───────────────────────────────────────────────────────── */
 export async function checkDocumentText() {
-  resetNotificationFlags();
-  if (isWordOnline()) {
-    return checkDocumentTextOnline();
+  if (documentCheckInProgress) {
+    warn("checkDocumentText ignored: document check already in progress");
+    queueScanNotification("Pregled dokumenta že poteka.");
+    flushScanNotifications();
+    return;
   }
-  return checkDocumentTextDesktop();
+  documentCheckInProgress = true;
+  resetNotificationFlags();
+  try {
+    if (isWordOnline()) {
+      return await checkDocumentTextOnline();
+    }
+    return await checkDocumentTextDesktop();
+  } finally {
+    documentCheckInProgress = false;
+  }
 }
 
 async function checkDocumentTextDesktop() {
@@ -2507,6 +3579,7 @@ async function checkDocumentTextDesktop() {
           planned: plan.length,
           skipped: skipped.length,
           noop: noop.length,
+          skippedByReason: summarizeSkippedReasons(skipped),
         });
 
         let appliedInParagraph = 0;
@@ -2589,8 +3662,16 @@ async function checkDocumentTextDesktop() {
 }
 
 async function checkDocumentTextOnline() {
+  if (onlineScanInProgress) {
+    warn("checkDocumentTextOnline skipped: scan already in progress");
+    queueScanNotification("Pregled dokumenta že poteka.");
+    flushScanNotifications();
+    return;
+  }
+  onlineScanInProgress = true;
   log("START checkDocumentTextOnline()");
   let paragraphsProcessed = 0;
+  let suggestionsDetected = 0;
   let suggestions = 0;
   let apiErrors = 0;
   let nonCommaSkips = 0;
@@ -2607,6 +3688,8 @@ async function checkDocumentTextOnline() {
       anchorProvider.reset();
 
       let documentCharOffset = 0;
+      let pendingHighlightParagraphs = 0;
+      let pendingHighlightSuggestions = 0;
 
       for (let idx = 0; idx < paras.items.length; idx++) {
         const p = paras.items[idx];
@@ -2616,35 +3699,63 @@ async function checkDocumentTextOnline() {
         const paragraphDocOffset = documentCharOffset;
         documentCharOffset += original.length + 1;
         if (!trimmed) {
-          await anchorProvider.getAnchors({
-            paragraphIndex: idx,
-            originalText: original,
-            correctedText: original,
-            sourceTokens: [],
-            targetTokens: [],
-            documentOffset: paragraphDocOffset,
-          });
+          try {
+            await anchorProvider.getAnchors({
+              paragraphIndex: idx,
+              originalText: original,
+              correctedText: original,
+              sourceTokens: [],
+              targetTokens: [],
+              documentOffset: paragraphDocOffset,
+            });
+          } catch (anchorErr) {
+            warn(`P${idx} ONLINE: empty-paragraph anchor init failed`, anchorErr);
+          }
+          continue;
+        }
+        if (trimmed.length > MAX_PARAGRAPH_CHARS) {
+          notifyParagraphTooLong(idx, trimmed.length);
           continue;
         }
 
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
         paragraphsProcessed++;
-
-        const result = await commaEngine.analyzeParagraph({
-          paragraphIndex: idx,
-          originalText: original,
-          normalizedOriginalText: normalizedOriginal,
-          paragraphDocOffset,
-          conservativeSentenceFallback: true,
-        });
-        apiErrors += result.apiErrors;
-        nonCommaSkips += result.nonCommaSkips || 0;
-        if (!result.suggestions?.length) continue;
-        for (const suggestionObj of result.suggestions) {
-          const highlighted = await wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
-          if (highlighted) {
-            suggestions++;
+        try {
+          const result = await commaEngine.analyzeParagraph({
+            paragraphIndex: idx,
+            originalText: original,
+            normalizedOriginalText: normalizedOriginal,
+            paragraphDocOffset,
+          });
+          apiErrors += result.apiErrors;
+          nonCommaSkips += result.nonCommaSkips || 0;
+          suggestionsDetected += result.suggestions?.length || 0;
+          if (!result.suggestions?.length) continue;
+          let highlightedInParagraph = 0;
+          for (const suggestionObj of result.suggestions) {
+            const highlighted = await wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
+            if (highlighted) {
+              suggestions++;
+              highlightedInParagraph++;
+            }
           }
+          // Flush in small batches: still visible during scan, fewer sync calls.
+          if (highlightedInParagraph > 0) {
+            pendingHighlightParagraphs++;
+            pendingHighlightSuggestions += highlightedInParagraph;
+            const shouldFlushNow =
+              pendingHighlightParagraphs >= ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS ||
+              pendingHighlightSuggestions >= ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS;
+            if (shouldFlushNow) {
+              await context.sync();
+              pendingHighlightParagraphs = 0;
+              pendingHighlightSuggestions = 0;
+            }
+          }
+        } catch (paragraphErr) {
+          apiErrors++;
+          warn(`P${idx} ONLINE: paragraph processing failed`, paragraphErr);
+          notifyApiUnavailable();
         }
       }
 
@@ -2656,17 +3767,29 @@ async function checkDocumentTextOnline() {
       paragraphsProcessed,
       "| suggestions:",
       suggestions,
+      "| detected:",
+      suggestionsDetected,
       "| apiErrors:",
       apiErrors,
       "| nonCommaSkips:",
       nonCommaSkips
     );
-    if (paragraphsProcessed > 0 && suggestions === 0 && apiErrors === 0 && nonCommaSkips === 0) {
+    if (
+      paragraphsProcessed > 0 &&
+      suggestionsDetected > 0 &&
+      suggestions === 0 &&
+      apiErrors === 0 &&
+      nonCommaSkips === 0
+    ) {
+      queueScanNotification(MARKER_RENDER_FAILED_MESSAGE);
+    }
+    if (paragraphsProcessed > 0 && suggestionsDetected === 0 && apiErrors === 0 && nonCommaSkips === 0) {
       notifyNoIssuesFound();
     }
   } catch (e) {
     errL("ERROR in checkDocumentTextOnline:", e);
   } finally {
+    onlineScanInProgress = false;
     flushScanNotifications();
   }
 }

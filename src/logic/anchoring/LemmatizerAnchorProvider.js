@@ -240,9 +240,13 @@ function normalizeLemmaToken(raw, index) {
     raw.charStart,
   ]);
   const end = pickNumber([raw.end_char, raw.end, raw.finish, raw.charEnd]);
+  const posRaw =
+    raw.pos ?? raw.upos ?? raw.xpos ?? raw.tag ?? raw.posTag ?? raw.partOfSpeech ?? raw.part_of_speech;
+  const pos = typeof posRaw === "string" ? posRaw.trim().toUpperCase() : "";
   return {
     text,
     normalized: normalizeForMatch(text),
+    pos: pos || undefined,
     start: typeof start === "number" ? start : undefined,
     end: typeof end === "number" ? end : undefined,
     index: typeof raw.index === "number" ? raw.index : index ?? 0,

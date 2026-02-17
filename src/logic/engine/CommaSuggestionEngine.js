@@ -133,6 +133,7 @@ export class CommaSuggestionEngine {
               ? normalizedOriginalText
               : normalizeParagraphWhitespace(originalText),
           chunks: [],
+          skippedChunks: [],
           final: {},
         }
       : null;
@@ -178,6 +179,35 @@ export class CommaSuggestionEngine {
     const chunkDetails = [];
     let apiErrors = 0;
     let nonCommaChunkSkips = 0;
+    const makeSnippet = (value, max = 140) =>
+      typeof value === "string" ? value.slice(0, max).replace(/\s+/g, " ").trim() : "";
+    const logSkippedChunk = (reason, chunk, extra = {}) => {
+      if (!debugEnabled) return;
+      const payload = {
+        reason,
+        paragraphIndex,
+        chunkIndex: chunk?.index,
+        depth: extra.depth ?? 0,
+        start: chunk?.start,
+        end: chunk?.end,
+        length:
+          typeof chunk?.length === "number"
+            ? chunk.length
+            : typeof chunk?.start === "number" && typeof chunk?.end === "number"
+              ? Math.max(0, chunk.end - chunk.start)
+              : undefined,
+        snippet: makeSnippet(chunk?.text || chunk?.normalizedText || ""),
+        ...extra,
+      };
+      if (debugDump) {
+        debugDump.skippedChunks.push(payload);
+      }
+      try {
+        console.warn("[Vejice Chunk Skip]", payload);
+      } catch (_err) {
+        // Ignore logging failures in restricted runtimes.
+      }
+    };
 
     const processChunk = async (chunk, depth = 0) => {
       const meta = {
@@ -189,6 +219,7 @@ export class CommaSuggestionEngine {
       processedMeta.push(meta);
 
       if (chunk.tooLong) {
+        logSkippedChunk("tooLong", chunk, { depth });
         this.notifiers.onSentenceTooLong(paragraphIndex, chunk.length);
         meta.syntheticTokens = tokenizeForAnchoring(
           chunk.text,
@@ -208,6 +239,10 @@ export class CommaSuggestionEngine {
           }
           return;
         }
+        logSkippedChunk("apiError", chunk, {
+          depth,
+          apiError: apiErr?.message || String(apiErr || "API error"),
+        });
         apiErrors++;
         this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
         meta.syntheticTokens = tokenizeForAnchoring(
@@ -232,6 +267,10 @@ export class CommaSuggestionEngine {
         });
       }
       if (!onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
+        logSkippedChunk("nonCommaChange", chunk, {
+          depth,
+          correctedSnippet: makeSnippet(correctedChunk),
+        });
         this.notifiers.onChunkNonCommaChanges(
           paragraphIndex,
           chunk.index,
@@ -470,6 +509,11 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
   if (op.kind === "delete") {
     const metadata = buildDeleteSuggestionMetadata(anchorsEntry, op.originalPos ?? op.pos);
     if (!metadata) return null;
+    const confidence = computeSuggestionConfidence({
+      kind: "delete",
+      op,
+      metadata,
+    });
     return createSuggestion({
       id: `delete-${paragraphIndex}-${op.pos}`,
       paragraphIndex,
@@ -484,6 +528,7 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
       snippets: buildSnippetsFromMetadata(metadata, originalText, correctedText),
       meta: {
         op,
+        confidence,
         highlightText: metadata.highlightText,
         anchor: metadata,
         originalText,
@@ -496,6 +541,11 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
     targetCharIndex: op.correctedPos ?? op.pos,
   });
   if (!metadata) return null;
+  const confidence = computeSuggestionConfidence({
+    kind: "insert",
+    op,
+    metadata,
+  });
   return createSuggestion({
     id: `insert-${paragraphIndex}-${op.pos}`,
     paragraphIndex,
@@ -510,12 +560,101 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
     snippets: buildSnippetsFromMetadata(metadata, originalText, correctedText),
     meta: {
       op,
+      confidence,
       highlightText: metadata.highlightText,
       anchor: metadata,
       originalText,
       correctedText,
     },
   });
+}
+
+function computeSuggestionConfidence({ kind, op, metadata }) {
+  let score = 0.5;
+  const reasons = [];
+
+  if (op?.fromCorrections) {
+    score += 0.12;
+    reasons.push("from_corrections");
+  } else {
+    score -= 0.08;
+    reasons.push("not_from_corrections");
+  }
+
+  if (op?.viaDiffFallback) {
+    score -= 0.14;
+    reasons.push("diff_fallback");
+  } else {
+    score += 0.08;
+    reasons.push("direct_corrections_alignment");
+  }
+
+  const hasPrimaryCharHint =
+    kind === "insert"
+      ? Number.isFinite(metadata?.targetCharStart) && metadata.targetCharStart >= 0
+      : Number.isFinite(metadata?.charStart) && metadata.charStart >= 0;
+  if (hasPrimaryCharHint) {
+    score += 0.14;
+    reasons.push("char_hint_present");
+  } else {
+    score -= 0.2;
+    reasons.push("char_hint_missing");
+  }
+
+  const hasTokenBefore = Boolean(metadata?.sourceTokenBefore || metadata?.targetTokenBefore);
+  const hasTokenAfter = Boolean(metadata?.sourceTokenAfter || metadata?.targetTokenAfter);
+  if (hasTokenBefore && hasTokenAfter) {
+    score += 0.16;
+    reasons.push("token_context_both_sides");
+  } else if (hasTokenBefore || hasTokenAfter) {
+    score += 0.06;
+    reasons.push("token_context_one_side");
+  } else {
+    score -= 0.1;
+    reasons.push("token_context_missing");
+  }
+
+  if (metadata?.highlightAnchorTarget || metadata?.sourceTokenAt || metadata?.targetTokenAt) {
+    score += 0.08;
+    reasons.push("highlight_anchor_present");
+  } else {
+    score -= 0.04;
+    reasons.push("highlight_anchor_missing");
+  }
+
+  const nearestGap = [
+    metadata?.sourceTokenBefore?.repeatKeyNearestGap,
+    metadata?.sourceTokenAfter?.repeatKeyNearestGap,
+    metadata?.targetTokenBefore?.repeatKeyNearestGap,
+    metadata?.targetTokenAfter?.repeatKeyNearestGap,
+    metadata?.highlightAnchorTarget?.repeatKeyNearestGap,
+  ].filter((value) => Number.isFinite(value) && value >= 0);
+  const minNearestGap = nearestGap.length ? Math.min(...nearestGap) : null;
+  if (Number.isFinite(minNearestGap)) {
+    if (minNearestGap <= 6) {
+      score -= 0.12;
+      reasons.push("repeat_token_very_close");
+    } else if (minNearestGap <= 15) {
+      score -= 0.06;
+      reasons.push("repeat_token_close");
+    } else {
+      score += 0.02;
+      reasons.push("repeat_token_far");
+    }
+  }
+
+  if (kind === "delete") {
+    score -= 0.03;
+    reasons.push("delete_op_extra_risk");
+  }
+
+  const clamped = Math.max(0, Math.min(1, score));
+  const level = clamped >= 0.75 ? "high" : clamped >= 0.55 ? "medium" : "low";
+  return {
+    score: Number(clamped.toFixed(3)),
+    level,
+    reasons,
+  };
 }
 
 function buildSnippetsFromMetadata(metadata, originalText, correctedText) {
@@ -1151,6 +1290,19 @@ function isSentenceBoundaryToken(currentToken, nextToken) {
   const raw = typeof currentToken?.text === "string" ? currentToken.text : "";
   const trimmed = raw.trim();
   if (!trimmed) return false;
+  const pos = typeof currentToken?.pos === "string" ? currentToken.pos.toUpperCase() : "";
+
+  // Prefer explicit punctuation tokens when the lemmatizer provides POS tags.
+  if (pos === "PUNC" || pos === "PUNCT") {
+    if (trimmed === "?" || trimmed === "!") return true;
+    if (trimmed === ".") {
+      if (!nextToken || typeof nextToken.text !== "string") return true;
+      const nextText = nextToken.text.trim();
+      const first = nextText ? nextText[0] : "";
+      if (!first) return true;
+      return /\p{Lu}/u.test(first);
+    }
+  }
   const withoutClosers = trimmed.replace(/[\])"'»”’]+$/g, "");
   const endChar = withoutClosers.slice(-1);
   if (!/[.!?]/.test(endChar)) return false;

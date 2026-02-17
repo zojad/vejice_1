@@ -7,12 +7,12 @@ export class DesktopTextBridge extends TextBridge {
       applyDeleteSuggestion,
       forceSpacingCleanup: false,
       normalizationProfile: {
-        // Keep desktop mapping as literal as possible; Win32 text offsets are
-        // sensitive to canonical rewrites and can drift with aggressive normalization.
-        collapseWhitespace: false,
-        normalizeQuotes: false,
-        normalizeDashes: false,
-        normalizeEllipsis: false,
+        // Keep canonical mapping profile aligned with Word Online to reduce
+        // cross-host index drift during snapshot remapping.
+        collapseWhitespace: true,
+        normalizeQuotes: true,
+        normalizeDashes: true,
+        normalizeEllipsis: true,
       },
     });
   }
