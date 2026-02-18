@@ -5,6 +5,7 @@ import {
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
   isDocumentCheckInProgress,
+  cancelDocumentCheck,
   getPendingSuggestionsOnline,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
@@ -14,20 +15,31 @@ const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
 
 let busy = false;
 let online = false;
+let currentAction = null;
 
 const setStatus = (message) => {
   const statusLine = document.getElementById("status-line");
   if (statusLine) statusLine.textContent = message;
 };
 
-const setBusy = (nextBusy) => {
-  busy = Boolean(nextBusy);
+const syncActionButtons = () => {
   const checkBtn = document.getElementById("btn-check");
+  const cancelBtn = document.getElementById("btn-cancel");
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
-  if (checkBtn) checkBtn.disabled = busy;
-  if (acceptBtn) acceptBtn.disabled = busy || !online;
-  if (rejectBtn) rejectBtn.disabled = busy || !online;
+  const checkInProgress = isDocumentCheckInProgress();
+  const allowCancel = online && (currentAction === "check" || (!busy && checkInProgress));
+
+  if (checkBtn) checkBtn.disabled = busy || checkInProgress;
+  if (cancelBtn) cancelBtn.disabled = !allowCancel;
+  if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress;
+  if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress;
+};
+
+const setBusy = (nextBusy, action = null) => {
+  busy = Boolean(nextBusy);
+  currentAction = busy ? action : null;
+  syncActionButtons();
 };
 
 const refreshPendingStatus = () => {
@@ -41,16 +53,21 @@ const runCheck = async () => {
     setStatus("Preverjanje ze poteka.");
     return;
   }
-  setBusy(true);
+  setBusy(true, "check");
   setStatus("Preverjam dokument...");
   try {
-    await checkDocumentText();
-    refreshPendingStatus();
+    const summary = await checkDocumentText();
+    if (summary?.status === "deferred") {
+      setStatus("Počakajte, da se trenutno opravilo zaključi.");
+    } else {
+      refreshPendingStatus();
+    }
   } catch (err) {
     errL("check failed", err);
     setStatus("Napaka pri preverjanju.");
   } finally {
-    setBusy(false);
+    setBusy(false, null);
+    syncActionButtons();
   }
 };
 
@@ -60,7 +77,7 @@ const runAccept = async () => {
     setStatus("Pocakajte, da se preverjanje konca.");
     return;
   }
-  setBusy(true);
+  setBusy(true, "apply");
   setStatus("Sprejemam predloge...");
   try {
     const summary = await applyAllSuggestionsOnline();
@@ -72,7 +89,8 @@ const runAccept = async () => {
     errL("accept failed", err);
     setStatus("Napaka pri sprejemanju.");
   } finally {
-    setBusy(false);
+    setBusy(false, null);
+    syncActionButtons();
   }
 };
 
@@ -82,7 +100,7 @@ const runReject = async () => {
     setStatus("Pocakajte, da se preverjanje konca.");
     return;
   }
-  setBusy(true);
+  setBusy(true, "reject");
   setStatus("Zavracam predloge...");
   try {
     const summary = await rejectAllSuggestionsOnline();
@@ -94,8 +112,20 @@ const runReject = async () => {
     errL("reject failed", err);
     setStatus("Napaka pri zavracanju.");
   } finally {
-    setBusy(false);
+    setBusy(false, null);
+    syncActionButtons();
   }
+};
+
+const runCancel = () => {
+  if (!online) return;
+  const cancelled = cancelDocumentCheck();
+  if (cancelled) {
+    setStatus("Prekinjam pregled...");
+  } else {
+    setStatus("Ni aktivnega pregleda za prekinitev.");
+  }
+  syncActionButtons();
 };
 
 Office.onReady((info) => {
@@ -114,20 +144,25 @@ Office.onReady((info) => {
   }
 
   const acceptBtn = document.getElementById("btn-accept");
+  const cancelBtn = document.getElementById("btn-cancel");
   const rejectBtn = document.getElementById("btn-reject");
   const desktopNote = document.getElementById("desktop-note");
 
   if (!online) {
     if (acceptBtn) acceptBtn.hidden = true;
+    if (cancelBtn) cancelBtn.hidden = true;
     if (rejectBtn) rejectBtn.hidden = true;
     if (desktopNote) desktopNote.hidden = false;
   }
 
   const checkBtn = document.getElementById("btn-check");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
+  if (cancelBtn) cancelBtn.addEventListener("click", () => runCancel());
   if (acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
   if (rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
 
-  setBusy(false);
+  setBusy(false, null);
+  syncActionButtons();
+  setInterval(syncActionButtons, 500);
   refreshPendingStatus();
 });

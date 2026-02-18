@@ -71,12 +71,14 @@ const API_UNAVAILABLE_MESSAGE =
 const NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajočih ali napačnih vejic.";
 const MARKER_RENDER_FAILED_MESSAGE =
   "Napake so bile najdene, vendar jih v Word Online ni bilo mogoče označiti.";
+const PARAGRAPH_TIMEOUT_MESSAGE = "Nekateri odstavki niso bili pregledani zaradi casovne omejitve.";
 const ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS = 3;
 const ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS = 12;
 const ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
 const DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE = true;
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
+let paragraphTimeoutNotified = false;
 const pendingScanNotifications = [];
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
@@ -334,21 +336,143 @@ if (typeof window !== "undefined") {
 }
 
 let toastDialog = null;
-let onlineScanInProgress = false;
 let documentCheckInProgress = false;
+const ACTION_TYPE_IDLE = "idle";
+const ACTION_TYPE_CHECK = "check";
+const ACTION_TYPE_APPLY = "apply";
+const ACTION_TYPE_REJECT = "reject";
+const ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
+const ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
+const CHECK_ABORT_REASON_TIMEOUT = "check-timeout";
+const CHECK_ABORT_REASON_CANCELLED = "check-cancelled";
+const CHECK_ABORT_REASON_SUPERSEDED = "check-superseded";
+const CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT = "paragraph-timeout";
+const CHECK_TIMEOUT_MESSAGE = "Pregled je bil prekinjen zaradi casovne omejitve. Poskusite znova.";
+const CHECK_CANCELLED_MESSAGE = "Pregled je bil prekinjen.";
+let actionSequence = 0;
+let activeActionState = {
+  type: ACTION_TYPE_IDLE,
+  token: null,
+  startedAt: 0,
+};
+
+class CheckAbortError extends Error {
+  constructor(message, reason) {
+    super(message);
+    this.name = "CheckAbortError";
+    this.reason = reason || CHECK_ABORT_REASON_CANCELLED;
+  }
+}
+
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+function resolveOnlineCheckTimeoutMs() {
+  let timeoutOverride = null;
+  if (typeof window !== "undefined") {
+    timeoutOverride = parsePositiveInteger(window.__VEJICE_ONLINE_CHECK_TIMEOUT_MS);
+  }
+  if (timeoutOverride == null && typeof process !== "undefined") {
+    timeoutOverride = parsePositiveInteger(process.env?.VEJICE_ONLINE_CHECK_TIMEOUT_MS);
+  }
+  return timeoutOverride ?? ONLINE_CHECK_TIMEOUT_MS_DEFAULT;
+}
+
+function resolveOnlineParagraphTimeoutMs() {
+  let timeoutOverride = null;
+  if (typeof window !== "undefined") {
+    timeoutOverride = parsePositiveInteger(window.__VEJICE_ONLINE_PARAGRAPH_TIMEOUT_MS);
+  }
+  if (timeoutOverride == null && typeof process !== "undefined") {
+    timeoutOverride = parsePositiveInteger(process.env?.VEJICE_ONLINE_PARAGRAPH_TIMEOUT_MS);
+  }
+  return timeoutOverride ?? ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT;
+}
+
+function getActiveActionType() {
+  return activeActionState?.type || ACTION_TYPE_IDLE;
+}
+
+function beginAction(type) {
+  if (getActiveActionType() !== ACTION_TYPE_IDLE) return null;
+  const token = {
+    id: ++actionSequence,
+    type,
+    cancelled: false,
+    cancelReason: null,
+    deadlineAt: 0,
+  };
+  activeActionState = {
+    type,
+    token,
+    startedAt: Date.now(),
+  };
+  return token;
+}
+
+function finishAction(token) {
+  if (!token || activeActionState?.token !== token) return;
+  activeActionState = {
+    type: ACTION_TYPE_IDLE,
+    token: null,
+    startedAt: 0,
+  };
+}
+
+function cancelActionToken(token, reason = CHECK_ABORT_REASON_CANCELLED) {
+  if (!token) return;
+  token.cancelled = true;
+  token.cancelReason = reason;
+}
+
+function ensureCheckActionActive(token) {
+  if (!token) {
+    throw new CheckAbortError("Missing check token", CHECK_ABORT_REASON_CANCELLED);
+  }
+  if (activeActionState?.token !== token || getActiveActionType() !== ACTION_TYPE_CHECK) {
+    throw new CheckAbortError("Check token is no longer active", CHECK_ABORT_REASON_SUPERSEDED);
+  }
+  if (token.cancelled) {
+    throw new CheckAbortError("Check was cancelled", token.cancelReason || CHECK_ABORT_REASON_CANCELLED);
+  }
+  if (token.deadlineAt > 0 && Date.now() > token.deadlineAt) {
+    cancelActionToken(token, CHECK_ABORT_REASON_TIMEOUT);
+    throw new CheckAbortError("Check timed out", CHECK_ABORT_REASON_TIMEOUT);
+  }
+}
+
+async function runWithTimeout(promiseFactory, timeoutMs, timeoutReason, timeoutMessage) {
+  let timeoutId = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => promiseFactory()),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new CheckAbortError(timeoutMessage || "Timed out", timeoutReason));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function waitForOnlineScanCompletion({ timeoutMs = 120000, pollMs = 80 } = {}) {
-  if (!onlineScanInProgress) return true;
+  if (getActiveActionType() !== ACTION_TYPE_CHECK) return true;
   const startedAt = Date.now();
   warn("Waiting for active online scan to complete before apply/reject.");
-  while (onlineScanInProgress && Date.now() - startedAt < timeoutMs) {
+  while (getActiveActionType() === ACTION_TYPE_CHECK && Date.now() - startedAt < timeoutMs) {
     await sleep(pollMs);
   }
-  if (onlineScanInProgress) {
+  if (getActiveActionType() === ACTION_TYPE_CHECK) {
     warn("Timed out while waiting for online scan completion.");
     return false;
   }
@@ -356,7 +480,13 @@ async function waitForOnlineScanCompletion({ timeoutMs = 120000, pollMs = 80 } =
 }
 
 export function isDocumentCheckInProgress() {
-  return Boolean(documentCheckInProgress || onlineScanInProgress);
+  return Boolean(documentCheckInProgress || getActiveActionType() === ACTION_TYPE_CHECK);
+}
+
+export function cancelDocumentCheck(reason = CHECK_ABORT_REASON_CANCELLED) {
+  if (getActiveActionType() !== ACTION_TYPE_CHECK) return false;
+  cancelActionToken(activeActionState?.token, reason);
+  return true;
 }
 
 function showToastNotification(message) {
@@ -451,6 +581,13 @@ function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, correc
   if (chunkApiFailureNotified) return;
   chunkApiFailureNotified = true;
   queueScanNotification(CHUNK_API_ERROR_MESSAGE);
+}
+
+function notifyParagraphTimeout(paragraphIndex, timeoutMs) {
+  warn("Paragraph skipped due to timeout", { paragraphIndex, timeoutMs });
+  if (paragraphTimeoutNotified) return;
+  paragraphTimeoutNotified = true;
+  queueScanNotification(PARAGRAPH_TIMEOUT_MESSAGE);
 }
 
 const anchorProvider = createAnchorProvider();
@@ -550,6 +687,7 @@ function resetNotificationFlags() {
   apiFailureNotified = false;
   longSentenceNotified = false;
   chunkApiFailureNotified = false;
+  paragraphTimeoutNotified = false;
   pendingScanNotifications.length = 0;
 }
 
@@ -3410,6 +3548,11 @@ export async function applyAllSuggestionsOnline() {
     flushScanNotifications();
     return finalize("deferred", "scan-in-progress");
   }
+  const actionToken = beginAction(ACTION_TYPE_APPLY);
+  if (!actionToken) {
+    return finalize("deferred", "action-in-progress");
+  }
+  try {
   if (!pendingSuggestionsOnline.length) {
     const restored = restorePendingSuggestionsOnline();
     summary.restored = restored;
@@ -3598,6 +3741,9 @@ export async function applyAllSuggestionsOnline() {
     return finalize("partial", summary.failedSuggestions > 0 ? "some-operations-failed" : null);
   }
   return finalize("noop", "no-effective-operations");
+  } finally {
+    finishAction(actionToken);
+  }
 }
 
 export async function rejectAllSuggestionsOnline() {
@@ -3626,6 +3772,11 @@ export async function rejectAllSuggestionsOnline() {
     flushScanNotifications();
     return finalize("deferred", "scan-in-progress");
   }
+  const actionToken = beginAction(ACTION_TYPE_REJECT);
+  if (!actionToken) {
+    return finalize("deferred", "action-in-progress");
+  }
+  try {
   if (!pendingSuggestionsOnline.length) {
     const restored = restorePendingSuggestionsOnline();
     summary.restored = restored;
@@ -3648,26 +3799,36 @@ export async function rejectAllSuggestionsOnline() {
     return finalize(summary.clearedMarkers > 0 ? "partial" : "noop", "some-marker-clear-failures");
   }
   return finalize(summary.clearedMarkers > 0 ? "cleared" : "noop");
+  } finally {
+    finishAction(actionToken);
+  }
 }
 /** ─────────────────────────────────────────────────────────
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih
  *  ───────────────────────────────────────────────────────── */
 export async function checkDocumentText() {
-  if (documentCheckInProgress) {
-    warn("checkDocumentText ignored: document check already in progress");
-    queueScanNotification("Pregled dokumenta že poteka.");
+  const actionToken = beginAction(ACTION_TYPE_CHECK);
+  if (!actionToken) {
+    warn("checkDocumentText ignored: another action is already running", getActiveActionType());
+    queueScanNotification("Počakajte, da se trenutno opravilo zaključi.");
     flushScanNotifications();
-    return;
+    return {
+      status: "deferred",
+      reason: "action-in-progress",
+      activeAction: getActiveActionType(),
+    };
   }
   documentCheckInProgress = true;
   resetNotificationFlags();
   try {
     if (isWordOnline()) {
-      return await checkDocumentTextOnline();
+      actionToken.deadlineAt = Date.now() + resolveOnlineCheckTimeoutMs();
+      return await checkDocumentTextOnline(actionToken);
     }
     return await checkDocumentTextDesktop();
   } finally {
     documentCheckInProgress = false;
+    finishAction(actionToken);
   }
 }
 
@@ -3854,14 +4015,7 @@ async function checkDocumentTextDesktop() {
   }
 }
 
-async function checkDocumentTextOnline() {
-  if (onlineScanInProgress) {
-    warn("checkDocumentTextOnline skipped: scan already in progress");
-    queueScanNotification("Pregled dokumenta že poteka.");
-    flushScanNotifications();
-    return;
-  }
-  onlineScanInProgress = true;
+async function checkDocumentTextOnline(checkToken) {
   log("START checkDocumentTextOnline()");
   let paragraphsProcessed = 0;
   let suggestionsDetected = 0;
@@ -3871,6 +4025,7 @@ async function checkDocumentTextOnline() {
 
   try {
     await Word.run(async (context) => {
+      ensureCheckActionActive(checkToken);
       if (await documentHasTrackedChanges(context)) {
         notifyTrackedChangesPresent();
         return;
@@ -3883,8 +4038,10 @@ async function checkDocumentTextOnline() {
       let documentCharOffset = 0;
       let pendingHighlightParagraphs = 0;
       let pendingHighlightSuggestions = 0;
+      const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
 
       for (let idx = 0; idx < paras.items.length; idx++) {
+        ensureCheckActionActive(checkToken);
         const p = paras.items[idx];
         const original = p.text || "";
         const normalizedOriginal = normalizeParagraphWhitespace(original);
@@ -3914,18 +4071,33 @@ async function checkDocumentTextOnline() {
         log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
         paragraphsProcessed++;
         try {
-          const result = await commaEngine.analyzeParagraph({
-            paragraphIndex: idx,
-            originalText: original,
-            normalizedOriginalText: normalizedOriginal,
-            paragraphDocOffset,
-          });
+          const remainingCheckMs =
+            checkToken?.deadlineAt > 0 ? Math.max(1, checkToken.deadlineAt - Date.now()) : paragraphTimeoutMs;
+          const paragraphGuardTimeoutMs = Math.min(paragraphTimeoutMs, remainingCheckMs);
+          const timeoutReason =
+            paragraphGuardTimeoutMs < paragraphTimeoutMs
+              ? CHECK_ABORT_REASON_TIMEOUT
+              : CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT;
+          const result = await runWithTimeout(
+            () =>
+              commaEngine.analyzeParagraph({
+                paragraphIndex: idx,
+                originalText: original,
+                normalizedOriginalText: normalizedOriginal,
+                paragraphDocOffset,
+              }),
+            paragraphGuardTimeoutMs,
+            timeoutReason,
+            `Paragraph ${idx + 1} timed out`
+          );
+          ensureCheckActionActive(checkToken);
           apiErrors += result.apiErrors;
           nonCommaSkips += result.nonCommaSkips || 0;
           suggestionsDetected += result.suggestions?.length || 0;
           if (!result.suggestions?.length) continue;
           let highlightedInParagraph = 0;
           for (const suggestionObj of result.suggestions) {
+            ensureCheckActionActive(checkToken);
             const highlighted = await wordOnlineAdapter.highlightSuggestion(context, p, suggestionObj);
             if (highlighted) {
               suggestions++;
@@ -3946,6 +4118,20 @@ async function checkDocumentTextOnline() {
             }
           }
         } catch (paragraphErr) {
+          if (
+            paragraphErr instanceof CheckAbortError &&
+            paragraphErr.reason === CHECK_ABORT_REASON_TIMEOUT
+          ) {
+            throw paragraphErr;
+          }
+          if (
+            paragraphErr instanceof CheckAbortError &&
+            paragraphErr.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT
+          ) {
+            apiErrors++;
+            notifyParagraphTimeout(idx, paragraphTimeoutMs);
+            continue;
+          }
           apiErrors++;
           warn(`P${idx} ONLINE: paragraph processing failed`, paragraphErr);
           notifyApiUnavailable();
@@ -3980,9 +4166,16 @@ async function checkDocumentTextOnline() {
       notifyNoIssuesFound();
     }
   } catch (e) {
-    errL("ERROR in checkDocumentTextOnline:", e);
+    if (e instanceof CheckAbortError && e.reason === CHECK_ABORT_REASON_TIMEOUT) {
+      warn("checkDocumentTextOnline stopped due to timeout");
+      queueScanNotification(CHECK_TIMEOUT_MESSAGE);
+    } else if (e instanceof CheckAbortError) {
+      warn("checkDocumentTextOnline cancelled", e.reason);
+      queueScanNotification(CHECK_CANCELLED_MESSAGE);
+    } else {
+      errL("ERROR in checkDocumentTextOnline:", e);
+    }
   } finally {
-    onlineScanInProgress = false;
     flushScanNotifications();
   }
 }
