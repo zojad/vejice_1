@@ -73,40 +73,9 @@
                     <bt:Image size="32" resid="GroupIcon.32x32"/>
                     <bt:Image size="80" resid="GroupIcon.80x80"/>
                   </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>checkDocumentText</FunctionName>
-                  </Action>
-                </Control>
-
-                <Control xsi:type="Button" id="AcceptAll">
-                  <Label resid="AcceptAll.Label"/>
-                  <Supertip>
-                    <Title resid="AcceptAll.Label"/>
-                    <Description resid="AcceptAll.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="GroupIcon.16x16"/>
-                    <bt:Image size="32" resid="GroupIcon.32x32"/>
-                    <bt:Image size="80" resid="GroupIcon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>acceptAllChanges</FunctionName>
-                  </Action>
-                </Control>
-
-                <Control xsi:type="Button" id="RejectAll">
-                  <Label resid="RejectAll.Label"/>
-                  <Supertip>
-                    <Title resid="RejectAll.Label"/>
-                    <Description resid="RejectAll.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="GroupIcon.16x16"/>
-                    <bt:Image size="32" resid="GroupIcon.32x32"/>
-                    <bt:Image size="80" resid="GroupIcon.80x80"/>
-                  </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>rejectAllChanges</FunctionName>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>VejiceTaskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
 
@@ -126,19 +95,16 @@
 
       <bt:Urls>
         <bt:Url id="Commands.Url" DefaultValue="https://zojad.github.io/vejice_1/commands.html?v=20260207a"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://zojad.github.io/vejice_1/taskpane.html?v=20260207a"/>
       </bt:Urls>
 
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
         <bt:String id="CheckVejice.Label"   DefaultValue="Preveri vejice"/>
-        <bt:String id="AcceptAll.Label"     DefaultValue="Sprejmi spremembe"/>
-        <bt:String id="RejectAll.Label"     DefaultValue="Zavrni spremembe"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
         <bt:String id="CheckVejice.Tooltip" DefaultValue="Preverite rabo vejic v dokumentu."/>
-        <bt:String id="AcceptAll.Tooltip"   DefaultValue="Sprejmi vse predlagane spremembe."/>
-        <bt:String id="RejectAll.Tooltip"   DefaultValue="Zavrni vse predlagane spremembe."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

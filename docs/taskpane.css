@@ -4,18 +4,93 @@ body {
     height: 100%;
     margin: 0;
     padding: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
 }
 
 .ms-welcome__main {
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
     height: 100%;
     text-align: center;
-    gap: 12px;
+    padding: 16px;
 }
 
-.ms-welcome__action {
-    margin-top: 12px;
+.taskpane-root {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+    gap: 14px;
+}
+
+.taskpane-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.taskpane-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.taskpane-subtitle {
+    margin: 0;
+    color: #5a5a5a;
+    font-size: 12px;
+}
+
+.taskpane-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.task-btn {
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 90px;
+    padding: 9px 12px;
+}
+
+.task-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.task-btn-primary {
+    background: #0f6cbd;
+}
+
+.task-btn-success {
+    background: #0b7f48;
+}
+
+.task-btn-danger {
+    background: #c23934;
+}
+
+.taskpane-note {
+    margin: 0;
+    color: #5a5a5a;
+    font-size: 12px;
+}
+
+.taskpane-status {
+    margin-top: auto;
+    border-top: 1px solid #e0e0e0;
+    padding-top: 10px;
+}
+
+.status-text {
+    margin: 0;
+    font-size: 13px;
+    color: #333;
 }

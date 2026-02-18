@@ -5,7 +5,6 @@ import {
   checkDocumentText as runCheckVejice,
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
-  getPendingSuggestionsOnline,
   isDocumentCheckInProgress,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
@@ -68,9 +67,42 @@ const showCommandToast = (message) => {
 };
 let isCheckRunning = false;
 let isCommandBusy = false;
+let ribbonUpdatesSupported = true;
+let ribbonSupportProbeDone = false;
+let ribbonUnavailableLogged = false;
+
+const isRibbonApiUnavailableError = (err) => {
+  const code = String(err?.code || "").toLowerCase();
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    code.includes("apinotfound") ||
+    code.includes("notsupported") ||
+    msg.includes("api you are trying to use is not available") ||
+    msg.includes("different scenario")
+  );
+};
 
 const syncRibbonButtonState = async () => {
+  if (!ribbonUpdatesSupported) return;
   if (typeof Office === "undefined" || !Office?.ribbon?.requestUpdate) return;
+  if (!ribbonSupportProbeDone) {
+    ribbonSupportProbeDone = true;
+    try {
+      const supportsRibbonApi = Boolean(
+        Office?.context?.requirements?.isSetSupported?.("RibbonApi", "1.1")
+      );
+      if (!supportsRibbonApi) {
+        ribbonUpdatesSupported = false;
+        if (!ribbonUnavailableLogged) {
+          ribbonUnavailableLogged = true;
+          log("Ribbon state updates disabled: RibbonApi not supported in this host/scenario");
+        }
+        return;
+      }
+    } catch (_err) {
+      // Keep optimistic path; requestUpdate catch below will disable on failure.
+    }
+  }
   const checkRunning = Boolean(isCheckRunning || isDocumentCheckInProgress?.());
   const disableApplyButtons = Boolean(checkRunning || isCommandBusy);
   try {
@@ -92,6 +124,14 @@ const syncRibbonButtonState = async () => {
       ],
     });
   } catch (err) {
+    if (isRibbonApiUnavailableError(err)) {
+      ribbonUpdatesSupported = false;
+      if (!ribbonUnavailableLogged) {
+        ribbonUnavailableLogged = true;
+        log("Ribbon state updates disabled:", err?.message || err);
+      }
+      return;
+    }
     log("Ribbon state update skipped:", err?.message || err);
   }
 };
@@ -165,8 +205,6 @@ if (typeof window !== "undefined" && typeof resolvedMock === "boolean") {
 
 Office.onReady(() => {
   log("Office ready | Host:", Office?.context?.host, "| Platform:", Office?.platform);
-  tryAutoOpenTaskpane();
-  syncRibbonButtonState();
 });
 
 // —————————————————————————————————————————————
@@ -219,12 +257,13 @@ window.acceptAllChanges = async (event) => {
   await syncRibbonButtonState();
   try {
     if (isWordOnline()) {
-      const pendingBefore = getPendingSuggestionsOnline(true)?.length ?? 0;
-      log("Pending online suggestions before apply:", pendingBefore);
-      await applyAllSuggestionsOnline();
-      const pendingAfter = getPendingSuggestionsOnline(true)?.length ?? 0;
-      log("Pending online suggestions after apply:", pendingAfter);
-      log("Applied online suggestions |", Math.round(tnow() - t0), "ms");
+      const applySummary = await applyAllSuggestionsOnline();
+      log("Apply online summary:", applySummary);
+      log(
+        "Applied online suggestions |",
+        applySummary?.durationMs ?? Math.round(tnow() - t0),
+        "ms"
+      );
     } else {
       if (!revisionsApiSupported()) {
         throw new Error("Revisions API is not available on this host");
@@ -277,8 +316,13 @@ window.rejectAllChanges = async (event) => {
   await syncRibbonButtonState();
   try {
     if (isWordOnline()) {
-      await rejectAllSuggestionsOnline();
-      log("Cleared online suggestions |", Math.round(tnow() - t0), "ms");
+      const rejectSummary = await rejectAllSuggestionsOnline();
+      log("Reject online summary:", rejectSummary);
+      log(
+        "Cleared online suggestions |",
+        rejectSummary?.durationMs ?? Math.round(tnow() - t0),
+        "ms"
+      );
     } else {
       if (!revisionsApiSupported()) {
         throw new Error("Revisions API is not available on this host");

@@ -2532,12 +2532,119 @@ async function findRangeForInsert(context, paragraph, suggestion) {
   return range;
 }
 
-async function clearHighlightForSuggestion(context, paragraph, suggestion) {
+function applyMarkerRestoreFormatting(range, suggestion) {
+  if (!range?.font || !suggestion) return false;
+  const restoreMarker = getSuggestionRestoreMarkerFormat(suggestion);
+  const restoreWordUnderline = toWordUnderline(restoreMarker?.underline);
+  const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
+  if (suggestion.markerChannel === "highlight") {
+    range.font.highlightColor = suggestion.previousHighlightColor || null;
+    return true;
+  }
+  range.font.underline = restoreWordUnderline;
+  try {
+    range.font.underlineColor = restoreWordUnderlineColor;
+  } catch (_err) {
+    // ignore: underlineColor not supported on some hosts
+  }
+  return true;
+}
+
+function normalizeSuggestionClearEntry(item, paragraphs) {
+  const suggestion = item?.suggestion ?? item;
+  if (!suggestion) return null;
+  const paragraph = item?.paragraph ?? paragraphs?.items?.[suggestion.paragraphIndex] ?? null;
+  return { suggestion, paragraph };
+}
+
+async function clearSuggestionMarkersByTag(context, entries) {
+  const normalizedEntries = Array.isArray(entries) ? entries.filter((entry) => entry?.suggestion) : [];
+  if (!normalizedEntries.length) {
+    return {
+      clearedCount: 0,
+      unresolvedEntries: [],
+    };
+  }
+  const taggedEntries = [];
+  const unresolvedEntries = [];
+  for (const entry of normalizedEntries) {
+    const markerTag = getSuggestionMarkerTag(entry.suggestion, { create: false });
+    if (!markerTag) {
+      unresolvedEntries.push(entry);
+      continue;
+    }
+    try {
+      const controls = context.document.body.contentControls.getByTag(markerTag);
+      controls.load("items");
+      taggedEntries.push({ ...entry, controls });
+    } catch (err) {
+      warn("clearSuggestionMarkersByTag: failed to queue content control load", err);
+      unresolvedEntries.push(entry);
+    }
+  }
+  if (!taggedEntries.length) {
+    return {
+      clearedCount: 0,
+      unresolvedEntries,
+    };
+  }
+  try {
+    await context.sync();
+  } catch (syncErr) {
+    warn("clearSuggestionMarkersByTag: failed to load tagged controls", syncErr);
+    return {
+      clearedCount: 0,
+      unresolvedEntries: [...unresolvedEntries, ...taggedEntries.map((entry) => ({ suggestion: entry.suggestion, paragraph: entry.paragraph }))],
+    };
+  }
+
+  let clearedCount = 0;
+  let changed = false;
+  for (const entry of taggedEntries) {
+    const items = entry.controls?.items || [];
+    if (!items.length) {
+      unresolvedEntries.push({ suggestion: entry.suggestion, paragraph: entry.paragraph });
+      continue;
+    }
+    let entryCleared = false;
+    for (const control of items) {
+      try {
+        const controlRange = control.getRange("Content");
+        applyMarkerRestoreFormatting(controlRange, entry.suggestion);
+        control.delete(true);
+        changed = true;
+        entryCleared = true;
+      } catch (err) {
+        warn("clearSuggestionMarkersByTag: failed to clear tagged control", err);
+      }
+    }
+    if (entryCleared) {
+      resetSuggestionMarkerState(entry.suggestion);
+      clearedCount += 1;
+    } else {
+      unresolvedEntries.push({ suggestion: entry.suggestion, paragraph: entry.paragraph });
+    }
+  }
+  if (changed) {
+    try {
+      await context.sync();
+    } catch (syncErr) {
+      warn("clearSuggestionMarkersByTag: failed to commit marker cleanup", syncErr);
+    }
+  }
+  return {
+    clearedCount,
+    unresolvedEntries,
+  };
+}
+
+async function clearHighlightForSuggestion(context, paragraph, suggestion, options = {}) {
   if (!suggestion) return false;
   const restoreMarker = getSuggestionRestoreMarkerFormat(suggestion);
   const restoreWordUnderline = toWordUnderline(restoreMarker?.underline);
   const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
-  if (isWordOnline()) {
+  const skipTagLookup = Boolean(options?.skipTagLookup);
+  if (isWordOnline() && !skipTagLookup) {
     const markerTag = getSuggestionMarkerTag(suggestion, { create: false });
     if (markerTag) {
       try {
@@ -2648,53 +2755,80 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion) {
 async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs) {
   const usingOverride = Array.isArray(suggestionsOverride);
   const source = usingOverride ? suggestionsOverride : pendingSuggestionsOnline;
+  const normalizedEntries = [];
+  for (const item of source) {
+    const normalized = normalizeSuggestionClearEntry(item, paragraphs);
+    if (normalized) normalizedEntries.push(normalized);
+  }
+  const result = {
+    requestedCount: normalizedEntries.length,
+    clearedByTagCount: 0,
+    clearedFallbackCount: 0,
+    failedCount: 0,
+  };
+
   const clearHighlight = (sug) => {
     if (!sug?.highlightRange) return;
     try {
-      if (sug.markerChannel === "highlight") {
-        sug.highlightRange.font.highlightColor = sug.previousHighlightColor || null;
-      } else {
-        const restoreMarker = getSuggestionRestoreMarkerFormat(sug);
-        sug.highlightRange.font.underline = toWordUnderline(restoreMarker?.underline);
-        try {
-          sug.highlightRange.font.underlineColor = normalizeHighlightColorValue(
-            restoreMarker?.underlineColor
-          );
-        } catch (_err) {
-          // ignore: underlineColor not supported on some hosts
-        }
-      }
+      applyMarkerRestoreFormatting(sug.highlightRange, sug);
       context.trackedObjects.remove(sug.highlightRange);
+      result.clearedFallbackCount += 1;
     } catch (err) {
       warn("Failed to clear highlight", err);
+      result.failedCount += 1;
     } finally {
       resetSuggestionMarkerState(sug);
     }
   };
 
-  if (!source.length) {
+  if (!normalizedEntries.length) {
     if (!usingOverride) {
-      await context.sync();
+      resetPendingSuggestionsOnline();
     }
-    return;
+    return result;
   }
-  for (const item of source) {
-    const suggestion = item?.suggestion ?? item;
-    if (!suggestion) continue;
-    const paragraph = item?.paragraph ?? paragraphs?.items?.[suggestion.paragraphIndex];
+  const taggedResult = await clearSuggestionMarkersByTag(context, normalizedEntries);
+  result.clearedByTagCount = taggedResult.clearedCount;
+  let needsFinalSync = false;
+  for (const entry of taggedResult.unresolvedEntries) {
+    const suggestion = entry.suggestion;
+    const paragraph = entry.paragraph;
     if (paragraph) {
-      await clearHighlightForSuggestion(context, paragraph, suggestion);
+      const clearedBeforeTrackedFallback = result.clearedFallbackCount;
+      const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion, {
+        skipTagLookup: true,
+      });
+      if (cleared) {
+        result.clearedFallbackCount += 1;
+        needsFinalSync = true;
+      }
       // After text edits, metadata-based range lookup can fail due shifted offsets.
       // Always clear tracked highlight objects as a fallback so stale highlights don't remain.
       clearHighlight(suggestion);
-    } else {
+      if (!cleared && result.clearedFallbackCount === clearedBeforeTrackedFallback) {
+        result.failedCount += 1;
+      }
+      continue;
+    }
+    if (suggestion?.highlightRange) {
       clearHighlight(suggestion);
+      needsFinalSync = true;
+      continue;
+    }
+    resetSuggestionMarkerState(suggestion);
+    result.failedCount += 1;
+  }
+  if (needsFinalSync) {
+    try {
+      await context.sync();
+    } catch (syncErr) {
+      warn("clearOnlineSuggestionMarkers: final sync failed", syncErr);
     }
   }
-  await context.sync();
   if (!suggestionsOverride) {
     resetPendingSuggestionsOnline();
   }
+  return result;
 }
 
 function getSuggestionSortPos(suggestion) {
@@ -3246,21 +3380,47 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
 }
 
 export async function applyAllSuggestionsOnline() {
+  const startedAt = tnow();
+  const summary = {
+    status: "noop",
+    reason: null,
+    restored: 0,
+    pendingBefore: 0,
+    autoApply: 0,
+    retainedForReview: 0,
+    appliedSuggestions: 0,
+    failedSuggestions: 0,
+    skippedSuggestions: 0,
+    clearedMarkers: 0,
+    touchedParagraphs: 0,
+    pendingAfter: 0,
+    durationMs: 0,
+  };
+  const finalize = (status, reason = null) => {
+    summary.status = status;
+    summary.reason = reason;
+    summary.pendingAfter = pendingSuggestionsOnline.length;
+    summary.durationMs = Math.round(tnow() - startedAt);
+    return summary;
+  };
+
   const scanCompleted = await waitForOnlineScanCompletion();
   if (!scanCompleted) {
     queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.");
     flushScanNotifications();
-    return;
+    return finalize("deferred", "scan-in-progress");
   }
   if (!pendingSuggestionsOnline.length) {
     const restored = restorePendingSuggestionsOnline();
+    summary.restored = restored;
     if (restored > 0) {
       log(`applyAllSuggestionsOnline: restored ${restored} pending suggestions from storage`);
     }
   }
+  summary.pendingBefore = pendingSuggestionsOnline.length;
   if (!pendingSuggestionsOnline.length) {
     warn("applyAllSuggestionsOnline: no pending suggestions");
-    return;
+    return finalize("noop", "no-pending-suggestions");
   }
   const autoApplySuggestions = [];
   const retainedSuggestions = [];
@@ -3271,6 +3431,8 @@ export async function applyAllSuggestionsOnline() {
       retainedSuggestions.push(sug);
     }
   }
+  summary.autoApply = autoApplySuggestions.length;
+  summary.retainedForReview = retainedSuggestions.length;
   log("applyAll confidence gate", {
     minLevel: ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL,
     totalPending: pendingSuggestionsOnline.length,
@@ -3294,7 +3456,7 @@ export async function applyAllSuggestionsOnline() {
   }
   if (!autoApplySuggestions.length) {
     warn("applyAllSuggestionsOnline: no eligible suggestions after confidence gate");
-    return;
+    return finalize("noop", "no-eligible-suggestions");
   }
   const suggestionsByParagraph = new Map();
   for (const sug of autoApplySuggestions) {
@@ -3304,27 +3466,27 @@ export async function applyAllSuggestionsOnline() {
     }
     suggestionsByParagraph.get(sug.paragraphIndex).push(sug);
   }
-  if (!suggestionsByParagraph.size) return;
+  if (!suggestionsByParagraph.size) return finalize("noop", "no-valid-paragraphs");
   await Word.run(async (context) => {
     const paras = await wordOnlineAdapter.getParagraphs(context);
     const touchedIndexes = new Set();
-    const processedSuggestions = [];
-    const droppedSuggestions = [];
     const failedSuggestions = [];
     for (const [paragraphIndex, suggestions] of suggestionsByParagraph.entries()) {
       const paragraph = paras.items[paragraphIndex];
       if (!paragraph) {
         failedSuggestions.push(...suggestions);
+        summary.failedSuggestions += suggestions.length;
         continue;
       }
-      // Re-resolve and clear highlights in the current context.
-      // Do not rely on old tracked ranges from prior Word.run contexts.
-      let directlyClearedMarkers = 0;
-      for (const suggestion of suggestions) {
-        const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion);
-        if (cleared) directlyClearedMarkers += 1;
-      }
-      await context.sync();
+      const markerCleanupSummary = await clearOnlineSuggestionMarkers(
+        context,
+        suggestions.map((suggestion) => ({ suggestion, paragraph }))
+      );
+      const directlyClearedMarkers =
+        (markerCleanupSummary?.clearedByTagCount || 0) +
+        (markerCleanupSummary?.clearedFallbackCount || 0);
+      summary.clearedMarkers += directlyClearedMarkers;
+      summary.failedSuggestions += markerCleanupSummary?.failedCount || 0;
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
       const snapshotText = paragraph.text || "";
       const sourceText = entry?.originalText ?? snapshotText;
@@ -3338,6 +3500,7 @@ export async function applyAllSuggestionsOnline() {
         skippedByReason: summarizeSkippedReasons(skipped),
       });
       if (skipped.length) {
+        summary.skippedSuggestions += skipped.length;
         const skippedDetails = skipped
           .slice(0, 10)
           .map((item) => buildSkippedSuggestionLogEntry(item, sourceText));
@@ -3350,12 +3513,7 @@ export async function applyAllSuggestionsOnline() {
           window.__VEJICE_LAST_APPLYALL_SKIPPED__ = skippedDetails;
         }
       }
-      for (const skippedItem of skipped) {
-        droppedSuggestions.push({ suggestion: skippedItem.suggestion, paragraph });
-      }
-      for (const suggestion of noop) {
-        processedSuggestions.push({ suggestion, paragraph });
-      }
+      summary.skippedSuggestions += noop.length;
 
       let anyApplied = false;
       let appliedCount = 0;
@@ -3375,9 +3533,11 @@ export async function applyAllSuggestionsOnline() {
       }
       for (let opIndex = 0; opIndex < plan.length; opIndex++) {
         const op = plan[opIndex];
+        const opSuggestionCount = Array.isArray(op?.suggestions) ? op.suggestions.length : 1;
         const range = plannedRanges[opIndex];
         if (!range) {
           failedSuggestions.push(...op.suggestions);
+          summary.failedSuggestions += opSuggestionCount;
           applyFailedCount++;
           continue;
         }
@@ -3386,13 +3546,12 @@ export async function applyAllSuggestionsOnline() {
             op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
           range.insertText(op.replacement, insertLocation);
           anyApplied = true;
-          for (const suggestion of op.suggestions) {
-            processedSuggestions.push({ suggestion, paragraph });
-          }
+          summary.appliedSuggestions += opSuggestionCount;
           appliedCount++;
         } catch (applyErr) {
           warn("applyAllSuggestionsOnline: failed planned op", applyErr);
           failedSuggestions.push(...op.suggestions);
+          summary.failedSuggestions += opSuggestionCount;
           applyFailedCount++;
         }
       }
@@ -3407,6 +3566,7 @@ export async function applyAllSuggestionsOnline() {
     await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
       force: wordOnlineAdapter.shouldForceSpacingCleanup(),
     });
+    summary.touchedParagraphs = touchedIndexes.size;
     for (const idx of touchedIndexes) {
       anchorProvider.deleteAnchors(idx);
     }
@@ -3416,10 +3576,8 @@ export async function applyAllSuggestionsOnline() {
     }
     if (failedSuggestions.length) {
       pendingSuggestionsOnline.push(...failedSuggestions);
-      persistPendingSuggestionsOnline();
-    } else {
-      persistPendingSuggestionsOnline();
     }
+    persistPendingSuggestionsOnline();
     if (pendingSuggestionsOnline.length) {
       log("applyAll final pending by confidence reason", {
         totalPending: pendingSuggestionsOnline.length,
@@ -3433,28 +3591,63 @@ export async function applyAllSuggestionsOnline() {
     }
     await context.sync();
   });
+  if (summary.appliedSuggestions > 0 && summary.failedSuggestions === 0) {
+    return finalize("applied");
+  }
+  if (summary.appliedSuggestions > 0 || summary.failedSuggestions > 0) {
+    return finalize("partial", summary.failedSuggestions > 0 ? "some-operations-failed" : null);
+  }
+  return finalize("noop", "no-effective-operations");
 }
 
 export async function rejectAllSuggestionsOnline() {
+  const startedAt = tnow();
+  const summary = {
+    status: "noop",
+    reason: null,
+    restored: 0,
+    pendingBefore: 0,
+    clearedMarkers: 0,
+    failedClear: 0,
+    pendingAfter: 0,
+    durationMs: 0,
+  };
+  const finalize = (status, reason = null) => {
+    summary.status = status;
+    summary.reason = reason;
+    summary.pendingAfter = pendingSuggestionsOnline.length;
+    summary.durationMs = Math.round(tnow() - startedAt);
+    return summary;
+  };
+
   const scanCompleted = await waitForOnlineScanCompletion();
   if (!scanCompleted) {
     queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.");
     flushScanNotifications();
-    return;
+    return finalize("deferred", "scan-in-progress");
   }
   if (!pendingSuggestionsOnline.length) {
     const restored = restorePendingSuggestionsOnline();
+    summary.restored = restored;
     if (restored > 0) {
       log(`rejectAllSuggestionsOnline: restored ${restored} pending suggestions from storage`);
     }
   }
+  summary.pendingBefore = pendingSuggestionsOnline.length;
+  if (!pendingSuggestionsOnline.length) {
+    return finalize("noop", "no-pending-suggestions");
+  }
   await Word.run(async (context) => {
-    const paras = context.document.body.paragraphs;
-    paras.load("items/text");
-    await context.sync();
-    await wordOnlineAdapter.clearHighlights(context, null, paras);
+    const clearResult = await wordOnlineAdapter.clearHighlights(context, null, null);
+    summary.clearedMarkers =
+      (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
+    summary.failedClear = clearResult?.failedCount || 0;
     await context.sync();
   });
+  if (summary.failedClear > 0) {
+    return finalize(summary.clearedMarkers > 0 ? "partial" : "noop", "some-marker-clear-failures");
+  }
+  return finalize(summary.clearedMarkers > 0 ? "cleared" : "noop");
 }
 /** ─────────────────────────────────────────────────────────
  *  MAIN: Preveri vejice – celoten dokument, po odstavkih

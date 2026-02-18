@@ -73,8 +73,9 @@
                     <bt:Image size="32" resid="GroupIcon.32x32"/>
                     <bt:Image size="80" resid="GroupIcon.80x80"/>
                   </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>checkDocumentText</FunctionName>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>VejiceTaskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
 
@@ -94,15 +95,16 @@
 
       <bt:Urls>
         <bt:Url id="Commands.Url" DefaultValue="https://localhost:4001/commands.html?v=20260207a"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:4001/taskpane.html?v=20260207a"/>
       </bt:Urls>
 
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
-        <bt:String id="CheckVejice.Label"   DefaultValue="Preveri vejice"/>
+        <bt:String id="CheckVejice.Label"   DefaultValue="Vejice"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
-        <bt:String id="CheckVejice.Tooltip" DefaultValue="Preverite rabo vejic v dokumentu."/>
+        <bt:String id="CheckVejice.Tooltip" DefaultValue="Odpri podokno Vejice."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
