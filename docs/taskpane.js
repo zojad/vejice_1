@@ -15008,7 +15008,7 @@ function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present,
 function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
 function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
 function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
-/* global document, Office, Word, console */
+/* global document, Office, Word, console, window, URLSearchParams */
 
 
 
@@ -15028,27 +15028,33 @@ var errL = function errL() {
 };
 var busy = false;
 var online = false;
-var currentAction = null;
+var resolveManifestMode = function resolveManifestMode() {
+  if (typeof window === "undefined" || typeof URLSearchParams === "undefined") return null;
+  try {
+    var params = new URLSearchParams(window.location.search || "");
+    var mode = (params.get("mode") || "").trim().toLowerCase();
+    if (mode === "web") return "web";
+    if (mode === "desktop") return "desktop";
+  } catch (err) {
+    errL("Failed to resolve taskpane mode from query", err);
+  }
+  return null;
+};
 var setStatus = function setStatus(message) {
   var statusLine = document.getElementById("status-line");
   if (statusLine) statusLine.textContent = message;
 };
 var syncActionButtons = function syncActionButtons() {
   var checkBtn = document.getElementById("btn-check");
-  var cancelBtn = document.getElementById("btn-cancel");
   var acceptBtn = document.getElementById("btn-accept");
   var rejectBtn = document.getElementById("btn-reject");
   var checkInProgress = (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.isDocumentCheckInProgress)();
-  var allowCancel = online && (currentAction === "check" || !busy && checkInProgress);
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
-  if (cancelBtn) cancelBtn.disabled = !allowCancel;
   if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress;
   if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress;
 };
 var setBusy = function setBusy(nextBusy) {
-  var action = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : null;
   busy = Boolean(nextBusy);
-  currentAction = busy ? action : null;
   syncActionButtons();
 };
 var refreshPendingStatus = function refreshPendingStatus() {
@@ -15069,7 +15075,7 @@ var runCheck = /*#__PURE__*/function () {
           setStatus("Preverjanje ze poteka.");
           return _context.a(2);
         case 1:
-          setBusy(true, "check");
+          setBusy(true);
           setStatus("Preverjam dokument...");
           _context.p = 2;
           _context.n = 3;
@@ -15090,7 +15096,7 @@ var runCheck = /*#__PURE__*/function () {
           setStatus("Napaka pri preverjanju.");
         case 5:
           _context.p = 5;
-          setBusy(false, null);
+          setBusy(false);
           syncActionButtons();
           return _context.f(5);
         case 6:
@@ -15121,7 +15127,7 @@ var runAccept = /*#__PURE__*/function () {
           setStatus("Pocakajte, da se preverjanje konca.");
           return _context2.a(2);
         case 2:
-          setBusy(true, "apply");
+          setBusy(true);
           setStatus("Sprejemam predloge...");
           _context2.p = 3;
           _context2.n = 4;
@@ -15141,7 +15147,7 @@ var runAccept = /*#__PURE__*/function () {
           setStatus("Napaka pri sprejemanju.");
         case 6:
           _context2.p = 6;
-          setBusy(false, null);
+          setBusy(false);
           syncActionButtons();
           return _context2.f(6);
         case 7:
@@ -15172,7 +15178,7 @@ var runReject = /*#__PURE__*/function () {
           setStatus("Pocakajte, da se preverjanje konca.");
           return _context3.a(2);
         case 2:
-          setBusy(true, "reject");
+          setBusy(true);
           setStatus("Zavracam predloge...");
           _context3.p = 3;
           _context3.n = 4;
@@ -15192,7 +15198,7 @@ var runReject = /*#__PURE__*/function () {
           setStatus("Napaka pri zavracanju.");
         case 6:
           _context3.p = 6;
-          setBusy(false, null);
+          setBusy(false);
           syncActionButtons();
           return _context3.f(6);
         case 7:
@@ -15204,34 +15210,23 @@ var runReject = /*#__PURE__*/function () {
     return _ref3.apply(this, arguments);
   };
 }();
-var runCancel = function runCancel() {
-  if (!online) return;
-  var cancelled = (0,_logic_preveriVejice_js__WEBPACK_IMPORTED_MODULE_0__.cancelDocumentCheck)();
-  if (cancelled) {
-    setStatus("Prekinjam pregled...");
-  } else {
-    setStatus("Ni aktivnega pregleda za prekinitev.");
-  }
-  syncActionButtons();
-};
 Office.onReady(function (info) {
   if (info.host !== Office.HostType.Word) return;
   var sideload = document.getElementById("sideload-msg");
   var appBody = document.getElementById("app-body");
   if (sideload) sideload.style.display = "none";
   if (appBody) appBody.style.display = "flex";
-  online = (0,_utils_host_js__WEBPACK_IMPORTED_MODULE_1__.isWordOnline)();
+  var mode = resolveManifestMode();
+  online = mode ? mode === "web" : (0,_utils_host_js__WEBPACK_IMPORTED_MODULE_1__.isWordOnline)();
   var hostLine = document.getElementById("host-line");
   if (hostLine) {
     hostLine.textContent = online ? "Word Online" : "Word Desktop";
   }
   var acceptBtn = document.getElementById("btn-accept");
-  var cancelBtn = document.getElementById("btn-cancel");
   var rejectBtn = document.getElementById("btn-reject");
   var desktopNote = document.getElementById("desktop-note");
   if (!online) {
     if (acceptBtn) acceptBtn.hidden = true;
-    if (cancelBtn) cancelBtn.hidden = true;
     if (rejectBtn) rejectBtn.hidden = true;
     if (desktopNote) desktopNote.hidden = false;
   }
@@ -15239,16 +15234,13 @@ Office.onReady(function (info) {
   if (checkBtn) checkBtn.addEventListener("click", function () {
     return void runCheck();
   });
-  if (cancelBtn) cancelBtn.addEventListener("click", function () {
-    return runCancel();
-  });
   if (acceptBtn) acceptBtn.addEventListener("click", function () {
     return void runAccept();
   });
   if (rejectBtn) rejectBtn.addEventListener("click", function () {
     return void runReject();
   });
-  setBusy(false, null);
+  setBusy(false);
   syncActionButtons();
   setInterval(syncActionButtons, 500);
   refreshPendingStatus();

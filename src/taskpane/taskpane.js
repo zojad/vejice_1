@@ -1,11 +1,10 @@
-/* global document, Office, Word, console */
+/* global document, Office, Word, console, window, URLSearchParams */
 
 import {
   checkDocumentText,
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
   isDocumentCheckInProgress,
-  cancelDocumentCheck,
   getPendingSuggestionsOnline,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
@@ -15,7 +14,19 @@ const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
 
 let busy = false;
 let online = false;
-let currentAction = null;
+
+const resolveManifestMode = () => {
+  if (typeof window === "undefined" || typeof URLSearchParams === "undefined") return null;
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    const mode = (params.get("mode") || "").trim().toLowerCase();
+    if (mode === "web") return "web";
+    if (mode === "desktop") return "desktop";
+  } catch (err) {
+    errL("Failed to resolve taskpane mode from query", err);
+  }
+  return null;
+};
 
 const setStatus = (message) => {
   const statusLine = document.getElementById("status-line");
@@ -24,21 +35,17 @@ const setStatus = (message) => {
 
 const syncActionButtons = () => {
   const checkBtn = document.getElementById("btn-check");
-  const cancelBtn = document.getElementById("btn-cancel");
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
   const checkInProgress = isDocumentCheckInProgress();
-  const allowCancel = online && (currentAction === "check" || (!busy && checkInProgress));
 
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
-  if (cancelBtn) cancelBtn.disabled = !allowCancel;
   if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress;
   if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress;
 };
 
-const setBusy = (nextBusy, action = null) => {
+const setBusy = (nextBusy) => {
   busy = Boolean(nextBusy);
-  currentAction = busy ? action : null;
   syncActionButtons();
 };
 
@@ -53,7 +60,7 @@ const runCheck = async () => {
     setStatus("Preverjanje ze poteka.");
     return;
   }
-  setBusy(true, "check");
+  setBusy(true);
   setStatus("Preverjam dokument...");
   try {
     const summary = await checkDocumentText();
@@ -66,7 +73,7 @@ const runCheck = async () => {
     errL("check failed", err);
     setStatus("Napaka pri preverjanju.");
   } finally {
-    setBusy(false, null);
+    setBusy(false);
     syncActionButtons();
   }
 };
@@ -77,7 +84,7 @@ const runAccept = async () => {
     setStatus("Pocakajte, da se preverjanje konca.");
     return;
   }
-  setBusy(true, "apply");
+  setBusy(true);
   setStatus("Sprejemam predloge...");
   try {
     const summary = await applyAllSuggestionsOnline();
@@ -89,7 +96,7 @@ const runAccept = async () => {
     errL("accept failed", err);
     setStatus("Napaka pri sprejemanju.");
   } finally {
-    setBusy(false, null);
+    setBusy(false);
     syncActionButtons();
   }
 };
@@ -100,7 +107,7 @@ const runReject = async () => {
     setStatus("Pocakajte, da se preverjanje konca.");
     return;
   }
-  setBusy(true, "reject");
+  setBusy(true);
   setStatus("Zavracam predloge...");
   try {
     const summary = await rejectAllSuggestionsOnline();
@@ -112,20 +119,9 @@ const runReject = async () => {
     errL("reject failed", err);
     setStatus("Napaka pri zavracanju.");
   } finally {
-    setBusy(false, null);
+    setBusy(false);
     syncActionButtons();
   }
-};
-
-const runCancel = () => {
-  if (!online) return;
-  const cancelled = cancelDocumentCheck();
-  if (cancelled) {
-    setStatus("Prekinjam pregled...");
-  } else {
-    setStatus("Ni aktivnega pregleda za prekinitev.");
-  }
-  syncActionButtons();
 };
 
 Office.onReady((info) => {
@@ -136,7 +132,8 @@ Office.onReady((info) => {
   if (sideload) sideload.style.display = "none";
   if (appBody) appBody.style.display = "flex";
 
-  online = isWordOnline();
+  const mode = resolveManifestMode();
+  online = mode ? mode === "web" : isWordOnline();
 
   const hostLine = document.getElementById("host-line");
   if (hostLine) {
@@ -144,24 +141,21 @@ Office.onReady((info) => {
   }
 
   const acceptBtn = document.getElementById("btn-accept");
-  const cancelBtn = document.getElementById("btn-cancel");
   const rejectBtn = document.getElementById("btn-reject");
   const desktopNote = document.getElementById("desktop-note");
 
   if (!online) {
     if (acceptBtn) acceptBtn.hidden = true;
-    if (cancelBtn) cancelBtn.hidden = true;
     if (rejectBtn) rejectBtn.hidden = true;
     if (desktopNote) desktopNote.hidden = false;
   }
 
   const checkBtn = document.getElementById("btn-check");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
-  if (cancelBtn) cancelBtn.addEventListener("click", () => runCancel());
   if (acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
   if (rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
 
-  setBusy(false, null);
+  setBusy(false);
   syncActionButtons();
   setInterval(syncActionButtons, 500);
   refreshPendingStatus();
