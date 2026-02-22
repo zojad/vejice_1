@@ -39,7 +39,11 @@ const API_KEY =
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
 const DEFAULT_API_MAX_ATTEMPTS = 2;
-const API_RETRY_DELAY_MS = 400;
+const DEFAULT_API_RETRY_BASE_DELAY_MS = 400;
+const DEFAULT_API_RETRY_MAX_DELAY_MS = 2500;
+const DEFAULT_API_RETRY_JITTER_MS = 250;
+const DEFAULT_API_CIRCUIT_BREAKER_THRESHOLD = 4;
+const DEFAULT_API_CIRCUIT_BREAKER_COOLDOWN_MS = 20000;
 
 const boolFromString = (value) => {
   if (typeof value === "boolean") return value;
@@ -185,12 +189,45 @@ function pickCorrectedText(fallback, payload = {}) {
   );
 }
 
-function isRetryableError(info) {
+function isTransientError(info) {
   const status = info?.status;
-  if (typeof status === "number" && status >= 500 && status < 600) return true;
+  if (typeof status === "number") {
+    if (status >= 500 && status < 600) return true;
+    if (status === 408 || status === 429) return true;
+  }
   const code = typeof info?.code === "string" ? info.code.toUpperCase() : "";
   if (!code) return false;
-  return ["ECONNABORTED", "ETIMEDOUT", "ERR_NETWORK"].includes(code);
+  return [
+    "ECONNABORTED",
+    "ETIMEDOUT",
+    "ERR_NETWORK",
+    "ECONNRESET",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "EPIPE",
+  ].includes(code);
+}
+
+function isCircuitBreakerEligibleError(info) {
+  const status = info?.status;
+  if (typeof status === "number") {
+    // Keep retry behavior for all 5xx, but only trip the global breaker on
+    // infrastructure-like failures (gateway/service unavailable/rate/timeout).
+    if (status === 408 || status === 429 || status === 502 || status === 503 || status === 504) {
+      return true;
+    }
+  }
+  const code = typeof info?.code === "string" ? info.code.toUpperCase() : "";
+  if (!code) return false;
+  return [
+    "ECONNABORTED",
+    "ETIMEDOUT",
+    "ERR_NETWORK",
+    "ECONNRESET",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "EPIPE",
+  ].includes(code);
 }
 
 function requiresApiKey(url) {
@@ -249,7 +286,81 @@ function resolveApiMaxAttempts() {
   return Math.max(1, Math.min(5, Math.round(resolved)));
 }
 
+function resolveApiNumberSetting({
+  windowKeys = [],
+  envKeys = [],
+  defaultValue,
+  min,
+  max,
+  round = false,
+}) {
+  let resolved;
+  if (typeof window !== "undefined") {
+    for (const key of windowKeys) {
+      if (!key) continue;
+      const parsed = numberFromUnknown(window[key]);
+      if (typeof parsed === "number") {
+        resolved = parsed;
+        break;
+      }
+    }
+  }
+  if (typeof resolved !== "number" && typeof process !== "undefined") {
+    for (const key of envKeys) {
+      if (!key) continue;
+      const parsed = numberFromUnknown(process.env?.[key]);
+      if (typeof parsed === "number") {
+        resolved = parsed;
+        break;
+      }
+    }
+  }
+  const base = typeof resolved === "number" ? resolved : defaultValue;
+  const normalized = round ? Math.round(base) : base;
+  return Math.max(min, Math.min(max, normalized));
+}
+
 const API_MAX_ATTEMPTS = resolveApiMaxAttempts();
+const API_RETRY_BASE_DELAY_MS = resolveApiNumberSetting({
+  windowKeys: ["__VEJICE_API_RETRY_BASE_DELAY_MS__"],
+  envKeys: ["VEJICE_API_RETRY_BASE_DELAY_MS"],
+  defaultValue: DEFAULT_API_RETRY_BASE_DELAY_MS,
+  min: 100,
+  max: 5000,
+  round: true,
+});
+const API_RETRY_MAX_DELAY_MS = resolveApiNumberSetting({
+  windowKeys: ["__VEJICE_API_RETRY_MAX_DELAY_MS__"],
+  envKeys: ["VEJICE_API_RETRY_MAX_DELAY_MS"],
+  defaultValue: DEFAULT_API_RETRY_MAX_DELAY_MS,
+  min: 250,
+  max: 20000,
+  round: true,
+});
+const API_RETRY_JITTER_MS = resolveApiNumberSetting({
+  windowKeys: ["__VEJICE_API_RETRY_JITTER_MS__"],
+  envKeys: ["VEJICE_API_RETRY_JITTER_MS"],
+  defaultValue: DEFAULT_API_RETRY_JITTER_MS,
+  min: 0,
+  max: 5000,
+  round: true,
+});
+const API_CIRCUIT_BREAKER_THRESHOLD = resolveApiNumberSetting({
+  windowKeys: ["__VEJICE_API_CIRCUIT_BREAKER_THRESHOLD__"],
+  envKeys: ["VEJICE_API_CIRCUIT_BREAKER_THRESHOLD"],
+  defaultValue: DEFAULT_API_CIRCUIT_BREAKER_THRESHOLD,
+  min: 2,
+  max: 20,
+  round: true,
+});
+const API_CIRCUIT_BREAKER_COOLDOWN_MS = resolveApiNumberSetting({
+  windowKeys: ["__VEJICE_API_CIRCUIT_BREAKER_COOLDOWN_MS__"],
+  envKeys: ["VEJICE_API_CIRCUIT_BREAKER_COOLDOWN_MS"],
+  defaultValue: DEFAULT_API_CIRCUIT_BREAKER_COOLDOWN_MS,
+  min: 1000,
+  max: 120000,
+  round: true,
+});
 const ENABLE_NORMALIZED_TRANSPORT_RETRY = resolveFeatureFlag({
   windowKeys: [
     "__VEJICE_ENABLE_NORMALIZED_TRANSPORT_RETRY__",
@@ -263,6 +374,50 @@ const ENABLE_OG_COMPAT_RETRY = resolveFeatureFlag({
   envKey: "VEJICE_ENABLE_OG_COMPAT_RETRY",
   defaultValue: false,
 });
+
+const apiCircuitBreakerState = {
+  transientFailureCount: 0,
+  openedUntilTs: 0,
+};
+
+function nowTimestampMs() {
+  return Date.now();
+}
+
+function getCircuitRetryAfterMs(ts = nowTimestampMs()) {
+  return Math.max(0, (apiCircuitBreakerState.openedUntilTs ?? 0) - ts);
+}
+
+function isApiCircuitOpen(ts = nowTimestampMs()) {
+  return getCircuitRetryAfterMs(ts) > 0;
+}
+
+function resetApiCircuitBreakerOnSuccess() {
+  apiCircuitBreakerState.transientFailureCount = 0;
+  apiCircuitBreakerState.openedUntilTs = 0;
+}
+
+function registerApiTransientFailure(info) {
+  apiCircuitBreakerState.transientFailureCount += 1;
+  if (apiCircuitBreakerState.transientFailureCount < API_CIRCUIT_BREAKER_THRESHOLD) return;
+  const ts = nowTimestampMs();
+  apiCircuitBreakerState.openedUntilTs = ts + API_CIRCUIT_BREAKER_COOLDOWN_MS;
+  log("Circuit breaker opened", {
+    cooldownMs: API_CIRCUIT_BREAKER_COOLDOWN_MS,
+    failureCount: apiCircuitBreakerState.transientFailureCount,
+    status: info?.status,
+    code: info?.code,
+  });
+}
+
+function calculateRetryDelayMs(attempt) {
+  const safeAttempt = Math.max(1, attempt);
+  const exponential = API_RETRY_BASE_DELAY_MS * Math.pow(2, safeAttempt - 1);
+  const capped = Math.min(API_RETRY_MAX_DELAY_MS, exponential);
+  const jitter =
+    API_RETRY_JITTER_MS > 0 ? Math.floor(Math.random() * (API_RETRY_JITTER_MS + 1)) : 0;
+  return capped + jitter;
+}
 
 const TRANSPORT_SPACE_LIKE_CHARS = new Set([
   "\u00A0",
@@ -489,6 +644,15 @@ async function requestPopravek(poved) {
     config.headers["X-API-KEY"] = API_KEY;
   }
 
+  if (isApiCircuitOpen()) {
+    const retryAfterMs = getCircuitRetryAfterMs();
+    throw new VejiceApiError("Vejice API temporarily unavailable (circuit open)", {
+      circuitOpen: true,
+      retryAfterMs,
+      failureCount: apiCircuitBreakerState.transientFailureCount,
+    });
+  }
+
   const attempts = Math.max(1, API_MAX_ATTEMPTS);
   let protectedRetryUsed = false;
   let ogCompatRetryUsed = false;
@@ -559,6 +723,7 @@ async function requestPopravek(poved) {
         attempt
       );
 
+      resetApiCircuitBreakerOnSuccess();
       return { correctedText, raw };
     } catch (err) {
       const t1 = performance?.now?.() ?? Date.now();
@@ -590,6 +755,7 @@ async function requestPopravek(poved) {
               "| changed:",
               correctedText !== poved
             );
+            resetApiCircuitBreakerOnSuccess();
             return { correctedText, raw };
           }
         } catch (protectedErr) {
@@ -622,6 +788,7 @@ async function requestPopravek(poved) {
               mode: compat.mode,
               changed: correctedText !== poved,
             });
+            resetApiCircuitBreakerOnSuccess();
             return { correctedText, raw };
           } catch (compatErr) {
             const compatInfo = describeAxiosError(compatErr);
@@ -674,6 +841,7 @@ async function requestPopravek(poved) {
               changed: restored.text !== poved,
               restoredChars: restored.restoredChars,
             });
+            resetApiCircuitBreakerOnSuccess();
             return { correctedText: restored.text, raw };
           }
         } catch (normalizedErr) {
@@ -681,10 +849,23 @@ async function requestPopravek(poved) {
           log("ERROR (normalized transport)", { ...normalizedInfo, attempt });
         }
       }
-      const retryable = attempt < attempts && isRetryableError(info);
+      const transientError = isTransientError(info);
+      const breakerEligibleError = isCircuitBreakerEligibleError(info);
+      if (breakerEligibleError) {
+        registerApiTransientFailure(info);
+      } else {
+        // Avoid run-wide starvation: repeated content-specific 500 responses
+        // should not open the global breaker and block remaining paragraphs.
+        if (transientError) {
+          apiCircuitBreakerState.transientFailureCount = 0;
+        } else {
+          resetApiCircuitBreakerOnSuccess();
+        }
+      }
+      const retryable = attempt < attempts && transientError && !isApiCircuitOpen();
       log("ERROR", `${durationMs} ms`, { ...info, attempt, retryable });
       if (retryable) {
-        const delay = API_RETRY_DELAY_MS * attempt;
+        const delay = calculateRetryDelayMs(attempt);
         log("Retrying Vejice API request in", delay, "ms");
         await delayMs(delay);
         continue;
@@ -693,6 +874,8 @@ async function requestPopravek(poved) {
         durationMs,
         info,
         attempt,
+        circuitOpen: isApiCircuitOpen(),
+        retryAfterMs: getCircuitRetryAfterMs(),
         cause: err,
       });
     }

@@ -8,6 +8,7 @@ import {
   isDocumentCheckInProgress,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
+import { publishTaskpaneNotifications, shouldUseToastFallback } from "../utils/notifications.js";
 
 const envIsProd = () =>
   (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
@@ -31,6 +32,11 @@ const done = (event, tag) => {
 let cmdToastDialog = null;
 const showCommandToast = (message) => {
   if (!message) return;
+  publishTaskpaneNotifications([message], {
+    source: isWordOnline() ? "online-command" : "desktop-command",
+    level: "info",
+  });
+  if (!shouldUseToastFallback()) return;
   if (typeof Office === "undefined" || !Office.context?.ui?.displayDialogAsync) return;
   const origin =
     (typeof window !== "undefined" && window.location && window.location.origin) || null;
@@ -67,6 +73,8 @@ const showCommandToast = (message) => {
 };
 let isCheckRunning = false;
 let isCommandBusy = false;
+const CHECK_CLICK_DEBOUNCE_MS = 800;
+let lastCheckClickAt = 0;
 let ribbonUpdatesSupported = true;
 let ribbonSupportProbeDone = false;
 let ribbonUnavailableLogged = false;
@@ -212,10 +220,17 @@ Office.onReady(() => {
 // —————————————————————————————————————————————
 window.checkDocumentText = async (event) => {
   const t0 = tnow();
+  const now = Date.now();
   log("CLICK: Preveri vejice (checkDocumentText)");
-  if (isCheckRunning) {
+  if (now - lastCheckClickAt < CHECK_CLICK_DEBOUNCE_MS) {
+    log("checkDocumentText ignored: debounced");
+    done(event, "checkDocumentText");
+    log("event.completed(): checkDocumentText");
+    return;
+  }
+  lastCheckClickAt = now;
+  if (isCheckRunning || isDocumentCheckInProgress()) {
     log("checkDocumentText ignored: already running");
-    showCommandToast("Preverjanje ze poteka.");
     done(event, "checkDocumentText");
     log("event.completed(): checkDocumentText");
     return;
@@ -224,7 +239,10 @@ window.checkDocumentText = async (event) => {
   isCommandBusy = true;
   await syncRibbonButtonState();
   try {
-    await runCheckVejice();
+    const summary = await runCheckVejice();
+    if (summary?.status === "deferred") {
+      log("checkDocumentText deferred:", summary?.reason || "unknown");
+    }
     log("DONE: checkDocumentText |", Math.round(tnow() - t0), "ms");
   } catch (err) {
     errL("checkDocumentText failed:", err);
@@ -270,11 +288,21 @@ window.acceptAllChanges = async (event) => {
       }
       await Word.run(async (context) => {
         const revisions = context.document.revisions;
+        if (typeof revisions.getFirstOrNullObject === "function") {
+          const firstRevision = revisions.getFirstOrNullObject();
+          firstRevision.load("isNullObject");
+          await context.sync();
+          if (firstRevision.isNullObject) {
+            log("Revisions to accept: 0");
+            return;
+          }
+        }
         revisions.load("items");
         await context.sync();
 
         const count = revisions.items.length;
         log("Revisions to accept:", count);
+        if (!count) return;
 
         revisions.items.forEach((rev) => rev.accept());
         await context.sync();
@@ -329,11 +357,21 @@ window.rejectAllChanges = async (event) => {
       }
       await Word.run(async (context) => {
         const revisions = context.document.revisions;
+        if (typeof revisions.getFirstOrNullObject === "function") {
+          const firstRevision = revisions.getFirstOrNullObject();
+          firstRevision.load("isNullObject");
+          await context.sync();
+          if (firstRevision.isNullObject) {
+            log("Revisions to reject: 0");
+            return;
+          }
+        }
         revisions.load("items");
         await context.sync();
 
         const count = revisions.items.length;
         log("Revisions to reject:", count);
+        if (!count) return;
 
         revisions.items.forEach((rev) => rev.reject());
         await context.sync();

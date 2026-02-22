@@ -372,6 +372,7 @@ export class CommaSuggestionEngine {
     });
 
     const suggestions = [];
+    const suggestionDedupKeys = new Set();
     const debugOpFlow = debugEnabled ? [] : null;
 
     for (const entry of chunkDetails) {
@@ -448,8 +449,23 @@ export class CommaSuggestionEngine {
           correctedParagraph,
         });
         if (suggestion) {
+          const dedupKey = buildSuggestionDedupKey(suggestion);
+          if (dedupKey && suggestionDedupKeys.has(dedupKey)) {
+            if (opFlow) {
+              opFlow.droppedOps.push({
+                reason: "duplicate_suggestion",
+                op: adjustedOp,
+                suggestionId: suggestion.id,
+                dedupKey,
+              });
+            }
+            continue;
+          }
+          if (dedupKey) {
+            suggestionDedupKeys.add(dedupKey);
+          }
           suggestions.push(suggestion);
-          if (opFlow) opFlow.keptOps.push({ op: adjustedOp, suggestionId: suggestion.id });
+          if (opFlow) opFlow.keptOps.push({ op: adjustedOp, suggestionId: suggestion.id, dedupKey });
         }
       }
       if (opFlow && debugOpFlow) {
@@ -567,6 +583,32 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
       correctedText,
     },
   });
+}
+
+function buildSuggestionDedupKey(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") return null;
+  const paragraphIndex = Number.isFinite(suggestion.paragraphIndex)
+    ? suggestion.paragraphIndex
+    : "p";
+  const kind = typeof suggestion.kind === "string" ? suggestion.kind : "k";
+  const charStart = Number.isFinite(suggestion?.charHint?.start) ? suggestion.charHint.start : null;
+  const charEnd = Number.isFinite(suggestion?.charHint?.end) ? suggestion.charHint.end : null;
+  const op = suggestion?.meta?.op || {};
+  const opOriginalPos = Number.isFinite(op.originalPos) ? op.originalPos : null;
+  const opCorrectedPos = Number.isFinite(op.correctedPos) ? op.correctedPos : null;
+  const opPos = Number.isFinite(op.pos) ? op.pos : null;
+  const id = typeof suggestion.id === "string" ? suggestion.id : "";
+
+  return [
+    paragraphIndex,
+    kind,
+    charStart ?? "na",
+    charEnd ?? "na",
+    opOriginalPos ?? "na",
+    opCorrectedPos ?? "na",
+    opPos ?? "na",
+    id || "noid",
+  ].join("|");
 }
 
 function computeSuggestionConfidence({ kind, op, metadata }) {

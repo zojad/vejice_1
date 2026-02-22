@@ -8,12 +8,23 @@ import {
   getPendingSuggestionsOnline,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
+import {
+  readTaskpaneNotifications,
+  clearTaskpaneNotifications,
+  TASKPANE_NOTIFICATION_EVENT_NAME,
+  TASKPANE_NOTIFICATION_STORAGE_KEY,
+} from "../utils/notifications.js";
 
 const log = (...args) => console.log("[Vejice Taskpane]", ...args);
 const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
 
 let busy = false;
 let online = false;
+let checkRunInFlight = false;
+let lastCheckClickAt = 0;
+const CHECK_CLICK_DEBOUNCE_MS = 800;
+const MAX_VISIBLE_NOTIFICATIONS = 30;
+let lastNotificationSignature = "";
 
 const resolveManifestMode = () => {
   if (typeof window === "undefined" || typeof URLSearchParams === "undefined") return null;
@@ -31,6 +42,47 @@ const resolveManifestMode = () => {
 const setStatus = (message) => {
   const statusLine = document.getElementById("status-line");
   if (statusLine) statusLine.textContent = message;
+};
+
+const buildNotificationSignature = (items) => {
+  if (!Array.isArray(items) || !items.length) return "empty";
+  return items.map((item) => `${item.id}:${item.timestamp}`).join("|");
+};
+
+const renderNotifications = ({ force = false } = {}) => {
+  const listEl = document.getElementById("notification-list");
+  const emptyEl = document.getElementById("notification-empty");
+  const clearBtn = document.getElementById("btn-clear-notifications");
+  if (!listEl || !emptyEl) return;
+
+  const allItems = readTaskpaneNotifications();
+  const visibleItems = allItems.slice(-MAX_VISIBLE_NOTIFICATIONS).reverse();
+  const signature = buildNotificationSignature(visibleItems);
+  if (!force && signature === lastNotificationSignature) return;
+  lastNotificationSignature = signature;
+
+  listEl.innerHTML = "";
+  if (!visibleItems.length) {
+    emptyEl.hidden = false;
+    if (clearBtn) clearBtn.disabled = true;
+    return;
+  }
+  emptyEl.hidden = true;
+  if (clearBtn) clearBtn.disabled = false;
+
+  for (const item of visibleItems) {
+    const li = document.createElement("li");
+    const level = typeof item?.level === "string" ? item.level.toLowerCase() : "info";
+    const normalizedLevel = level === "error" || level === "warn" ? level : "info";
+    li.className = `notification-item notification-item-${normalizedLevel}`;
+    const when = Number.isFinite(item?.timestamp)
+      ? new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "";
+    const source = typeof item?.source === "string" ? item.source : "system";
+    li.textContent = `${item?.message || ""}`;
+    li.title = [when, source].filter(Boolean).join(" | ");
+    listEl.appendChild(li);
+  }
 };
 
 const syncActionButtons = () => {
@@ -56,23 +108,43 @@ const refreshPendingStatus = () => {
 };
 
 const runCheck = async () => {
-  if (busy || isDocumentCheckInProgress()) {
-    setStatus("Preverjanje ze poteka.");
+  const now = Date.now();
+  if (now - lastCheckClickAt < CHECK_CLICK_DEBOUNCE_MS) {
     return;
   }
+  if (checkRunInFlight || busy || isDocumentCheckInProgress()) {
+    setStatus("Preverjanje \u017ee poteka.");
+    return;
+  }
+  lastCheckClickAt = now;
+  checkRunInFlight = true;
   setBusy(true);
   setStatus("Preverjam dokument...");
   try {
     const summary = await checkDocumentText();
     if (summary?.status === "deferred") {
-      setStatus("Počakajte, da se trenutno opravilo zaključi.");
-    } else {
+      setStatus("Po\u010dakajte, da se trenutno opravilo zaklju\u010di.");
+    } else if (online) {
       refreshPendingStatus();
+    } else if (summary?.status === "blocked") {
+      setStatus("Preverjanje ustavljeno. Poglejte obvestila.");
+    } else if (summary?.status === "error") {
+      setStatus("Napaka pri preverjanju.");
+    } else {
+      const inserted = Number(summary?.inserted ?? 0);
+      const deleted = Number(summary?.deleted ?? 0);
+      const totalFixed = inserted + deleted;
+      if (totalFixed > 0) {
+        setStatus(`Kon\u010dano. Popravki: ${totalFixed} (dodane: ${inserted}, odstranjene: ${deleted}).`);
+      } else {
+        setStatus("Kon\u010dano.");
+      }
     }
   } catch (err) {
     errL("check failed", err);
     setStatus("Napaka pri preverjanju.");
   } finally {
+    checkRunInFlight = false;
     setBusy(false);
     syncActionButtons();
   }
@@ -81,7 +153,7 @@ const runCheck = async () => {
 const runAccept = async () => {
   if (!online) return;
   if (busy || isDocumentCheckInProgress()) {
-    setStatus("Pocakajte, da se preverjanje konca.");
+    setStatus("Po\u010dakajte, da se preverjanje kon\u010da.");
     return;
   }
   setBusy(true);
@@ -104,11 +176,11 @@ const runAccept = async () => {
 const runReject = async () => {
   if (!online) return;
   if (busy || isDocumentCheckInProgress()) {
-    setStatus("Pocakajte, da se preverjanje konca.");
+    setStatus("Po\u010dakajte, da se preverjanje kon\u010da.");
     return;
   }
   setBusy(true);
-  setStatus("Zavracam predloge...");
+  setStatus("Zavra\u010dam predloge...");
   try {
     const summary = await rejectAllSuggestionsOnline();
     const rejected = Number(summary?.clearedMarkers ?? 0);
@@ -151,12 +223,31 @@ Office.onReady((info) => {
   }
 
   const checkBtn = document.getElementById("btn-check");
+  const clearNotificationsBtn = document.getElementById("btn-clear-notifications");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
   if (acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
   if (rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
+  if (clearNotificationsBtn) {
+    clearNotificationsBtn.addEventListener("click", () => {
+      clearTaskpaneNotifications();
+      renderNotifications({ force: true });
+    });
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (evt) => {
+      if (!evt || evt.key !== TASKPANE_NOTIFICATION_STORAGE_KEY) return;
+      renderNotifications({ force: true });
+    });
+    window.addEventListener(TASKPANE_NOTIFICATION_EVENT_NAME, () => {
+      renderNotifications({ force: true });
+    });
+  }
 
   setBusy(false);
   syncActionButtons();
   setInterval(syncActionButtons, 500);
+  setInterval(() => renderNotifications(), 1000);
+  renderNotifications({ force: true });
   refreshPendingStatus();
 });

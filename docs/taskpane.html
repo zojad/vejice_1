@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Vejice</title>
+    <title>CJVT Vejice</title>
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="https://res-1.cdn.office.net/files/fabric-cdn-prod_20230815.002/office-ui-fabric-core/11.1.0/css/fabric.min.css"/>
     <link href="taskpane.css" rel="stylesheet" type="text/css" />
@@ -17,7 +17,7 @@
     </section>
     <main id="app-body" class="taskpane-root" style="display: none;">
         <header class="taskpane-header">
-            <h1 class="taskpane-title">Vejice</h1>
+            <h1 class="taskpane-title">CJVT Vejice</h1>
             <p id="host-line" class="taskpane-subtitle"></p>
         </header>
 
@@ -28,8 +28,17 @@
         </section>
 
         <p id="desktop-note" class="taskpane-note" hidden>
-            V namiznem Wordu spremembe urejate prek Sledi spremembam.
+            V namiznem Wordu spremembe urejate s Sledi spremembam.
         </p>
+
+        <section class="taskpane-notifications">
+            <div class="taskpane-notifications-header">
+                <h2 class="taskpane-notifications-title">Obvestila</h2>
+                <button id="btn-clear-notifications" class="task-btn task-btn-ghost" type="button">Počisti</button>
+            </div>
+            <p id="notification-empty" class="taskpane-note">Ni obvestil.</p>
+            <ul id="notification-list" class="notification-list" aria-live="polite"></ul>
+        </section>
 
         <section class="taskpane-status">
             <p id="status-line" class="status-text">Pripravljeno.</p>
