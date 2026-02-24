@@ -56,10 +56,36 @@ const boolFromString = (value) => {
   return undefined;
 };
 
-const delayMs = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
+const delayMs = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new Error("Request aborted"));
+      return;
+    }
+    let timerId = null;
+    const onAbort = () => {
+      if (timerId != null) {
+        clearTimeout(timerId);
+      }
+      reject(signal.reason || new Error("Request aborted"));
+    };
+    timerId = setTimeout(() => {
+      if (typeof signal?.removeEventListener === "function") {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (typeof signal?.addEventListener === "function") {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
+
+function isAbortLikeError(err, signal) {
+  if (signal?.aborted) return true;
+  const code = typeof err?.code === "string" ? err.code.toUpperCase() : "";
+  const name = typeof err?.name === "string" ? err.name : "";
+  return code === "ERR_CANCELED" || name === "AbortError" || name === "CanceledError";
+}
 
 const envMockFlag =
   typeof process !== "undefined" ? boolFromString(process.env?.VEJICE_USE_MOCK ?? "") : undefined;
@@ -252,6 +278,94 @@ function numberFromUnknown(value) {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function toBoundedIndex(value, maxLength) {
+  const parsed = numberFromUnknown(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  const max = Number.isFinite(maxLength) ? Math.max(0, Math.floor(maxLength)) : 0;
+  const floored = Math.floor(parsed);
+  return Math.max(0, Math.min(floored, max));
+}
+
+function firstDefinedValue(values = []) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function normalizeCommaOpKind(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[_\s-]+/g, "");
+  if (!normalized) return null;
+  if (["insert", "add", "plus", "create", "put"].includes(normalized)) return "insert";
+  if (["delete", "remove", "minus", "drop"].includes(normalized)) return "delete";
+  return null;
+}
+
+function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
+  const rawOps = Array.isArray(rawPayload?.comma_ops)
+    ? rawPayload.comma_ops
+    : Array.isArray(rawPayload?.commaOps)
+      ? rawPayload.commaOps
+      : [];
+  if (!rawOps.length) return [];
+
+  const sourceLen = typeof sourceText === "string" ? sourceText.length : 0;
+  const targetLen = typeof targetText === "string" ? targetText.length : 0;
+  const seen = new Set();
+  const commaOps = [];
+
+  for (const rawOp of rawOps) {
+    if (!rawOp || typeof rawOp !== "object") continue;
+    const kind = normalizeCommaOpKind(
+      firstDefinedValue([rawOp.kind, rawOp.type, rawOp.op, rawOp.action])
+    );
+    if (!kind) continue;
+
+    const originalCandidate = firstDefinedValue([
+      rawOp.original_pos,
+      rawOp.originalPos,
+      rawOp.source_pos,
+      rawOp.sourcePos,
+      rawOp.source_index,
+      rawOp.sourceIndex,
+      rawOp.original_index,
+      rawOp.originalIndex,
+      kind === "delete" ? rawOp.pos : undefined,
+    ]);
+    const correctedCandidate = firstDefinedValue([
+      rawOp.corrected_pos,
+      rawOp.correctedPos,
+      rawOp.target_pos,
+      rawOp.targetPos,
+      rawOp.target_index,
+      rawOp.targetIndex,
+      kind === "insert" ? rawOp.pos : undefined,
+    ]);
+
+    let originalPos = toBoundedIndex(originalCandidate, sourceLen);
+    let correctedPos = toBoundedIndex(correctedCandidate, targetLen);
+
+    if (!Number.isFinite(originalPos) && !Number.isFinite(correctedPos)) continue;
+    if (!Number.isFinite(originalPos)) originalPos = correctedPos;
+    if (!Number.isFinite(correctedPos)) correctedPos = originalPos;
+
+    const pos = kind === "delete" ? originalPos : correctedPos;
+    const identity = `${kind}:${originalPos}:${correctedPos}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+
+    commaOps.push({
+      kind,
+      pos,
+      originalPos,
+      correctedPos,
+    });
+  }
+
+  return commaOps;
 }
 
 function resolveFeatureFlag({ windowKeys = [], envKey, defaultValue }) {
@@ -615,7 +729,7 @@ function buildOgCompatPayloads(sentence) {
   ];
 }
 
-async function requestPopravek(poved) {
+async function requestPopravek(poved, options = {}) {
   if (USE_MOCK) {
     log("Mock API ->", snip(poved));
     return mockRequestPopravljenPoved(poved);
@@ -640,6 +754,10 @@ async function requestPopravek(poved) {
     timeout: 15000, // 15s
     // withCredentials: false, // keep default; not needed unless API sets cookies
   };
+  const requestSignal = options?.signal;
+  if (requestSignal) {
+    config.signal = requestSignal;
+  }
   if (API_KEY) {
     config.headers["X-API-KEY"] = API_KEY;
   }
@@ -726,6 +844,9 @@ async function requestPopravek(poved) {
       resetApiCircuitBreakerOnSuccess();
       return { correctedText, raw };
     } catch (err) {
+      if (isAbortLikeError(err, requestSignal)) {
+        throw err;
+      }
       const t1 = performance?.now?.() ?? Date.now();
       const durationMs = Math.round(t1 - t0);
       const info = describeAxiosError(err);
@@ -759,6 +880,9 @@ async function requestPopravek(poved) {
             return { correctedText, raw };
           }
         } catch (protectedErr) {
+          if (isAbortLikeError(protectedErr, requestSignal)) {
+            throw protectedErr;
+          }
           const protectedInfo = describeAxiosError(protectedErr);
           log("ERROR (dot-protected)", { ...protectedInfo, attempt });
         }
@@ -791,6 +915,9 @@ async function requestPopravek(poved) {
             resetApiCircuitBreakerOnSuccess();
             return { correctedText, raw };
           } catch (compatErr) {
+            if (isAbortLikeError(compatErr, requestSignal)) {
+              throw compatErr;
+            }
             const compatInfo = describeAxiosError(compatErr);
             log("ERROR (OG-compatible)", { ...compatInfo, attempt, mode: compat.mode });
           }
@@ -845,6 +972,9 @@ async function requestPopravek(poved) {
             return { correctedText: restored.text, raw };
           }
         } catch (normalizedErr) {
+          if (isAbortLikeError(normalizedErr, requestSignal)) {
+            throw normalizedErr;
+          }
           const normalizedInfo = describeAxiosError(normalizedErr);
           log("ERROR (normalized transport)", { ...normalizedInfo, attempt });
         }
@@ -867,7 +997,7 @@ async function requestPopravek(poved) {
       if (retryable) {
         const delay = calculateRetryDelayMs(attempt);
         log("Retrying Vejice API request in", delay, "ms");
-        await delayMs(delay);
+        await delayMs(delay, requestSignal);
         continue;
       }
       throw new VejiceApiError("Vejice API call failed", {
@@ -891,15 +1021,22 @@ export async function popraviPoved(poved) {
   return correctedText;
 }
 
-export async function popraviPovedDetailed(poved) {
-  const { correctedText, raw } = await requestPopravek(poved);
+export async function popraviPovedDetailed(poved, options = {}) {
+  const { correctedText, raw } = await requestPopravek(poved, options);
+  const sourceText = typeof raw?.source_text === "string" ? raw.source_text : poved;
+  const targetText = typeof raw?.target_text === "string" ? raw.target_text : correctedText;
+  const corrections =
+    raw?.corrections ?? raw?.apply_corrections ?? raw?.applied_corrections ?? undefined;
+  const commaOps = extractCommaOps(raw, sourceText, targetText);
   return {
     correctedText,
     raw,
     sourceTokens: Array.isArray(raw?.source_tokens) ? raw.source_tokens : [],
     targetTokens: Array.isArray(raw?.target_tokens) ? raw.target_tokens : [],
-    sourceText: typeof raw?.source_text === "string" ? raw.source_text : poved,
-    targetText: typeof raw?.target_text === "string" ? raw.target_text : correctedText,
+    sourceText,
+    targetText,
+    corrections,
+    commaOps,
   };
 }
 

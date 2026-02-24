@@ -24,10 +24,27 @@ const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
 const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 260;
+const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
+
+function isAbortLikeError(err, signal) {
+  if (signal?.aborted) return true;
+  const code = typeof err?.code === "string" ? err.code.toUpperCase() : "";
+  const name = typeof err?.name === "string" ? err.name : "";
+  return code === "ERR_CANCELED" || name === "AbortError" || name === "CanceledError";
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  throw new Error(typeof reason === "string" ? reason : "Request aborted");
+}
 
 if (typeof window !== "undefined") {
   if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
@@ -97,6 +114,7 @@ export class CommaSuggestionEngine {
     this.apiClient = apiClient;
     this.lastDebugDump = null;
     this.debugDumps = [];
+    this.apiChunkFailureCooldownUntil = new Map();
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || (() => {}),
       onSentenceTooLong: notifiers.onSentenceTooLong || (() => {}),
@@ -112,8 +130,11 @@ export class CommaSuggestionEngine {
     paragraphDocOffset,
     forceSentenceChunks = false,
     conservativeSentenceFallback = false,
+    abortSignal = null,
   }) {
+    throwIfAborted(abortSignal);
     const paragraphText = typeof originalText === "string" ? originalText : "";
+    pruneExpiredChunkFailureCooldowns(this.apiChunkFailureCooldownUntil);
     const forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
     const useSentenceChunks = forceSentenceChunks || forceSentenceByLength;
     const debugEnabled = isDeepDebugEnabled();
@@ -210,6 +231,7 @@ export class CommaSuggestionEngine {
     };
 
     const processChunk = async (chunk, depth = 0) => {
+      throwIfAborted(abortSignal);
       const meta = {
         chunk,
         correctedText: chunk.normalizedText,
@@ -228,9 +250,35 @@ export class CommaSuggestionEngine {
         return;
       }
       let detail = null;
+      const chunkRequestText = chunk.normalizedText || chunk.text || "";
+      const chunkFailureKey = buildChunkFailureKey(paragraphIndex, chunkRequestText);
+      const cooldownUntil = this.apiChunkFailureCooldownUntil.get(chunkFailureKey) || 0;
+      if (cooldownUntil > Date.now()) {
+        logSkippedChunk("apiErrorCooldown", chunk, {
+          depth,
+          cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now()),
+        });
+        apiErrors++;
+        this.notifiers.onChunkApiFailure(
+          paragraphIndex,
+          chunk.index,
+          new Error("Chunk skipped due to recent API failure cooldown")
+        );
+        meta.syntheticTokens = tokenizeForAnchoring(
+          chunk.text,
+          `p${paragraphIndex}_c${chunk.index}_syn_`
+        );
+        return;
+      }
       try {
-        detail = await this.apiClient.popraviPovedDetailed(chunk.normalizedText || chunk.text);
+        detail = await this.apiClient.popraviPovedDetailed(chunkRequestText, {
+          signal: abortSignal,
+        });
+        this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
       } catch (apiErr) {
+        if (isAbortLikeError(apiErr, abortSignal)) {
+          throw apiErr;
+        }
         const retryChunks = splitFailedChunkForRetry(chunk, depth);
         if (Array.isArray(retryChunks) && retryChunks.length > 1) {
           processedMeta.pop();
@@ -239,9 +287,14 @@ export class CommaSuggestionEngine {
           }
           return;
         }
+        this.apiChunkFailureCooldownUntil.set(
+          chunkFailureKey,
+          Date.now() + API_FAILURE_COOLDOWN_MS
+        );
         logSkippedChunk("apiError", chunk, {
           depth,
           apiError: apiErr?.message || String(apiErr || "API error"),
+          cooldownMs: API_FAILURE_COOLDOWN_MS,
         });
         apiErrors++;
         this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
@@ -252,6 +305,9 @@ export class CommaSuggestionEngine {
         return;
       }
       const correctedChunk = detail.correctedText;
+      const baseForDiff = chunk.text || chunk.normalizedText || "";
+      const apiCommaOps = normalizeApiCommaOps(detail?.commaOps, baseForDiff, correctedChunk);
+      const hasApiCommaOps = apiCommaOps.length > 0;
       if (debugEnabled && debugDump) {
         debugDump.chunks.push({
           index: chunk.index,
@@ -262,11 +318,12 @@ export class CommaSuggestionEngine {
           rawSourceText: detail?.raw?.source_text,
           rawTargetText: detail?.raw?.target_text,
           rawCorrections: detail?.corrections,
+          rawCommaOps: Array.isArray(detail?.commaOps) ? detail.commaOps : [],
           rawSourceTokensCount: Array.isArray(detail?.sourceTokens) ? detail.sourceTokens.length : 0,
           rawTargetTokensCount: Array.isArray(detail?.targetTokens) ? detail.targetTokens.length : 0,
         });
       }
-      if (!onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
+      if (!hasApiCommaOps && !onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
         logSkippedChunk("nonCommaChange", chunk, {
           depth,
           correctedSnippet: makeSnippet(correctedChunk),
@@ -287,23 +344,26 @@ export class CommaSuggestionEngine {
       meta.detail = detail;
       meta.correctedText = correctedChunk;
 
-      const baseForDiff = chunk.text || chunk.normalizedText || "";
-      // Always compute comma-only diff ops. Correction metadata can be incomplete
-      // or carry positions that become inconsistent after chunk-level transforms.
-      const diffOps = collapseDuplicateDiffOps(
-        filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
-      );
-      if (!meta.detail && !diffOps.length) return;
+      const diffOps = hasApiCommaOps
+        ? []
+        : collapseDuplicateDiffOps(
+            // Always compute comma-only diff ops. Correction metadata can be incomplete
+            // or carry positions that become inconsistent after chunk-level transforms.
+            filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
+          );
+      if (!meta.detail && !diffOps.length && !apiCommaOps.length) return;
       chunkDetails.push({
         chunk,
         metaRef: meta,
         baseForDiff,
         correctedChunk,
         diffOps,
+        apiCommaOps,
       });
     };
 
     for (const chunk of chunks) {
+      throwIfAborted(abortSignal);
       await processChunk(chunk, 0);
     }
 
@@ -317,6 +377,7 @@ export class CommaSuggestionEngine {
         paragraphDocOffset,
         forceSentenceChunks: true,
         conservativeSentenceFallback,
+        abortSignal,
       });
     }
 
@@ -382,31 +443,37 @@ export class CommaSuggestionEngine {
             corrections: entry.metaRef.remappedCorrections ?? entry.metaRef.detail.corrections,
           }
         : null;
-      let ops = [];
-      const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
-      const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
-      if (correctionsPresent) {
-        ops = collectCommaOpsFromCorrections(
-          detailRef,
-          anchorsEntry,
-          paragraphIndex,
-          correctionTracking
-        );
-      }
-      let fallbackOps = entry.diffOps || [];
-      if (fallbackOps.length) {
-        if (!correctionsPresent || ops.length) {
-          fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+      const apiOpsPresent = Array.isArray(entry.apiCommaOps) && entry.apiCommaOps.length > 0;
+      let ops = apiOpsPresent ? entry.apiCommaOps.map((op) => ({ ...op })) : [];
+      let fallbackOps = [];
+      let correctionOps = [];
+      if (!apiOpsPresent) {
+        const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
+        const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
+        if (correctionsPresent) {
+          correctionOps = collectCommaOpsFromCorrections(
+            detailRef,
+            anchorsEntry,
+            paragraphIndex,
+            correctionTracking
+          );
+          ops = correctionOps;
         }
-        if (!correctionsPresent && detailRef && !ops.length) {
-          ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
-          fallbackOps = [];
-        } else if (correctionsPresent) {
-          fallbackOps = fallbackOps.map((op) => ({
-            ...op,
-            fromCorrections: true,
-            viaDiffFallback: true,
-          }));
+        fallbackOps = entry.diffOps || [];
+        if (fallbackOps.length) {
+          if (!correctionsPresent || ops.length) {
+            fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+          }
+          if (!correctionsPresent && detailRef && !ops.length) {
+            ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
+            fallbackOps = [];
+          } else if (correctionsPresent) {
+            fallbackOps = fallbackOps.map((op) => ({
+              ...op,
+              fromCorrections: true,
+              viaDiffFallback: true,
+            }));
+          }
         }
       }
       const usingFallbackOnly = !ops.length;
@@ -415,8 +482,10 @@ export class CommaSuggestionEngine {
       const opFlow = debugEnabled
         ? {
             chunkIndex: entry.chunk.index,
-            fromCorrections: ops.map((op) => ({ ...op })),
+            fromApiCommaOps: apiOpsPresent ? ops.map((op) => ({ ...op })) : [],
+            fromCorrections: correctionOps.map((op) => ({ ...op })),
             fallbackOps: fallbackOps.map((op) => ({ ...op })),
+            usingApiCommaOps: apiOpsPresent,
             usingFallbackOnly,
             keptOps: [],
             droppedOps: [],
@@ -506,6 +575,7 @@ export class CommaSuggestionEngine {
         paragraphDocOffset,
         forceSentenceChunks: true,
         conservativeSentenceFallback,
+        abortSignal,
       });
     }
 
@@ -590,25 +660,74 @@ function buildSuggestionDedupKey(suggestion) {
   const paragraphIndex = Number.isFinite(suggestion.paragraphIndex)
     ? suggestion.paragraphIndex
     : "p";
+  const visualBounds = resolveSuggestionVisualBounds(suggestion);
+  if (Number.isFinite(visualBounds.start) && visualBounds.start >= 0) {
+    return [paragraphIndex, visualBounds.start, visualBounds.end].join("|");
+  }
   const kind = typeof suggestion.kind === "string" ? suggestion.kind : "k";
-  const charStart = Number.isFinite(suggestion?.charHint?.start) ? suggestion.charHint.start : null;
-  const charEnd = Number.isFinite(suggestion?.charHint?.end) ? suggestion.charHint.end : null;
+  const anchor = suggestion?.meta?.anchor || {};
+  const tokenId =
+    anchor?.sourceTokenAt?.tokenId ??
+    anchor?.targetTokenAt?.tokenId ??
+    anchor?.sourceTokenBefore?.tokenId ??
+    anchor?.targetTokenBefore?.tokenId ??
+    anchor?.highlightAnchorTarget?.tokenId ??
+    "na";
   const op = suggestion?.meta?.op || {};
-  const opOriginalPos = Number.isFinite(op.originalPos) ? op.originalPos : null;
-  const opCorrectedPos = Number.isFinite(op.correctedPos) ? op.correctedPos : null;
-  const opPos = Number.isFinite(op.pos) ? op.pos : null;
-  const id = typeof suggestion.id === "string" ? suggestion.id : "";
+  const opOriginalPos = Number.isFinite(op.originalPos)
+    ? op.originalPos
+    : Number.isFinite(op.pos)
+      ? op.pos
+      : "na";
+  const opCorrectedPos = Number.isFinite(op.correctedPos)
+    ? op.correctedPos
+    : Number.isFinite(op.pos)
+      ? op.pos
+      : "na";
 
   return [
     paragraphIndex,
     kind,
-    charStart ?? "na",
-    charEnd ?? "na",
-    opOriginalPos ?? "na",
-    opCorrectedPos ?? "na",
-    opPos ?? "na",
-    id || "noid",
+    "na",
+    `t${tokenId}`,
+    opOriginalPos,
+    opCorrectedPos,
   ].join("|");
+}
+
+function firstFiniteValue(values = []) {
+  for (const value of values) {
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function resolveSuggestionVisualBounds(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") {
+    return { start: null, end: null };
+  }
+  const anchor = suggestion?.meta?.anchor || {};
+  const startRaw = firstFiniteValue([
+    anchor.highlightCharStart,
+    anchor.charStart,
+    suggestion?.charHint?.start,
+    anchor.targetCharStart,
+    suggestion?.meta?.op?.originalPos,
+    suggestion?.meta?.op?.correctedPos,
+    suggestion?.meta?.op?.pos,
+  ]);
+  if (!Number.isFinite(startRaw) || startRaw < 0) {
+    return { start: null, end: null };
+  }
+  const start = Math.floor(startRaw);
+  const endRaw = firstFiniteValue([
+    anchor.highlightCharEnd,
+    anchor.charEnd,
+    suggestion?.charHint?.end,
+    anchor.targetCharEnd,
+  ]);
+  const end = Number.isFinite(endRaw) && endRaw > start ? Math.floor(endRaw) : start + 1;
+  return { start, end };
 }
 
 function computeSuggestionConfidence({ kind, op, metadata }) {
@@ -793,6 +912,30 @@ function splitChunkByLength(text = "", maxLen = API_RECHUNK_MIN_CHARS) {
     cursor = end;
   }
   return chunks;
+}
+
+function hashTextForCooldownKey(value = "") {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function buildChunkFailureKey(paragraphIndex, text = "") {
+  const safeParagraph = Number.isFinite(paragraphIndex) ? paragraphIndex : -1;
+  const safeText = typeof text === "string" ? text : "";
+  return `${safeParagraph}:${safeText.length}:${hashTextForCooldownKey(safeText)}`;
+}
+
+function pruneExpiredChunkFailureCooldowns(cooldownMap) {
+  if (!cooldownMap || typeof cooldownMap.forEach !== "function") return;
+  const now = Date.now();
+  for (const [key, until] of cooldownMap.entries()) {
+    if (!Number.isFinite(until) || until <= now) {
+      cooldownMap.delete(key);
+    }
+  }
 }
 
 function splitParagraphIntoChunks(
@@ -1518,6 +1661,54 @@ function filterCommaOps(original, corrected, ops) {
   });
 }
 
+function toBoundedIndex(value, maxLen) {
+  if (!Number.isFinite(value)) return undefined;
+  const max = Math.max(0, Number.isFinite(maxLen) ? Math.floor(maxLen) : 0);
+  const floored = Math.floor(value);
+  return Math.max(0, Math.min(floored, max));
+}
+
+function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
+  if (!Array.isArray(rawOps) || !rawOps.length) return [];
+  const sourceLen = typeof originalText === "string" ? originalText.length : 0;
+  const targetLen = typeof correctedText === "string" ? correctedText.length : 0;
+  const normalized = [];
+  const seen = new Set();
+
+  for (const raw of rawOps) {
+    if (!raw || typeof raw !== "object") continue;
+    const kind = raw.kind === "delete" || raw.kind === "insert" ? raw.kind : null;
+    if (!kind) continue;
+    let originalPos = toBoundedIndex(
+      Number.isFinite(raw.originalPos) ? raw.originalPos : kind === "delete" ? raw.pos : undefined,
+      sourceLen
+    );
+    let correctedPos = toBoundedIndex(
+      Number.isFinite(raw.correctedPos) ? raw.correctedPos : kind === "insert" ? raw.pos : undefined,
+      targetLen
+    );
+    if (!Number.isFinite(originalPos) && !Number.isFinite(correctedPos)) continue;
+    if (!Number.isFinite(originalPos)) originalPos = correctedPos;
+    if (!Number.isFinite(correctedPos)) correctedPos = originalPos;
+    const pos = kind === "delete" ? originalPos : correctedPos;
+    const identity = `${kind}:${originalPos}:${correctedPos}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    normalized.push({
+      ...raw,
+      kind,
+      pos,
+      originalPos,
+      correctedPos,
+      fromApiCommaOps: true,
+      fromCorrections: true,
+      viaDiffFallback: false,
+    });
+  }
+
+  return collapseDuplicateDiffOps(filterCommaOps(originalText, correctedText, normalized));
+}
+
 function diffCommasOnly(original, corrected) {
   const ops = [];
   let i = 0;
@@ -1858,7 +2049,7 @@ function mergePreferredCommaOps(primaryOps, secondaryOps) {
 }
 
 function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
-  if (op?.fromCorrections) return false;
+  if (op?.fromCorrections || op?.fromApiCommaOps) return false;
   const anchor = findAnchorForDiffOp(anchorsEntry, op);
   if (!anchor) return false;
   const repeatKey = anchor.repeatKey;
