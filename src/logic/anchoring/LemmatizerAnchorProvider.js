@@ -75,6 +75,7 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
       });
     this.paragraphAnchors = [];
     this.fallbackProvider = new SyntheticAnchorProvider();
+    this._didLogLemmaShapeThisRun = false;
   }
 
   supportsCharHints() {
@@ -83,6 +84,7 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
 
   reset() {
     this.paragraphAnchors.length = 0;
+    this._didLogLemmaShapeThisRun = false;
   }
 
   setAnchors(paragraphIndex, anchors) {
@@ -173,7 +175,15 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     console.timeEnd?.(timerLabel);
     const lemmaTokens = normalizeLemmaPayload(response?.data);
     logInfo("Lemma response", "| tokens:", lemmaTokens.length);
+    this.logLemmaPayloadShapeOnce(response?.data, lemmaTokens);
     return lemmaTokens;
+  }
+
+  logLemmaPayloadShapeOnce(rawPayload, normalizedTokens = []) {
+    if (this._didLogLemmaShapeThisRun) return;
+    this._didLogLemmaShapeThisRun = true;
+    const shape = summarizeLemmaPayloadShape(rawPayload, normalizedTokens);
+    logInfo("Lemma payload shape", shape);
   }
 
   applyLemmaOffsets({ collection, lemmas, documentOffset = 0 }) {
@@ -253,10 +263,97 @@ function normalizeLemmaToken(raw, index) {
   };
 }
 
+function summarizeLemmaPayloadShape(payload, normalizedTokens = []) {
+  const topType = Array.isArray(payload) ? "array" : typeof payload;
+  const topKeys =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? Object.keys(payload)
+      : [];
+  const firstTokenMeta = extractFirstTokenWithPath(payload);
+  const rawFirstToken = firstTokenMeta?.token;
+  const rawFirstTokenKeys =
+    rawFirstToken && typeof rawFirstToken === "object" ? Object.keys(rawFirstToken) : [];
+  const rawOffsetFields = collectOffsetFields(rawFirstToken);
+  const normalizedFirst = Array.isArray(normalizedTokens) ? normalizedTokens[0] : null;
+  return {
+    endpointPayloadType: topType,
+    endpointTopKeys: topKeys,
+    tokenPath: firstTokenMeta?.path || null,
+    rawTokenCountHint: firstTokenMeta?.countHint ?? null,
+    rawFirstTokenKeys,
+    rawFirstTokenOffsetFields: rawOffsetFields,
+    normalizedTokenCount: Array.isArray(normalizedTokens) ? normalizedTokens.length : 0,
+    normalizedFirstTokenOffsets:
+      normalizedFirst && typeof normalizedFirst === "object"
+        ? {
+            start: normalizedFirst.start,
+            end: normalizedFirst.end,
+          }
+        : null,
+  };
+}
+
+function extractFirstTokenWithPath(payload) {
+  if (!payload) return null;
+  if (Array.isArray(payload)) {
+    return {
+      path: "[0]",
+      token: payload[0],
+      countHint: payload.length,
+    };
+  }
+  if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.tokens)) {
+      return { path: "tokens[0]", token: payload.tokens[0], countHint: payload.tokens.length };
+    }
+    if (Array.isArray(payload.result)) {
+      return { path: "result[0]", token: payload.result[0], countHint: payload.result.length };
+    }
+    if (Array.isArray(payload.words)) {
+      return { path: "words[0]", token: payload.words[0], countHint: payload.words.length };
+    }
+    if (Array.isArray(payload.sentences)) {
+      const firstSentence = payload.sentences[0];
+      if (Array.isArray(firstSentence?.tokens)) {
+        return {
+          path: "sentences[0].tokens[0]",
+          token: firstSentence.tokens[0],
+          countHint: firstSentence.tokens.length,
+        };
+      }
+      if (Array.isArray(firstSentence)) {
+        return {
+          path: "sentences[0][0]",
+          token: firstSentence[0],
+          countHint: firstSentence.length,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function collectOffsetFields(token) {
+  if (!token || typeof token !== "object") return [];
+  const keys = Object.keys(token);
+  const matches = [];
+  for (const key of keys) {
+    if (!/start|end|char|offset|begin|finish/i.test(key)) continue;
+    matches.push({ key, value: token[key] });
+  }
+  return matches;
+}
+
 function pickNumber(candidates) {
   if (!Array.isArray(candidates)) return undefined;
   for (const candidate of candidates) {
     if (typeof candidate === "number" && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed)) return parsed;
+    }
   }
   return undefined;
 }

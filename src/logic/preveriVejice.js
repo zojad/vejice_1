@@ -1642,6 +1642,7 @@ function buildDeleteRangeCandidates(suggestion) {
   const ranges = [];
   const meta = suggestion?.meta?.anchor;
   if (!meta) return ranges;
+  const allowCharHint = !suggestion?.meta?.lowAnchorReliability;
   const addRange = (start, end, snippet) => {
     if (!Number.isFinite(start) || start < 0) return;
     const safeEnd = Number.isFinite(end) && end > start ? end : start + 1;
@@ -1656,8 +1657,10 @@ function buildDeleteRangeCandidates(suggestion) {
       meta.highlightAnchorTarget.tokenText
     );
   }
-  const charHint = suggestion?.charHint;
-  addRange(charHint?.start, charHint?.end, meta.highlightText);
+  if (allowCharHint) {
+    const charHint = suggestion?.charHint;
+    addRange(charHint?.start, charHint?.end, meta.highlightText);
+  }
   return ranges;
 }
 
@@ -1665,6 +1668,8 @@ function buildInsertRangeCandidates(suggestion) {
   const ranges = [];
   const meta = suggestion?.meta?.anchor;
   if (!meta) return ranges;
+  const allowCharHint = !suggestion?.meta?.lowAnchorReliability;
+  const op = suggestion?.meta?.op;
   const addRange = (start, end, snippet) => {
     if (!Number.isFinite(start) || start < 0) return;
     const safeEnd = Number.isFinite(end) && end > start ? end : start + 1;
@@ -1677,13 +1682,20 @@ function buildInsertRangeCandidates(suggestion) {
   addRange(meta.highlightCharStart, meta.highlightCharEnd, meta.highlightText);
   addRange(meta.targetCharStart, meta.targetCharEnd, meta.highlightText);
   addRange(meta.charStart, meta.charEnd, meta.highlightText);
-  const charHint = suggestion?.charHint;
-  addRange(charHint?.start, charHint?.end, meta.highlightText);
+  // Keep op coordinates in candidate set even when charHint is disabled for low-reliability anchors.
+  addRange(op?.originalPos, Number.isFinite(op?.originalPos) ? op.originalPos + 1 : null, meta.highlightText);
+  addRange(op?.correctedPos, Number.isFinite(op?.correctedPos) ? op.correctedPos + 1 : null, meta.highlightText);
   addAnchor(meta.highlightAnchorTarget);
   addAnchor(meta.sourceTokenAt);
   addAnchor(meta.targetTokenAt);
   addAnchor(meta.sourceTokenBefore);
+  addAnchor(meta.sourceTokenAfter);
   addAnchor(meta.targetTokenBefore);
+  addAnchor(meta.targetTokenAfter);
+  if (allowCharHint) {
+    const charHint = suggestion?.charHint;
+    addRange(charHint?.start, charHint?.end, meta.highlightText);
+  }
   return ranges;
 }
 
@@ -1986,11 +1998,28 @@ function buildSuggestionRenderDedupKey(suggestion) {
   const paragraphIndex = Number.isFinite(suggestion?.paragraphIndex)
     ? suggestion.paragraphIndex
     : -1;
+  const kind = typeof suggestion?.kind === "string" ? suggestion.kind : "unknown";
+  const opOriginalPos = Number.isFinite(suggestion?.meta?.op?.originalPos)
+    ? suggestion.meta.op.originalPos
+    : Number.isFinite(suggestion?.meta?.op?.pos)
+      ? suggestion.meta.op.pos
+      : null;
+  const opCorrectedPos = Number.isFinite(suggestion?.meta?.op?.correctedPos)
+    ? suggestion.meta.op.correctedPos
+    : Number.isFinite(suggestion?.meta?.op?.pos)
+      ? suggestion.meta.op.pos
+      : null;
+  if (Number.isFinite(opOriginalPos) || Number.isFinite(opCorrectedPos)) {
+    return `${paragraphIndex}:op:${kind}:o${
+      Number.isFinite(opOriginalPos) ? opOriginalPos : "na"
+    }:c${Number.isFinite(opCorrectedPos) ? opCorrectedPos : "na"}`;
+  }
+
   const spanKey = buildSuggestionHighlightKey(suggestion);
   if (spanKey) {
     return spanKey;
   }
-  const kind = typeof suggestion?.kind === "string" ? suggestion.kind : "unknown";
+
   const anchor = suggestion?.meta?.anchor || {};
   const tokenId =
     anchor?.sourceTokenAt?.tokenId ??
@@ -1999,21 +2028,7 @@ function buildSuggestionRenderDedupKey(suggestion) {
     anchor?.targetTokenBefore?.tokenId ??
     anchor?.highlightAnchorTarget?.tokenId ??
     "na";
-  const originalPos = Number.isFinite(suggestion?.meta?.op?.originalPos)
-    ? suggestion.meta.op.originalPos
-    : Number.isFinite(suggestion?.meta?.op?.pos)
-      ? suggestion.meta.op.pos
-      : Number.isFinite(suggestion?.charHint?.start)
-        ? suggestion.charHint.start
-        : -1;
-  const correctedPos = Number.isFinite(suggestion?.meta?.op?.correctedPos)
-    ? suggestion.meta.op.correctedPos
-    : Number.isFinite(suggestion?.meta?.op?.pos)
-      ? suggestion.meta.op.pos
-      : Number.isFinite(suggestion?.charHint?.end)
-        ? suggestion.charHint.end
-        : -1;
-  return `${paragraphIndex}:na:${kind}:t${tokenId}:o${originalPos}:c${correctedPos}`;
+  return `${paragraphIndex}:na:${kind}:t${tokenId}`;
 }
 
 function dedupeSuggestionsForRender(suggestions, paragraphIndex) {
@@ -2410,9 +2425,14 @@ async function highlightDeleteSuggestion(context, paragraph, suggestion) {
       meta.charEnd ??
       (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
     const highlightText = meta.highlightText ?? suggestion.meta?.highlightText ?? ",";
-    let targetRange = null;
+    let targetRange = await findCommaRangeByOrdinal(
+      context,
+      paragraph,
+      paragraphText,
+      suggestion.meta?.op
+    );
 
-    if (Number.isFinite(charStart) && charStart >= 0) {
+    if (!targetRange && Number.isFinite(charStart) && charStart >= 0) {
       targetRange = await getRangeForAnchorSpan(
         context,
         paragraph,
@@ -2424,10 +2444,7 @@ async function highlightDeleteSuggestion(context, paragraph, suggestion) {
       );
     }
 
-    if (!targetRange) {
-      targetRange = await findCommaRangeByOrdinal(context, paragraph, paragraphText, suggestion.meta?.op);
-      if (!targetRange) return false;
-    }
+    if (!targetRange) return false;
 
     const applied = await applySuggestionMarkerFormat(context, targetRange, suggestion);
     if (!applied) return false;
@@ -2788,6 +2805,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.meta?.anchor;
   if (!meta) return false;
   const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
+  const lowReliability = Boolean(suggestion?.meta?.lowAnchorReliability);
   const insertCommaAtChar = async (charIndex, traceLabel) => {
     paragraph.load("text");
     await context.sync();
@@ -3079,6 +3097,32 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     }
     return false;
   };
+
+  const tryInsertUsingOpCharHint = async (traceLabel) => {
+    const op = suggestion?.meta?.op;
+    const hintedPositions = [
+      op?.originalPos,
+      meta?.charStart,
+      suggestion?.charHint?.start,
+      meta?.targetCharStart,
+    ];
+    const sourcePos = hintedPositions.find((pos) => Number.isFinite(pos) && pos >= 0);
+    if (!Number.isFinite(sourcePos) || sourcePos < 0) return false;
+
+    paragraph.load("text");
+    await context.sync();
+    const liveText = paragraph.text || "";
+    const sourceText = entry?.originalText ?? liveText;
+    const mappedPos = mapIndexAcrossCanonical(sourceText, liveText, sourcePos);
+    if (!Number.isFinite(mappedPos) || mappedPos < 0) return false;
+    return await insertCommaAtChar(mappedPos, traceLabel);
+  };
+
+  if (lowReliability) {
+    if (await tryInsertUsingOpCharHint("apply-insert-op-char-low-reliability")) {
+      return true;
+    }
+  }
 
   const anchor =
     meta.highlightAnchorTarget ??
@@ -4770,6 +4814,7 @@ async function checkDocumentTextDesktop() {
   let suggestionsDetected = 0;
   let apiErrors = 0;
   let nonCommaSkips = 0;
+  let nonCommaSalvaged = 0;
   let unchangedHardSkips = 0;
   let cacheHits = 0;
   let cacheMisses = 0;
@@ -4834,6 +4879,7 @@ async function checkDocumentTextDesktop() {
         detected: suggestionsDetected,
         apiErrors,
         nonCommaSkips,
+        nonCommaSalvaged,
       };
     }
 
@@ -4959,8 +5005,10 @@ async function checkDocumentTextDesktop() {
       const result = analyzed.result || {};
       const paragraphApiErrors = result.apiErrors || 0;
       const paragraphNonCommaSkips = result.nonCommaSkips || 0;
+      const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
       apiErrors += paragraphApiErrors;
       nonCommaSkips += paragraphNonCommaSkips;
+      nonCommaSalvaged += paragraphNonCommaSalvaged;
       const paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
       if (!paragraphCacheDisabled && paragraphStable) {
         const cacheEntry = makeDesktopParagraphCacheEntry(analyzed.paragraphHash, result);
@@ -5098,7 +5146,9 @@ async function checkDocumentTextDesktop() {
       "| apiErrors:",
       apiErrors,
       "| nonCommaSkips:",
-      nonCommaSkips
+      nonCommaSkips,
+      "| nonCommaSalvaged:",
+      nonCommaSalvaged
     );
     if (
       paragraphsProcessed > 0 &&
@@ -5118,6 +5168,7 @@ async function checkDocumentTextDesktop() {
       detected: suggestionsDetected,
       apiErrors,
       nonCommaSkips,
+      nonCommaSalvaged,
       cacheDisabled: paragraphCacheDisabled,
       cacheHits,
       cacheMisses,
@@ -5133,6 +5184,7 @@ async function checkDocumentTextDesktop() {
       detected: suggestionsDetected,
       apiErrors,
       nonCommaSkips,
+      nonCommaSalvaged,
       unchangedHardSkips,
       error: String(e?.message || e || "unknown-error"),
     };
@@ -5149,6 +5201,7 @@ async function checkDocumentTextOnline(checkToken) {
   let suggestions = 0;
   let apiErrors = 0;
   let nonCommaSkips = 0;
+  let nonCommaSalvaged = 0;
   let unchangedHardSkips = 0;
   let unstableBackoffSkips = 0;
   let rerenderSkipped = 0;
@@ -5353,6 +5406,7 @@ async function checkDocumentTextOnline(checkToken) {
           log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
           paragraphsProcessed++;
           if (!paragraphCacheDisabled && isOnlineParagraphUnchangedAndSuggestionFree(snapshot)) {
+            await clearPreviousRenderMarkers(idx, p);
             cacheHits++;
             unchangedHardSkips++;
             recordUnstableOnlineParagraphOutcome(idx, original, { nonCommaSkips: 0 });
@@ -5362,6 +5416,7 @@ async function checkDocumentTextOnline(checkToken) {
             continue;
           }
           if (shouldBackoffUnstableOnlineParagraph(idx, original)) {
+            await clearPreviousRenderMarkers(idx, p);
             unstableBackoffSkips++;
             cacheHits++;
             log("Online unstable paragraph backoff skip", {
@@ -5445,8 +5500,10 @@ async function checkDocumentTextOnline(checkToken) {
             ensureCheckActionActive(checkToken);
             const paragraphApiErrors = result.apiErrors || 0;
             const paragraphNonCommaSkips = result.nonCommaSkips || 0;
+            const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
             apiErrors += paragraphApiErrors;
             nonCommaSkips += paragraphNonCommaSkips;
+            nonCommaSalvaged += paragraphNonCommaSalvaged;
             recordUnstableOnlineParagraphOutcome(idx, original, {
               nonCommaSkips: paragraphNonCommaSkips,
             });
@@ -5583,7 +5640,9 @@ async function checkDocumentTextOnline(checkToken) {
       "| apiErrors:",
       apiErrors,
       "| nonCommaSkips:",
-      nonCommaSkips
+      nonCommaSkips,
+      "| nonCommaSalvaged:",
+      nonCommaSalvaged
     );
     if (
       paragraphsProcessed > 0 &&

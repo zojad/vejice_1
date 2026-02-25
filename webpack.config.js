@@ -7,6 +7,7 @@ const devCerts = require("office-addin-dev-certs");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 require("dotenv").config({ path: path.resolve(__dirname, ".env") });
+require("dotenv").config({ path: path.resolve(__dirname, ".env.local"), override: true });
 
 // Dev & Prod base URLs
 const urlDev = "https://localhost:4001/";
@@ -63,6 +64,18 @@ module.exports = async (env, options) => {
         "process.env.VEJICE_API_URL": JSON.stringify(process.env.VEJICE_API_URL || ""),
         "process.env.VEJICE_USE_MOCK": JSON.stringify(process.env.VEJICE_USE_MOCK || ""),
         "process.env.VEJICE_USE_LEMMATIZER": JSON.stringify(process.env.VEJICE_USE_LEMMATIZER || ""),
+        "process.env.VEJICE_DISABLE_PARAGRAPH_CACHE": JSON.stringify(
+          process.env.VEJICE_DISABLE_PARAGRAPH_CACHE || ""
+        ),
+        "process.env.VEJICE_PARAGRAPH_CACHE_DISABLED": JSON.stringify(
+          process.env.VEJICE_PARAGRAPH_CACHE_DISABLED || ""
+        ),
+        "process.env.VEJICE_ENABLE_PARAGRAPH_CACHE": JSON.stringify(
+          process.env.VEJICE_ENABLE_PARAGRAPH_CACHE || ""
+        ),
+        "process.env.VEJICE_ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD": JSON.stringify(
+          process.env.VEJICE_ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD || ""
+        ),
         "process.env.VEJICE_LEMMATIZER_ANCHORS": JSON.stringify(
           process.env.VEJICE_LEMMATIZER_ANCHORS || ""
         ),

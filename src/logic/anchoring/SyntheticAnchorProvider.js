@@ -108,11 +108,29 @@ export function normalizeToken(rawToken, prefix, index) {
       "";
     const leading =
       rawToken.leading_ws ?? rawToken.leadingWhitespace ?? rawToken.before ?? rawToken.prefix ?? "";
+    const startChar = pickTokenOffset([
+      rawToken.start_char,
+      rawToken.startChar,
+      rawToken.start,
+      rawToken.charStart,
+      rawToken.begin,
+      rawToken.offset,
+      rawToken.position,
+    ]);
+    const endChar = pickTokenOffset([
+      rawToken.end_char,
+      rawToken.endChar,
+      rawToken.end,
+      rawToken.charEnd,
+      rawToken.finish,
+    ]);
     return {
       id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
       text: typeof textCandidate === "string" ? textCandidate : "",
       trailingWhitespace: typeof trailing === "string" ? trailing : "",
       leadingWhitespace: typeof leading === "string" ? leading : "",
+      charStart: startChar,
+      charEnd: endChar,
       raw: rawToken,
     };
   }
@@ -136,11 +154,28 @@ export function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, 
     const tokenText = token?.text ?? "";
     const tokenId = token?.id ?? `tok${i + 1}`;
     const tokenLength = tokenText.length;
-    const charStart = resolveTokenPosition(searchableParagraph, tokenText, cursor);
-    const charEnd = charStart >= 0 ? charStart + tokenLength : -1;
+    const explicitStart = toBoundedOffset(token?.charStart, searchableParagraph.length);
+    const explicitEnd = toBoundedOffset(token?.charEnd, searchableParagraph.length);
+    let charStart = -1;
+    let charEnd = -1;
+    if (typeof explicitStart === "number" && explicitStart >= 0) {
+      charStart = explicitStart;
+      if (
+        typeof explicitEnd === "number" &&
+        explicitEnd > explicitStart &&
+        explicitEnd <= searchableParagraph.length
+      ) {
+        charEnd = explicitEnd;
+      } else if (tokenLength >= 0 && explicitStart + tokenLength <= searchableParagraph.length) {
+        charEnd = explicitStart + tokenLength;
+      }
+    } else {
+      charStart = resolveTokenPosition(searchableParagraph, tokenText, cursor);
+      charEnd = charStart >= 0 ? charStart + tokenLength : -1;
+    }
 
     if (charStart >= 0) {
-      cursor = charEnd;
+      cursor = Math.max(cursor, charEnd >= 0 ? charEnd : charStart);
     }
 
     const textKey = tokenText || "";
@@ -174,6 +209,28 @@ export function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, 
 
   annotateRepeatKeyTotals(ordered);
   return { byId, ordered };
+}
+
+function pickTokenOffset(candidates) {
+  if (!Array.isArray(candidates)) return undefined;
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function toBoundedOffset(value, maxLength) {
+  const numeric = pickTokenOffset([value]);
+  if (!Number.isFinite(numeric)) return undefined;
+  const upperBound = Number.isFinite(maxLength) ? Math.max(0, Math.floor(maxLength)) : 0;
+  const floored = Math.floor(numeric);
+  return Math.max(0, Math.min(floored, upperBound));
 }
 
 function annotateRepeatKeyTotals(list) {

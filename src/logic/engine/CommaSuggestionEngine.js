@@ -24,6 +24,7 @@ const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
 const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 260;
+const SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
 const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
@@ -177,6 +178,7 @@ export class CommaSuggestionEngine {
         suggestions: [],
         apiErrors: 0,
         nonCommaSkips: 0,
+        nonCommaSalvaged: 0,
         processedAny: false,
         anchorsEntry: await this.anchorProvider.getAnchors({
           paragraphIndex,
@@ -200,6 +202,7 @@ export class CommaSuggestionEngine {
     const chunkDetails = [];
     let apiErrors = 0;
     let nonCommaChunkSkips = 0;
+    let nonCommaChunkSalvaged = 0;
     const makeSnippet = (value, max = 140) =>
       typeof value === "string" ? value.slice(0, max).replace(/\s+/g, " ").trim() : "";
     const logSkippedChunk = (reason, chunk, extra = {}) => {
@@ -232,11 +235,14 @@ export class CommaSuggestionEngine {
 
     const processChunk = async (chunk, depth = 0) => {
       throwIfAborted(abortSignal);
+      const chunkInputText = chunk.normalizedText || chunk.text || "";
       const meta = {
         chunk,
-        correctedText: chunk.normalizedText,
+        correctedText: chunkInputText,
         detail: null,
         syntheticTokens: null,
+        forceSyntheticAnchoring: false,
+        lowAnchorReliability: Boolean(chunk?.lowAnchorReliability),
       };
       processedMeta.push(meta);
 
@@ -250,7 +256,7 @@ export class CommaSuggestionEngine {
         return;
       }
       let detail = null;
-      const chunkRequestText = chunk.normalizedText || chunk.text || "";
+      const chunkRequestText = chunkInputText;
       const chunkFailureKey = buildChunkFailureKey(paragraphIndex, chunkRequestText);
       const cooldownUntil = this.apiChunkFailureCooldownUntil.get(chunkFailureKey) || 0;
       if (cooldownUntil > Date.now()) {
@@ -305,16 +311,27 @@ export class CommaSuggestionEngine {
         return;
       }
       const correctedChunk = detail.correctedText;
-      const baseForDiff = chunk.text || chunk.normalizedText || "";
+      const baseForDiff = chunk.text || chunkInputText || "";
       const apiCommaOps = normalizeApiCommaOps(detail?.commaOps, baseForDiff, correctedChunk);
       const hasApiCommaOps = apiCommaOps.length > 0;
+      const commaDiffOps = collapseDuplicateDiffOps(
+        filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
+      );
+      const hasCommaDiffOps = commaDiffOps.length > 0;
+      const onlyCommaTextChange = onlyCommasChanged(chunkInputText, correctedChunk);
+      const hasNonCommaDrift = !onlyCommaTextChange;
       if (debugEnabled && debugDump) {
         debugDump.chunks.push({
           index: chunk.index,
           start: chunk.start,
           end: chunk.end,
-          normalizedInput: chunk.normalizedText || chunk.text,
+          normalizedInput: chunkInputText,
           correctedChunk,
+          hasNonCommaDrift,
+          hasApiCommaOps,
+          apiCommaOpsCount: apiCommaOps.length,
+          fallbackCommaOpsCount: commaDiffOps.length,
+          lowAnchorReliability: meta.lowAnchorReliability,
           rawSourceText: detail?.raw?.source_text,
           rawTargetText: detail?.raw?.target_text,
           rawCorrections: detail?.corrections,
@@ -323,7 +340,7 @@ export class CommaSuggestionEngine {
           rawTargetTokensCount: Array.isArray(detail?.targetTokens) ? detail.targetTokens.length : 0,
         });
       }
-      if (!hasApiCommaOps && !onlyCommasChanged(chunk.normalizedText || chunk.text, correctedChunk)) {
+      if (!hasApiCommaOps && hasNonCommaDrift && !hasCommaDiffOps) {
         logSkippedChunk("nonCommaChange", chunk, {
           depth,
           correctedSnippet: makeSnippet(correctedChunk),
@@ -341,16 +358,37 @@ export class CommaSuggestionEngine {
         );
         return;
       }
+      if (!hasApiCommaOps && hasNonCommaDrift && hasCommaDiffOps) {
+        const salvageRetryChunks = splitFailedChunkForRetry(chunk, depth);
+        if (
+          commaDiffOps.length >= SALVAGE_RECHUNK_MIN_DIFF_OPS &&
+          Array.isArray(salvageRetryChunks) &&
+          salvageRetryChunks.length > 1
+        ) {
+          processedMeta.pop();
+          for (const retryChunk of salvageRetryChunks) {
+            await processChunk(retryChunk, depth + 1);
+          }
+          return;
+        }
+        nonCommaChunkSalvaged++;
+        logSkippedChunk("nonCommaChangeSalvaged", chunk, {
+          depth,
+          correctedSnippet: makeSnippet(correctedChunk),
+          fallbackCommaOps: commaDiffOps.length,
+        });
+      }
       meta.detail = detail;
-      meta.correctedText = correctedChunk;
+      const shouldForceSyntheticAnchoring = hasNonCommaDrift && !hasApiCommaOps;
+      meta.forceSyntheticAnchoring = shouldForceSyntheticAnchoring;
+      meta.lowAnchorReliability = meta.lowAnchorReliability || shouldForceSyntheticAnchoring;
+      const commaOnlyOps = hasApiCommaOps ? apiCommaOps : commaDiffOps;
+      const useCommaOnlyCorrectedChunk = hasNonCommaDrift && !hasApiCommaOps && commaOnlyOps.length > 0;
+      meta.correctedText = useCommaOnlyCorrectedChunk
+        ? buildCommaOnlyCorrectedText(baseForDiff, commaOnlyOps)
+        : correctedChunk;
 
-      const diffOps = hasApiCommaOps
-        ? []
-        : collapseDuplicateDiffOps(
-            // Always compute comma-only diff ops. Correction metadata can be incomplete
-            // or carry positions that become inconsistent after chunk-level transforms.
-            filterCommaOps(baseForDiff, correctedChunk, diffCommasOnly(baseForDiff, correctedChunk))
-          );
+      const diffOps = hasApiCommaOps ? [] : commaDiffOps;
       if (!meta.detail && !diffOps.length && !apiCommaOps.length) return;
       chunkDetails.push({
         chunk,
@@ -394,6 +432,7 @@ export class CommaSuggestionEngine {
         suggestions: [],
         apiErrors,
         nonCommaSkips: nonCommaChunkSkips,
+        nonCommaSalvaged: nonCommaChunkSalvaged,
         processedAny: false,
         anchorsEntry,
       };
@@ -407,7 +446,7 @@ export class CommaSuggestionEngine {
 
     processedMeta.forEach((meta) => {
       const basePrefix = `p${paragraphIndex}_c${meta.chunk.index}_`;
-      if (meta.detail) {
+      if (meta.detail && !meta.forceSyntheticAnchoring) {
         const { tokens: rekeyedSource, map: sourceMap } = rekeyTokensWithMap(
           meta.detail.sourceTokens,
           `${basePrefix}s`
@@ -416,10 +455,23 @@ export class CommaSuggestionEngine {
         const { tokens: rekeyedTarget } = rekeyTokensWithMap(meta.detail.targetTokens, `${basePrefix}t`);
         targetTokens.push(...rekeyedTarget);
         meta.remappedCorrections = remapCorrections(meta.detail.corrections, sourceMap);
-      } else if (meta.syntheticTokens && meta.syntheticTokens.length) {
-        const rekeyed = rekeyTokens(meta.syntheticTokens, `${basePrefix}syn_`);
-        sourceTokens.push(...rekeyed);
-        targetTokens.push(...rekeyed);
+      } else if (meta.detail && meta.forceSyntheticAnchoring) {
+        // In salvage mode keep API source token ids (for correction ops),
+        // but anchor target side against comma-only corrected text.
+        const { tokens: rekeyedSource, map: sourceMap } = rekeyTokensWithMap(
+          meta.detail.sourceTokens,
+          `${basePrefix}s`
+        );
+        sourceTokens.push(...rekeyedSource);
+        const sourceSeed = meta.chunk.normalizedText || meta.chunk.text || "";
+        const targetSeed = typeof meta.correctedText === "string" ? meta.correctedText : sourceSeed;
+        targetTokens.push(...tokenizeForAnchoring(targetSeed, `${basePrefix}synt_`));
+        meta.remappedCorrections = remapCorrections(meta.detail.corrections, sourceMap);
+      } else {
+        const sourceSeed = meta.chunk.normalizedText || meta.chunk.text || "";
+        const targetSeed = typeof meta.correctedText === "string" ? meta.correctedText : sourceSeed;
+        sourceTokens.push(...tokenizeForAnchoring(sourceSeed, `${basePrefix}syns_`));
+        targetTokens.push(...tokenizeForAnchoring(targetSeed, `${basePrefix}synt_`));
       }
     });
 
@@ -463,6 +515,11 @@ export class CommaSuggestionEngine {
         if (fallbackOps.length) {
           if (!correctionsPresent || ops.length) {
             fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
+          }
+          if (entry.metaRef?.forceSyntheticAnchoring && correctionsPresent && ops.length) {
+            // In salvage mode prefer correction-derived comma ops when available;
+            // diff ops are often position-noisy after non-comma drift.
+            fallbackOps = [];
           }
           if (!correctionsPresent && detailRef && !ops.length) {
             ops = fallbackOps.map((op) => ({ ...op, fromCorrections: true, viaDiffFallback: true }));
@@ -516,6 +573,7 @@ export class CommaSuggestionEngine {
           anchorsEntry,
           originalText,
           correctedParagraph,
+          lowAnchorReliability: Boolean(entry.metaRef?.lowAnchorReliability),
         });
         if (suggestion) {
           const dedupKey = buildSuggestionDedupKey(suggestion);
@@ -546,6 +604,8 @@ export class CommaSuggestionEngine {
       debugDump.final = {
         correctedParagraph,
         suggestionsCount: suggestions.length,
+        nonCommaSkips: nonCommaChunkSkips,
+        nonCommaSalvaged: nonCommaChunkSalvaged,
         suggestions: suggestions.map((s) => ({
           id: s.id,
           kind: s.kind,
@@ -583,6 +643,7 @@ export class CommaSuggestionEngine {
       suggestions,
       apiErrors,
       nonCommaSkips: nonCommaChunkSkips,
+      nonCommaSalvaged: nonCommaChunkSalvaged,
       processedAny: Boolean(suggestions.length),
       anchorsEntry,
       correctedParagraph,
@@ -590,7 +651,14 @@ export class CommaSuggestionEngine {
   }
 }
 
-function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText, correctedText }) {
+function buildSuggestionFromOp({
+  op,
+  paragraphIndex,
+  anchorsEntry,
+  originalText,
+  correctedText,
+  lowAnchorReliability = false,
+}) {
   if (!op) return null;
   if (op.kind === "delete") {
     const metadata = buildDeleteSuggestionMetadata(anchorsEntry, op.originalPos ?? op.pos);
@@ -615,6 +683,7 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
       meta: {
         op,
         confidence,
+        lowAnchorReliability: Boolean(lowAnchorReliability),
         highlightText: metadata.highlightText,
         anchor: metadata,
         originalText,
@@ -647,6 +716,7 @@ function buildSuggestionFromOp({ op, paragraphIndex, anchorsEntry, originalText,
     meta: {
       op,
       confidence,
+      lowAnchorReliability: Boolean(lowAnchorReliability),
       highlightText: metadata.highlightText,
       anchor: metadata,
       originalText,
@@ -660,11 +730,33 @@ function buildSuggestionDedupKey(suggestion) {
   const paragraphIndex = Number.isFinite(suggestion.paragraphIndex)
     ? suggestion.paragraphIndex
     : "p";
+  const kind = typeof suggestion.kind === "string" ? suggestion.kind : "k";
+  const op = suggestion?.meta?.op || {};
+  const opOriginalPos = Number.isFinite(op.originalPos)
+    ? op.originalPos
+    : Number.isFinite(op.pos)
+      ? op.pos
+      : null;
+  const opCorrectedPos = Number.isFinite(op.correctedPos)
+    ? op.correctedPos
+    : Number.isFinite(op.pos)
+      ? op.pos
+      : null;
+  if (Number.isFinite(opOriginalPos) || Number.isFinite(opCorrectedPos)) {
+    return [
+      paragraphIndex,
+      kind,
+      "op",
+      Number.isFinite(opOriginalPos) ? opOriginalPos : "na",
+      Number.isFinite(opCorrectedPos) ? opCorrectedPos : "na",
+    ].join("|");
+  }
+
   const visualBounds = resolveSuggestionVisualBounds(suggestion);
   if (Number.isFinite(visualBounds.start) && visualBounds.start >= 0) {
     return [paragraphIndex, visualBounds.start, visualBounds.end].join("|");
   }
-  const kind = typeof suggestion.kind === "string" ? suggestion.kind : "k";
+
   const anchor = suggestion?.meta?.anchor || {};
   const tokenId =
     anchor?.sourceTokenAt?.tokenId ??
@@ -673,25 +765,14 @@ function buildSuggestionDedupKey(suggestion) {
     anchor?.targetTokenBefore?.tokenId ??
     anchor?.highlightAnchorTarget?.tokenId ??
     "na";
-  const op = suggestion?.meta?.op || {};
-  const opOriginalPos = Number.isFinite(op.originalPos)
-    ? op.originalPos
-    : Number.isFinite(op.pos)
-      ? op.pos
-      : "na";
-  const opCorrectedPos = Number.isFinite(op.correctedPos)
-    ? op.correctedPos
-    : Number.isFinite(op.pos)
-      ? op.pos
-      : "na";
 
   return [
     paragraphIndex,
     kind,
     "na",
     `t${tokenId}`,
-    opOriginalPos,
-    opCorrectedPos,
+    Number.isFinite(opOriginalPos) ? opOriginalPos : "na",
+    Number.isFinite(opCorrectedPos) ? opCorrectedPos : "na",
   ].join("|");
 }
 
@@ -1109,9 +1190,14 @@ async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGR
   try {
     const lemmaTokens = await anchorProvider.fetchLemmaTokens(safeText);
     let splitTokens = lemmaTokens;
+    let reconstructedConfidence = 1;
+    let usedReconstructedOffsets = false;
     const nativeQuality = evaluateLemmaOffsetsQuality(safeText, lemmaTokens);
-    if (nativeQuality.coverage < LEMMA_SPLIT_CONFIDENCE_THRESHOLD) {
+    const useNativeOffsetsAuthoritatively =
+      nativeQuality.coverage >= LEMMA_SPLIT_CONFIDENCE_THRESHOLD;
+    if (!useNativeOffsetsAuthoritatively) {
       const reconstructed = reconstructLemmaOffsets(safeText, lemmaTokens);
+      reconstructedConfidence = reconstructed.confidence;
       if (mode === "safe" && reconstructed.confidence < LEMMA_SPLIT_CONFIDENCE_THRESHOLD) {
         if (isDeepDebugEnabled()) {
           console.log(
@@ -1124,6 +1210,7 @@ async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGR
       }
       if (reconstructed.tokens.length) {
         splitTokens = reconstructed.tokens;
+        usedReconstructedOffsets = true;
       }
       if (isDeepDebugEnabled()) {
         console.log("[Vejice Split]", "reconstructed lemma offsets", {
@@ -1134,11 +1221,19 @@ async function splitParagraphIntoChunksWithLemmas(text = "", maxLen = MAX_PARAGR
         });
       }
     } else if (isDeepDebugEnabled()) {
-      console.log("[Vejice Split]", "native lemma offsets used", nativeQuality);
+      console.log("[Vejice Split]", "native lemma offsets authoritative", nativeQuality);
     }
     const chunks = buildChunksFromLemmaTokens(safeText, splitTokens, maxLen);
     if (!Array.isArray(chunks) || !chunks.length) return null;
-    return chunks;
+    const lowAnchorReliability =
+      !useNativeOffsetsAuthoritatively || usedReconstructedOffsets;
+    return chunks.map((chunk) => ({
+      ...chunk,
+      lowAnchorReliability,
+      lemmaNativeCoverage: nativeQuality.coverage,
+      lemmaReconstructedConfidence: reconstructedConfidence,
+      lemmaNativeAuthoritative: useNativeOffsetsAuthoritatively,
+    }));
   } catch (_err) {
     return null;
   }
@@ -1707,6 +1802,67 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
   }
 
   return collapseDuplicateDiffOps(filterCommaOps(originalText, correctedText, normalized));
+}
+
+function findCommaIndexAtBoundary(text, pos) {
+  if (typeof text !== "string" || !text.length) return -1;
+  const safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
+  const direct = [safePos - 1, safePos, safePos + 1];
+  for (const idx of direct) {
+    if (idx >= 0 && idx < text.length && text[idx] === ",") {
+      return idx;
+    }
+  }
+  let left = safePos - 1;
+  while (left >= 0 && /\s/.test(text[left])) left--;
+  if (left >= 0 && text[left] === ",") return left;
+  let right = safePos;
+  while (right < text.length && /\s/.test(text[right])) right++;
+  if (right < text.length && text[right] === ",") return right;
+  return -1;
+}
+
+function buildCommaOnlyCorrectedText(originalText = "", ops = []) {
+  const base = typeof originalText === "string" ? originalText : "";
+  if (!Array.isArray(ops) || !ops.length) return base;
+  const normalized = ops
+    .map((op) => {
+      if (!op || typeof op !== "object") return null;
+      const kind = op.kind === "insert" || op.kind === "delete" ? op.kind : null;
+      if (!kind) return null;
+      const originalPos = toBoundedIndex(
+        Number.isFinite(op.originalPos) ? op.originalPos : op.pos,
+        base.length
+      );
+      if (!Number.isFinite(originalPos)) return null;
+      return { kind, originalPos };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.originalPos !== b.originalPos) return a.originalPos - b.originalPos;
+      // Prefer deletions first so comma moves can be represented as delete+insert at same boundary.
+      if (a.kind === b.kind) return 0;
+      return a.kind === "delete" ? -1 : 1;
+    });
+  if (!normalized.length) return base;
+
+  let working = base;
+  let delta = 0;
+  for (const op of normalized) {
+    const targetPos = Math.max(0, Math.min(op.originalPos + delta, working.length));
+    if (op.kind === "delete") {
+      const commaIndex = findCommaIndexAtBoundary(working, targetPos);
+      if (commaIndex < 0) continue;
+      working = `${working.slice(0, commaIndex)}${working.slice(commaIndex + 1)}`;
+      delta -= 1;
+      continue;
+    }
+    if (!hasCommaAtBoundary(working, targetPos)) {
+      working = `${working.slice(0, targetPos)},${working.slice(targetPos)}`;
+      delta += 1;
+    }
+  }
+  return working;
 }
 
 function diffCommasOnly(original, corrected) {
