@@ -25,6 +25,11 @@ const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 260;
 const SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
+const CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
+const LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 2;
+const CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
+const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
+const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
@@ -45,6 +50,22 @@ function throwIfAborted(signal) {
     throw reason;
   }
   throw new Error(typeof reason === "string" ? reason : "Request aborted");
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, items.length));
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: safeConcurrency }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 if (typeof window !== "undefined") {
@@ -116,6 +137,9 @@ export class CommaSuggestionEngine {
     this.lastDebugDump = null;
     this.debugDumps = [];
     this.apiChunkFailureCooldownUntil = new Map();
+    this.chunkApiCacheMaxEntries = resolveChunkApiCacheMaxEntries();
+    this.chunkApiCacheTtlMs = resolveChunkApiCacheTtlMs();
+    this.chunkApiResponseCache = new Map();
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || (() => {}),
       onSentenceTooLong: notifiers.onSentenceTooLong || (() => {}),
@@ -136,6 +160,7 @@ export class CommaSuggestionEngine {
     throwIfAborted(abortSignal);
     const paragraphText = typeof originalText === "string" ? originalText : "";
     pruneExpiredChunkFailureCooldowns(this.apiChunkFailureCooldownUntil);
+    this.pruneChunkApiResponseCache(Date.now());
     const forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
     const useSentenceChunks = forceSentenceChunks || forceSentenceByLength;
     const debugEnabled = isDeepDebugEnabled();
@@ -198,11 +223,6 @@ export class CommaSuggestionEngine {
       chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
     });
 
-    const processedMeta = [];
-    const chunkDetails = [];
-    let apiErrors = 0;
-    let nonCommaChunkSkips = 0;
-    let nonCommaChunkSalvaged = 0;
     const makeSnippet = (value, max = 140) =>
       typeof value === "string" ? value.slice(0, max).replace(/\s+/g, " ").trim() : "";
     const logSkippedChunk = (reason, chunk, extra = {}) => {
@@ -233,6 +253,29 @@ export class CommaSuggestionEngine {
       }
     };
 
+    const mergeChunkProcessResults = (results = []) => {
+      const merged = {
+        processedMeta: [],
+        chunkDetails: [],
+        apiErrors: 0,
+        nonCommaSkips: 0,
+        nonCommaSalvaged: 0,
+      };
+      for (const entry of results) {
+        if (!entry) continue;
+        if (Array.isArray(entry.processedMeta) && entry.processedMeta.length) {
+          merged.processedMeta.push(...entry.processedMeta);
+        }
+        if (Array.isArray(entry.chunkDetails) && entry.chunkDetails.length) {
+          merged.chunkDetails.push(...entry.chunkDetails);
+        }
+        merged.apiErrors += entry.apiErrors || 0;
+        merged.nonCommaSkips += entry.nonCommaSkips || 0;
+        merged.nonCommaSalvaged += entry.nonCommaSalvaged || 0;
+      }
+      return merged;
+    };
+
     const processChunk = async (chunk, depth = 0) => {
       throwIfAborted(abortSignal);
       const chunkInputText = chunk.normalizedText || chunk.text || "";
@@ -244,7 +287,13 @@ export class CommaSuggestionEngine {
         forceSyntheticAnchoring: false,
         lowAnchorReliability: Boolean(chunk?.lowAnchorReliability),
       };
-      processedMeta.push(meta);
+      const chunkResult = {
+        processedMeta: [meta],
+        chunkDetails: [],
+        apiErrors: 0,
+        nonCommaSkips: 0,
+        nonCommaSalvaged: 0,
+      };
 
       if (chunk.tooLong) {
         logSkippedChunk("tooLong", chunk, { depth });
@@ -253,7 +302,7 @@ export class CommaSuggestionEngine {
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        return;
+        return chunkResult;
       }
       let detail = null;
       const chunkRequestText = chunkInputText;
@@ -264,7 +313,7 @@ export class CommaSuggestionEngine {
           depth,
           cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now()),
         });
-        apiErrors++;
+        chunkResult.apiErrors++;
         this.notifiers.onChunkApiFailure(
           paragraphIndex,
           chunk.index,
@@ -274,41 +323,48 @@ export class CommaSuggestionEngine {
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        return;
+        return chunkResult;
       }
-      try {
-        detail = await this.apiClient.popraviPovedDetailed(chunkRequestText, {
-          signal: abortSignal,
-        });
+      const cachedDetail = this.getChunkApiCachedDetail(chunkRequestText);
+      if (cachedDetail) {
+        detail = cachedDetail;
         this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
-      } catch (apiErr) {
-        if (isAbortLikeError(apiErr, abortSignal)) {
-          throw apiErr;
-        }
-        const retryChunks = splitFailedChunkForRetry(chunk, depth);
-        if (Array.isArray(retryChunks) && retryChunks.length > 1) {
-          processedMeta.pop();
-          for (const retryChunk of retryChunks) {
-            await processChunk(retryChunk, depth + 1);
+      } else {
+        try {
+          detail = await this.apiClient.popraviPovedDetailed(chunkRequestText, {
+            signal: abortSignal,
+          });
+          this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
+          this.setChunkApiCachedDetail(chunkRequestText, detail);
+        } catch (apiErr) {
+          if (isAbortLikeError(apiErr, abortSignal)) {
+            throw apiErr;
           }
-          return;
+          const retryChunks = splitFailedChunkForRetry(chunk, depth);
+          if (Array.isArray(retryChunks) && retryChunks.length > 1) {
+            const retryResults = [];
+            for (const retryChunk of retryChunks) {
+              retryResults.push(await processChunk(retryChunk, depth + 1));
+            }
+            return mergeChunkProcessResults(retryResults);
+          }
+          this.apiChunkFailureCooldownUntil.set(
+            chunkFailureKey,
+            Date.now() + API_FAILURE_COOLDOWN_MS
+          );
+          logSkippedChunk("apiError", chunk, {
+            depth,
+            apiError: apiErr?.message || String(apiErr || "API error"),
+            cooldownMs: API_FAILURE_COOLDOWN_MS,
+          });
+          chunkResult.apiErrors++;
+          this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
+          meta.syntheticTokens = tokenizeForAnchoring(
+            chunk.text,
+            `p${paragraphIndex}_c${chunk.index}_syn_`
+          );
+          return chunkResult;
         }
-        this.apiChunkFailureCooldownUntil.set(
-          chunkFailureKey,
-          Date.now() + API_FAILURE_COOLDOWN_MS
-        );
-        logSkippedChunk("apiError", chunk, {
-          depth,
-          apiError: apiErr?.message || String(apiErr || "API error"),
-          cooldownMs: API_FAILURE_COOLDOWN_MS,
-        });
-        apiErrors++;
-        this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
-        meta.syntheticTokens = tokenizeForAnchoring(
-          chunk.text,
-          `p${paragraphIndex}_c${chunk.index}_syn_`
-        );
-        return;
       }
       const correctedChunk = detail.correctedText;
       const baseForDiff = chunk.text || chunkInputText || "";
@@ -351,12 +407,12 @@ export class CommaSuggestionEngine {
           chunk.text,
           correctedChunk
         );
-        nonCommaChunkSkips++;
+        chunkResult.nonCommaSkips++;
         meta.syntheticTokens = tokenizeForAnchoring(
           chunk.text,
           `p${paragraphIndex}_c${chunk.index}_syn_`
         );
-        return;
+        return chunkResult;
       }
       if (!hasApiCommaOps && hasNonCommaDrift && hasCommaDiffOps) {
         const salvageRetryChunks = splitFailedChunkForRetry(chunk, depth);
@@ -365,13 +421,13 @@ export class CommaSuggestionEngine {
           Array.isArray(salvageRetryChunks) &&
           salvageRetryChunks.length > 1
         ) {
-          processedMeta.pop();
+          const salvageResults = [];
           for (const retryChunk of salvageRetryChunks) {
-            await processChunk(retryChunk, depth + 1);
+            salvageResults.push(await processChunk(retryChunk, depth + 1));
           }
-          return;
+          return mergeChunkProcessResults(salvageResults);
         }
-        nonCommaChunkSalvaged++;
+        chunkResult.nonCommaSalvaged++;
         logSkippedChunk("nonCommaChangeSalvaged", chunk, {
           depth,
           correctedSnippet: makeSnippet(correctedChunk),
@@ -389,8 +445,10 @@ export class CommaSuggestionEngine {
         : correctedChunk;
 
       const diffOps = hasApiCommaOps ? [] : commaDiffOps;
-      if (!meta.detail && !diffOps.length && !apiCommaOps.length) return;
-      chunkDetails.push({
+      if (!meta.detail && !diffOps.length && !apiCommaOps.length) {
+        return chunkResult;
+      }
+      chunkResult.chunkDetails.push({
         chunk,
         metaRef: meta,
         baseForDiff,
@@ -398,12 +456,39 @@ export class CommaSuggestionEngine {
         diffOps,
         apiCommaOps,
       });
+      return chunkResult;
     };
 
-    for (const chunk of chunks) {
-      throwIfAborted(abortSignal);
-      await processChunk(chunk, 0);
-    }
+    const chunkAnalyzeConcurrency = resolveChunkAnalyzeConcurrency();
+    const chunkResults = await runWithConcurrency(
+      chunks,
+      chunkAnalyzeConcurrency,
+      async (chunk) => {
+        throwIfAborted(abortSignal);
+        return processChunk(chunk, 0);
+      }
+    );
+
+    const mergedChunkResults = mergeChunkProcessResults(chunkResults);
+    const processedMeta = mergedChunkResults.processedMeta;
+    const chunkDetails = mergedChunkResults.chunkDetails;
+    let apiErrors = mergedChunkResults.apiErrors;
+    let nonCommaChunkSkips = mergedChunkResults.nonCommaSkips;
+    let nonCommaChunkSalvaged = mergedChunkResults.nonCommaSalvaged;
+
+    const compareChunks = (aChunk, bChunk) => {
+      const aStart = Number.isFinite(aChunk?.start) ? aChunk.start : 0;
+      const bStart = Number.isFinite(bChunk?.start) ? bChunk.start : 0;
+      if (aStart !== bStart) return aStart - bStart;
+      const aEnd = Number.isFinite(aChunk?.end) ? aChunk.end : aStart;
+      const bEnd = Number.isFinite(bChunk?.end) ? bChunk.end : bStart;
+      if (aEnd !== bEnd) return aEnd - bEnd;
+      const aIndex = String(aChunk?.index ?? "");
+      const bIndex = String(bChunk?.index ?? "");
+      return aIndex.localeCompare(bIndex, undefined, { numeric: true, sensitivity: "base" });
+    };
+    processedMeta.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+    chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
 
     const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
     const canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;
@@ -648,6 +733,60 @@ export class CommaSuggestionEngine {
       anchorsEntry,
       correctedParagraph,
     };
+  }
+
+  getChunkApiCachedDetail(chunkText) {
+    if (!this.isChunkApiCacheEnabled()) return null;
+    const safeText = typeof chunkText === "string" ? chunkText : "";
+    if (!safeText) return null;
+    const key = buildChunkApiCacheKey(safeText);
+    const nowTs = Date.now();
+    const entry = this.chunkApiResponseCache.get(key);
+    if (!entry) return null;
+    if (!entry.expiresAt || entry.expiresAt <= nowTs || entry.chunkText !== safeText) {
+      this.chunkApiResponseCache.delete(key);
+      return null;
+    }
+    // Refresh entry recency to approximate LRU behavior.
+    this.chunkApiResponseCache.delete(key);
+    this.chunkApiResponseCache.set(key, entry);
+    return cloneChunkApiDetail(entry.detail);
+  }
+
+  setChunkApiCachedDetail(chunkText, detail) {
+    if (!this.isChunkApiCacheEnabled()) return;
+    const safeText = typeof chunkText === "string" ? chunkText : "";
+    if (!safeText || !detail || typeof detail !== "object") return;
+    const key = buildChunkApiCacheKey(safeText);
+    const nowTs = Date.now();
+    this.chunkApiResponseCache.set(key, {
+      chunkText: safeText,
+      expiresAt: nowTs + this.chunkApiCacheTtlMs,
+      detail: cloneChunkApiDetail(detail),
+    });
+    this.pruneChunkApiResponseCache(nowTs);
+  }
+
+  isChunkApiCacheEnabled() {
+    return this.chunkApiCacheMaxEntries > 0 && this.chunkApiCacheTtlMs > 0;
+  }
+
+  pruneChunkApiResponseCache(nowTs = Date.now()) {
+    if (!this.chunkApiResponseCache || typeof this.chunkApiResponseCache.entries !== "function") return;
+    if (!this.isChunkApiCacheEnabled()) {
+      this.chunkApiResponseCache.clear();
+      return;
+    }
+    for (const [key, entry] of this.chunkApiResponseCache.entries()) {
+      if (!entry || !entry.expiresAt || entry.expiresAt <= nowTs) {
+        this.chunkApiResponseCache.delete(key);
+      }
+    }
+    while (this.chunkApiResponseCache.size > this.chunkApiCacheMaxEntries) {
+      const oldestKey = this.chunkApiResponseCache.keys().next().value;
+      if (typeof oldestKey === "undefined") break;
+      this.chunkApiResponseCache.delete(oldestKey);
+    }
   }
 }
 
@@ -1009,6 +1148,11 @@ function buildChunkFailureKey(paragraphIndex, text = "") {
   return `${safeParagraph}:${safeText.length}:${hashTextForCooldownKey(safeText)}`;
 }
 
+function buildChunkApiCacheKey(text = "") {
+  const safeText = typeof text === "string" ? text : "";
+  return `${safeText.length}:${hashTextForCooldownKey(safeText)}`;
+}
+
 function pruneExpiredChunkFailureCooldowns(cooldownMap) {
   if (!cooldownMap || typeof cooldownMap.forEach !== "function") return;
   const now = Date.now();
@@ -1255,6 +1399,113 @@ function resolveLemmaSplitMode() {
     return envMode;
   }
   return "safe";
+}
+
+function resolveChunkAnalyzeConcurrency() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_ANALYZE_CONCURRENCY;
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = process.env?.VEJICE_CHUNK_ANALYZE_CONCURRENCY;
+  }
+  const parsed = Number(override);
+  const defaultValue = isLocalSpeedProfileEnabled()
+    ? LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT
+    : CHUNK_ANALYZE_CONCURRENCY_DEFAULT;
+  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultValue;
+  return Math.max(1, Math.min(value, CHUNK_ANALYZE_CONCURRENCY_MAX));
+}
+
+function parseBooleanLike(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return undefined;
+  }
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+function isLocalhostRuntime() {
+  if (typeof window === "undefined") return false;
+  const host = typeof window.location?.hostname === "string"
+    ? window.location.hostname.trim().toLowerCase()
+    : "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isLocalSpeedProfileEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanLike(window.__VEJICE_LOCAL_SPEED_PROFILE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanLike(process.env?.VEJICE_LOCAL_SPEED_PROFILE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isLocalhostRuntime();
+}
+
+function resolveChunkApiCacheMaxEntries() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_API_CACHE_MAX_ENTRIES;
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = process.env?.VEJICE_CHUNK_API_CACHE_MAX_ENTRIES;
+  }
+  const parsed = Number(override);
+  const value =
+    Number.isFinite(parsed) && parsed >= 0
+      ? Math.floor(parsed)
+      : CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT;
+  return Math.max(0, Math.min(value, 5000));
+}
+
+function resolveChunkApiCacheTtlMs() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_API_CACHE_TTL_MS;
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = process.env?.VEJICE_CHUNK_API_CACHE_TTL_MS;
+  }
+  const parsed = Number(override);
+  const value =
+    Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : CHUNK_API_CACHE_TTL_MS_DEFAULT;
+  return Math.max(0, Math.min(value, 60 * 60 * 1000));
+}
+
+function cloneChunkApiDetail(detail) {
+  if (!detail || typeof detail !== "object") return detail;
+  try {
+    if (typeof structuredClone === "function") {
+      return structuredClone(detail);
+    }
+  } catch (_err) {
+    // Fall back to JSON clone.
+  }
+  try {
+    return JSON.parse(JSON.stringify(detail));
+  } catch (_err) {
+    // As a last resort, shallow-clone top-level fields.
+  }
+  return {
+    ...detail,
+    raw: detail.raw && typeof detail.raw === "object" ? { ...detail.raw } : detail.raw,
+    sourceTokens: Array.isArray(detail.sourceTokens) ? detail.sourceTokens.map((t) => ({ ...t })) : [],
+    targetTokens: Array.isArray(detail.targetTokens) ? detail.targetTokens.map((t) => ({ ...t })) : [],
+    corrections: Array.isArray(detail.corrections)
+      ? detail.corrections.map((c) => ({ ...c }))
+      : detail.corrections,
+    commaOps: Array.isArray(detail.commaOps) ? detail.commaOps.map((op) => ({ ...op })) : detail.commaOps,
+  };
 }
 
 function shouldUseLemmaSplitHeuristic(text = "", maxLen = MAX_PARAGRAPH_CHARS) {

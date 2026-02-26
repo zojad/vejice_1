@@ -79,8 +79,8 @@ const API_UNAVAILABLE_MESSAGE =
 const NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajo\u010dih ali napa\u010dnih vejic.";
 const MARKER_RENDER_FAILED_MESSAGE = "Napake so bile najdene, vendar jih v Word Online ni bilo mogo\u010de ozna\u010diti.";
 const PARAGRAPH_TIMEOUT_MESSAGE = "Nekateri odstavki niso bili pregledani zaradi casovne omejitve.";
-const ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS = 3;
-const ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS = 12;
+const ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT = 5;
+const ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT = 24;
 const ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
 const ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD_DEFAULT = 2;
 const ONLINE_RENDER_STATE_MAX_PARAGRAPHS = 1200;
@@ -103,6 +103,27 @@ function parseBooleanFlag(value) {
   if (BOOLEAN_TRUE.has(normalized)) return true;
   if (BOOLEAN_FALSE.has(normalized)) return false;
   return undefined;
+}
+
+function isLocalhostRuntime() {
+  if (typeof window === "undefined") return false;
+  const host =
+    typeof window.location?.hostname === "string"
+      ? window.location.hostname.trim().toLowerCase()
+      : "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isLocalSpeedProfileEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_LOCAL_SPEED_PROFILE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_LOCAL_SPEED_PROFILE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isLocalhostRuntime();
 }
 
 function isDesktopVerboseLoggingEnabled() {
@@ -716,8 +737,10 @@ const ACTION_TYPE_APPLY = "apply";
 const ACTION_TYPE_REJECT = "reject";
 const ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
 const ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
+const ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
+const LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 2;
 const DESKTOP_ANALYZE_CONCURRENCY_DEFAULT = 4;
-const POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1800;
+const POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1200;
 const CHECK_ABORT_REASON_TIMEOUT = "check-timeout";
 const CHECK_ABORT_REASON_CANCELLED = "check-cancelled";
 const CHECK_ABORT_REASON_SUPERSEDED = "check-superseded";
@@ -772,6 +795,30 @@ function resolveOnlineParagraphTimeoutMs() {
   return timeoutOverride ?? ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT;
 }
 
+function resolveOnlineHighlightFlushParagraphs() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS);
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = parsePositiveInteger(process.env?.VEJICE_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS);
+  }
+  const value = override ?? ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT;
+  return Math.max(1, Math.min(value, 50));
+}
+
+function resolveOnlineHighlightFlushSuggestions() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS);
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = parsePositiveInteger(process.env?.VEJICE_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS);
+  }
+  const value = override ?? ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT;
+  return Math.max(1, Math.min(value, 200));
+}
+
 function resolveDesktopAnalyzeConcurrency() {
   let override = null;
   if (typeof window !== "undefined") {
@@ -781,6 +828,21 @@ function resolveDesktopAnalyzeConcurrency() {
     override = parsePositiveInteger(process.env?.VEJICE_DESKTOP_ANALYZE_CONCURRENCY);
   }
   const value = override ?? DESKTOP_ANALYZE_CONCURRENCY_DEFAULT;
+  return Math.max(1, Math.min(value, 8));
+}
+
+function resolveOnlineAnalyzeConcurrency() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_ANALYZE_CONCURRENCY);
+  }
+  if (override == null && typeof process !== "undefined") {
+    override = parsePositiveInteger(process.env?.VEJICE_ONLINE_ANALYZE_CONCURRENCY);
+  }
+  const defaultValue = isLocalSpeedProfileEnabled()
+    ? LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT
+    : ONLINE_ANALYZE_CONCURRENCY_DEFAULT;
+  const value = override ?? defaultValue;
   return Math.max(1, Math.min(value, 8));
 }
 
@@ -5238,14 +5300,20 @@ async function checkDocumentTextOnline(checkToken) {
       let pendingHighlightSuggestions = 0;
       const markerParagraphCleanupDone = new Set();
       const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
+      const flushParagraphThreshold = resolveOnlineHighlightFlushParagraphs();
+      const flushSuggestionThreshold = resolveOnlineHighlightFlushSuggestions();
+      log("Online highlight flush thresholds", {
+        paragraphs: flushParagraphThreshold,
+        suggestions: flushSuggestionThreshold,
+      });
       const flushHighlightsIfNeeded = async (highlightedInParagraph) => {
         if (highlightedInParagraph <= 0) return;
         ensureCheckActionActive(checkToken);
         pendingHighlightParagraphs++;
         pendingHighlightSuggestions += highlightedInParagraph;
         const shouldFlushNow =
-          pendingHighlightParagraphs >= ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS ||
-          pendingHighlightSuggestions >= ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS;
+          pendingHighlightParagraphs >= flushParagraphThreshold ||
+          pendingHighlightSuggestions >= flushSuggestionThreshold;
         if (shouldFlushNow) {
           await context.sync();
           pendingHighlightParagraphs = 0;
@@ -5352,6 +5420,16 @@ async function checkDocumentTextOnline(checkToken) {
         return { highlighted: highlightedInParagraph, skippedRerender: false };
       };
 
+      const onlineAnalyzeConcurrency = resolveOnlineAnalyzeConcurrency();
+      const recordParagraphTiming = (elapsedMs) => {
+        const paragraphElapsedMs = Math.max(0, Number(elapsedMs) || 0);
+        paragraphTimingCount++;
+        paragraphTimingTotalMs += paragraphElapsedMs;
+        paragraphTimingMaxMs = Math.max(paragraphTimingMaxMs, paragraphElapsedMs);
+        paragraphTimingMinMs = Math.min(paragraphTimingMinMs, paragraphElapsedMs);
+      };
+      const analysisJobs = [];
+
       for (let idx = 0; idx < paras.items.length; idx++) {
         ensureCheckActionActive(checkToken);
         if (checkAbortSignal?.aborted) {
@@ -5360,6 +5438,7 @@ async function checkDocumentTextOnline(checkToken) {
             checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
           );
         }
+        const paragraphStartedAt = tnow();
         const p = paras.items[idx];
         const original = p.text || "";
         const normalizedOriginal = normalizeParagraphWhitespace(original);
@@ -5389,6 +5468,7 @@ async function checkDocumentTextOnline(checkToken) {
           if (!paragraphCacheDisabled) {
             onlineParagraphAnalysisCache[idx] = null;
           }
+          recordParagraphTiming(tnow() - paragraphStartedAt);
           continue;
         }
         if (trimmed.length > MAX_PARAGRAPH_CHARS) {
@@ -5398,198 +5478,261 @@ async function checkDocumentTextOnline(checkToken) {
           if (!paragraphCacheDisabled) {
             onlineParagraphAnalysisCache[idx] = null;
           }
+          recordParagraphTiming(tnow() - paragraphStartedAt);
           continue;
         }
 
-        const paragraphStartedAt = tnow();
-        try {
-          log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
-          paragraphsProcessed++;
-          if (!paragraphCacheDisabled && isOnlineParagraphUnchangedAndSuggestionFree(snapshot)) {
-            await clearPreviousRenderMarkers(idx, p);
-            cacheHits++;
-            unchangedHardSkips++;
-            recordUnstableOnlineParagraphOutcome(idx, original, { nonCommaSkips: 0 });
-            log("Online hard-skip unchanged paragraph (clean cache)", {
+        log(`P${idx} ONLINE: len=${original.length} | "${SNIP(trimmed)}"`);
+        paragraphsProcessed++;
+        if (!paragraphCacheDisabled && isOnlineParagraphUnchangedAndSuggestionFree(snapshot)) {
+          await clearPreviousRenderMarkers(idx, p);
+          cacheHits++;
+          unchangedHardSkips++;
+          recordUnstableOnlineParagraphOutcome(idx, original, { nonCommaSkips: 0 });
+          log("Online hard-skip unchanged paragraph (clean cache)", {
+            paragraphIndex: idx,
+          });
+          recordParagraphTiming(tnow() - paragraphStartedAt);
+          continue;
+        }
+        if (shouldBackoffUnstableOnlineParagraph(idx, original)) {
+          await clearPreviousRenderMarkers(idx, p);
+          unstableBackoffSkips++;
+          cacheHits++;
+          log("Online unstable paragraph backoff skip", {
+            paragraphIndex: idx,
+            threshold: resolveOnlineUnstableBackoffThreshold(),
+          });
+          recordParagraphTiming(tnow() - paragraphStartedAt);
+          continue;
+        }
+        const cached = paragraphCacheDisabled ? null : tryGetOnlineParagraphCacheResult(snapshot);
+        if (cached) {
+          cacheHits++;
+          const cachedAnchors = anchorProvider.getAnchorsForParagraph(idx);
+          const renderReadyCached = prepareSuggestionsForRender({
+            paragraphIndex: idx,
+            snapshotText: original,
+            sourceText: cachedAnchors?.originalText ?? original,
+            suggestions: cached.suggestions,
+          });
+          if (renderReadyCached.renderDedupDropped > 0) {
+            log("Render dedupe (cached)", {
               paragraphIndex: idx,
+              dropped: renderReadyCached.renderDedupDropped,
+              before: cached.suggestions.length,
+              after: renderReadyCached.suggestions.length,
             });
-            continue;
           }
-          if (shouldBackoffUnstableOnlineParagraph(idx, original)) {
-            await clearPreviousRenderMarkers(idx, p);
-            unstableBackoffSkips++;
-            cacheHits++;
-            log("Online unstable paragraph backoff skip", {
+          if (
+            renderReadyCached.planDropped > 0 ||
+            renderReadyCached.noopCount > 0 ||
+            renderReadyCached.mergedGroupCount > 0
+          ) {
+            log("Render plan prune (cached)", {
               paragraphIndex: idx,
-              threshold: resolveOnlineUnstableBackoffThreshold(),
+              dropped: renderReadyCached.planDropped,
+              planCount: renderReadyCached.planCount,
+              noop: renderReadyCached.noopCount,
+              skipped: renderReadyCached.skippedCount,
+              mergedGroups: renderReadyCached.mergedGroupCount,
+              after: renderReadyCached.suggestions.length,
             });
-            continue;
           }
-          const cached = paragraphCacheDisabled ? null : tryGetOnlineParagraphCacheResult(snapshot);
-          if (cached) {
-            cacheHits++;
-            const cachedAnchors = anchorProvider.getAnchorsForParagraph(idx);
-            const renderReadyCached = prepareSuggestionsForRender({
-              paragraphIndex: idx,
-              snapshotText: original,
-              sourceText: cachedAnchors?.originalText ?? original,
-              suggestions: cached.suggestions,
-            });
-            if (renderReadyCached.renderDedupDropped > 0) {
-              log("Render dedupe (cached)", {
-                paragraphIndex: idx,
-                dropped: renderReadyCached.renderDedupDropped,
-                before: cached.suggestions.length,
-                after: renderReadyCached.suggestions.length,
-              });
-            }
-            if (
-              renderReadyCached.planDropped > 0 ||
-              renderReadyCached.noopCount > 0 ||
-              renderReadyCached.mergedGroupCount > 0
-            ) {
-              log("Render plan prune (cached)", {
-                paragraphIndex: idx,
-                dropped: renderReadyCached.planDropped,
-                planCount: renderReadyCached.planCount,
-                noop: renderReadyCached.noopCount,
-                skipped: renderReadyCached.skippedCount,
-                mergedGroups: renderReadyCached.mergedGroupCount,
-                after: renderReadyCached.suggestions.length,
-              });
-            }
-            suggestionsDetected += renderReadyCached.suggestions.length;
-            const renderOutcome = await renderSuggestionsForParagraph({
-              paragraphIndex: idx,
-              paragraph: p,
-              sourceText: original,
-              suggestionsToRender: renderReadyCached.suggestions,
-            });
-            suggestions += renderOutcome.highlighted;
-            await flushHighlightsIfNeeded(renderOutcome.highlighted);
-            recordUnstableOnlineParagraphOutcome(idx, original, { nonCommaSkips: 0 });
-            continue;
-          }
-          if (!paragraphCacheDisabled) {
-            cacheMisses++;
-          }
-          const paragraphHash = buildDesktopParagraphHash(original);
+          suggestionsDetected += renderReadyCached.suggestions.length;
+          const renderOutcome = await renderSuggestionsForParagraph({
+            paragraphIndex: idx,
+            paragraph: p,
+            sourceText: original,
+            suggestionsToRender: renderReadyCached.suggestions,
+          });
+          suggestions += renderOutcome.highlighted;
+          await flushHighlightsIfNeeded(renderOutcome.highlighted);
+          recordUnstableOnlineParagraphOutcome(idx, original, { nonCommaSkips: 0 });
+          recordParagraphTiming(tnow() - paragraphStartedAt);
+          continue;
+        }
+        if (!paragraphCacheDisabled) {
+          cacheMisses++;
+        }
+        const remainingCheckMs =
+          checkToken?.deadlineAt > 0
+            ? Math.max(1, checkToken.deadlineAt - Date.now())
+            : paragraphTimeoutMs;
+        const paragraphGuardTimeoutMs = Math.min(paragraphTimeoutMs, remainingCheckMs);
+        const timeoutReason =
+          paragraphGuardTimeoutMs < paragraphTimeoutMs
+            ? CHECK_ABORT_REASON_TIMEOUT
+            : CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT;
+        analysisJobs.push({
+          paragraphIndex: idx,
+          paragraph: p,
+          sourceText: original,
+          normalizedOriginalText: normalizedOriginal,
+          paragraphDocOffset,
+          paragraphHash: buildDesktopParagraphHash(original),
+          paragraphGuardTimeoutMs,
+          timeoutReason,
+          timeoutLabel: `Paragraph ${idx + 1} timed out`,
+        });
+      }
+
+      if (analysisJobs.length > 0) {
+        log("Online phase: analyze jobs", {
+          jobs: analysisJobs.length,
+          concurrency: onlineAnalyzeConcurrency,
+          cacheHits,
+          cacheMisses,
+        });
+      }
+      const analysisResults = await runWithConcurrency(
+        analysisJobs,
+        onlineAnalyzeConcurrency,
+        async (job) => {
+          const startedAt = tnow();
           try {
-            const remainingCheckMs =
-              checkToken?.deadlineAt > 0
-                ? Math.max(1, checkToken.deadlineAt - Date.now())
-                : paragraphTimeoutMs;
-            const paragraphGuardTimeoutMs = Math.min(paragraphTimeoutMs, remainingCheckMs);
-            const timeoutReason =
-              paragraphGuardTimeoutMs < paragraphTimeoutMs
-                ? CHECK_ABORT_REASON_TIMEOUT
-                : CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT;
-            const result = await runWithTimeout(
-              () =>
-                commaEngine.analyzeParagraph({
-                  paragraphIndex: idx,
-                  originalText: original,
-                  normalizedOriginalText: normalizedOriginal,
-                  paragraphDocOffset,
-                  abortSignal: checkAbortSignal,
-                }),
-              paragraphGuardTimeoutMs,
-              timeoutReason,
-              `Paragraph ${idx + 1} timed out`
-            );
             ensureCheckActionActive(checkToken);
-            const paragraphApiErrors = result.apiErrors || 0;
-            const paragraphNonCommaSkips = result.nonCommaSkips || 0;
-            const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
-            apiErrors += paragraphApiErrors;
-            nonCommaSkips += paragraphNonCommaSkips;
-            nonCommaSalvaged += paragraphNonCommaSalvaged;
-            recordUnstableOnlineParagraphOutcome(idx, original, {
-              nonCommaSkips: paragraphNonCommaSkips,
-            });
-            const paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
-            if (!paragraphCacheDisabled && paragraphStable) {
-              const cacheEntry = makeOnlineParagraphCacheEntry(paragraphHash, result);
-              onlineParagraphAnalysisCache[idx] = cacheEntry || null;
-            } else if (!paragraphCacheDisabled) {
-              onlineParagraphAnalysisCache[idx] = null;
-            }
-            const renderReadyResult = prepareSuggestionsForRender({
-              paragraphIndex: idx,
-              snapshotText: original,
-              sourceText: result?.anchorsEntry?.originalText ?? original,
-              suggestions: result.suggestions,
-            });
-            if (renderReadyResult.renderDedupDropped > 0) {
-              log("Render dedupe (fresh)", {
-                paragraphIndex: idx,
-                dropped: renderReadyResult.renderDedupDropped,
-                before: Array.isArray(result.suggestions) ? result.suggestions.length : 0,
-                after: renderReadyResult.suggestions.length,
-              });
-            }
-            if (
-              renderReadyResult.planDropped > 0 ||
-              renderReadyResult.noopCount > 0 ||
-              renderReadyResult.mergedGroupCount > 0
-            ) {
-              log("Render plan prune (fresh)", {
-                paragraphIndex: idx,
-                dropped: renderReadyResult.planDropped,
-                planCount: renderReadyResult.planCount,
-                noop: renderReadyResult.noopCount,
-                skipped: renderReadyResult.skippedCount,
-                mergedGroups: renderReadyResult.mergedGroupCount,
-                after: renderReadyResult.suggestions.length,
-              });
-            }
-            suggestionsDetected += renderReadyResult.suggestions.length;
-            const renderOutcome = await renderSuggestionsForParagraph({
-              paragraphIndex: idx,
-              paragraph: p,
-              sourceText: original,
-              suggestionsToRender: renderReadyResult.suggestions,
-            });
-            suggestions += renderOutcome.highlighted;
-            await flushHighlightsIfNeeded(renderOutcome.highlighted);
-          } catch (paragraphErr) {
-            if (!paragraphCacheDisabled) {
-              onlineParagraphAnalysisCache[idx] = null;
-            }
-            if (
-              isAbortLikeError(paragraphErr) ||
-              checkAbortSignal?.aborted ||
-              checkToken?.cancelled
-            ) {
+            if (checkAbortSignal?.aborted) {
               throw new CheckAbortError(
                 "Check was cancelled",
                 checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
               );
             }
-            if (
-              paragraphErr instanceof CheckAbortError &&
-              paragraphErr.reason === CHECK_ABORT_REASON_TIMEOUT
-            ) {
-              throw paragraphErr;
-            }
-            if (
-              paragraphErr instanceof CheckAbortError &&
-              paragraphErr.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT
-            ) {
-              apiErrors++;
-              notifyParagraphTimeout(idx, paragraphTimeoutMs);
-              continue;
-            }
-            apiErrors++;
-            warn(`P${idx} ONLINE: paragraph processing failed`, paragraphErr);
-            notifyApiUnavailable();
+            const result = await runWithTimeout(
+              () =>
+                commaEngine.analyzeParagraph({
+                  paragraphIndex: job.paragraphIndex,
+                  originalText: job.sourceText,
+                  normalizedOriginalText: job.normalizedOriginalText,
+                  paragraphDocOffset: job.paragraphDocOffset,
+                  abortSignal: checkAbortSignal,
+                }),
+              job.paragraphGuardTimeoutMs,
+              job.timeoutReason,
+              job.timeoutLabel
+            );
+            return {
+              job,
+              result,
+              error: null,
+              durationMs: Math.max(0, tnow() - startedAt),
+            };
+          } catch (error) {
+            return {
+              job,
+              result: null,
+              error,
+              durationMs: Math.max(0, tnow() - startedAt),
+            };
           }
+        }
+      );
+
+      for (const analyzed of analysisResults) {
+        if (!analyzed?.job) continue;
+        const job = analyzed.job;
+        const paragraphPhaseStartedAt = tnow();
+        try {
+          ensureCheckActionActive(checkToken);
+          if (checkAbortSignal?.aborted) {
+            throw new CheckAbortError(
+              "Check was cancelled",
+              checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
+            );
+          }
+          if (analyzed.error) {
+            throw analyzed.error;
+          }
+          const result = analyzed.result || {};
+          const paragraphApiErrors = result.apiErrors || 0;
+          const paragraphNonCommaSkips = result.nonCommaSkips || 0;
+          const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
+          apiErrors += paragraphApiErrors;
+          nonCommaSkips += paragraphNonCommaSkips;
+          nonCommaSalvaged += paragraphNonCommaSalvaged;
+          recordUnstableOnlineParagraphOutcome(job.paragraphIndex, job.sourceText, {
+            nonCommaSkips: paragraphNonCommaSkips,
+          });
+          const paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
+          if (!paragraphCacheDisabled && paragraphStable) {
+            const cacheEntry = makeOnlineParagraphCacheEntry(job.paragraphHash, result);
+            onlineParagraphAnalysisCache[job.paragraphIndex] = cacheEntry || null;
+          } else if (!paragraphCacheDisabled) {
+            onlineParagraphAnalysisCache[job.paragraphIndex] = null;
+          }
+          const renderReadyResult = prepareSuggestionsForRender({
+            paragraphIndex: job.paragraphIndex,
+            snapshotText: job.sourceText,
+            sourceText: result?.anchorsEntry?.originalText ?? job.sourceText,
+            suggestions: result.suggestions,
+          });
+          if (renderReadyResult.renderDedupDropped > 0) {
+            log("Render dedupe (fresh)", {
+              paragraphIndex: job.paragraphIndex,
+              dropped: renderReadyResult.renderDedupDropped,
+              before: Array.isArray(result.suggestions) ? result.suggestions.length : 0,
+              after: renderReadyResult.suggestions.length,
+            });
+          }
+          if (
+            renderReadyResult.planDropped > 0 ||
+            renderReadyResult.noopCount > 0 ||
+            renderReadyResult.mergedGroupCount > 0
+          ) {
+            log("Render plan prune (fresh)", {
+              paragraphIndex: job.paragraphIndex,
+              dropped: renderReadyResult.planDropped,
+              planCount: renderReadyResult.planCount,
+              noop: renderReadyResult.noopCount,
+              skipped: renderReadyResult.skippedCount,
+              mergedGroups: renderReadyResult.mergedGroupCount,
+              after: renderReadyResult.suggestions.length,
+            });
+          }
+          suggestionsDetected += renderReadyResult.suggestions.length;
+          const renderOutcome = await renderSuggestionsForParagraph({
+            paragraphIndex: job.paragraphIndex,
+            paragraph: job.paragraph,
+            sourceText: job.sourceText,
+            suggestionsToRender: renderReadyResult.suggestions,
+          });
+          suggestions += renderOutcome.highlighted;
+          await flushHighlightsIfNeeded(renderOutcome.highlighted);
+        } catch (paragraphErr) {
+          if (!paragraphCacheDisabled) {
+            onlineParagraphAnalysisCache[job.paragraphIndex] = null;
+          }
+          if (
+            isAbortLikeError(paragraphErr) ||
+            checkAbortSignal?.aborted ||
+            checkToken?.cancelled
+          ) {
+            throw new CheckAbortError(
+              "Check was cancelled",
+              checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
+            );
+          }
+          if (
+            paragraphErr instanceof CheckAbortError &&
+            paragraphErr.reason === CHECK_ABORT_REASON_TIMEOUT
+          ) {
+            throw paragraphErr;
+          }
+          if (
+            paragraphErr instanceof CheckAbortError &&
+            paragraphErr.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT
+          ) {
+            apiErrors++;
+            notifyParagraphTimeout(job.paragraphIndex, paragraphTimeoutMs);
+            continue;
+          }
+          apiErrors++;
+          warn(`P${job.paragraphIndex} ONLINE: paragraph processing failed`, paragraphErr);
+          notifyApiUnavailable();
         } finally {
-          const paragraphElapsedMs = Math.max(0, tnow() - paragraphStartedAt);
-          paragraphTimingCount++;
-          paragraphTimingTotalMs += paragraphElapsedMs;
-          paragraphTimingMaxMs = Math.max(paragraphTimingMaxMs, paragraphElapsedMs);
-          paragraphTimingMinMs = Math.min(paragraphTimingMinMs, paragraphElapsedMs);
+          const renderElapsedMs = Math.max(0, tnow() - paragraphPhaseStartedAt);
+          const analysisElapsedMs = Math.max(0, Number(analyzed.durationMs) || 0);
+          recordParagraphTiming(analysisElapsedMs + renderElapsedMs);
         }
       }
 

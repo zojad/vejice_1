@@ -35,13 +35,45 @@ function resolveApiUrl() {
 
 const API_URL = resolveApiUrl();
 
+function isLocalhostHostname(hostname = "") {
+  const normalized = typeof hostname === "string" ? hostname.trim().toLowerCase() : "";
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+}
+
+function isLocalApiTarget(url = "") {
+  const safeUrl = typeof url === "string" ? url.trim() : "";
+  if (safeUrl) {
+    try {
+      const baseOrigin =
+        typeof window !== "undefined" && typeof window.location?.origin === "string"
+          ? window.location.origin
+          : "http://localhost";
+      const parsed = new URL(safeUrl, baseOrigin);
+      if (isLocalhostHostname(parsed.hostname)) return true;
+    } catch (_err) {
+      // Fall through to origin-based heuristic.
+    }
+  }
+  return (
+    typeof window !== "undefined" &&
+    typeof window.location?.hostname === "string" &&
+    isLocalhostHostname(window.location.hostname)
+  );
+}
+
+const USE_LOCAL_RETRY_PROFILE = isLocalApiTarget(API_URL);
+
 const API_KEY =
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
 const DEFAULT_API_MAX_ATTEMPTS = 2;
+const LOCAL_API_MAX_ATTEMPTS = 1;
 const DEFAULT_API_RETRY_BASE_DELAY_MS = 400;
 const DEFAULT_API_RETRY_MAX_DELAY_MS = 2500;
 const DEFAULT_API_RETRY_JITTER_MS = 250;
+const LOCAL_API_RETRY_BASE_DELAY_MS = 150;
+const LOCAL_API_RETRY_MAX_DELAY_MS = 900;
+const LOCAL_API_RETRY_JITTER_MS = 90;
 const DEFAULT_API_CIRCUIT_BREAKER_THRESHOLD = 4;
 const DEFAULT_API_CIRCUIT_BREAKER_COOLDOWN_MS = 20000;
 
@@ -396,7 +428,10 @@ function resolveApiMaxAttempts() {
           process.env?.VEJICE_API_MAX_ATTEMPTS ?? process.env?.VEJICE_MAX_API_ATTEMPTS
         )
       : undefined;
-  const resolved = winValue ?? envValue ?? DEFAULT_API_MAX_ATTEMPTS;
+  const defaultAttempts = USE_LOCAL_RETRY_PROFILE
+    ? LOCAL_API_MAX_ATTEMPTS
+    : DEFAULT_API_MAX_ATTEMPTS;
+  const resolved = winValue ?? envValue ?? defaultAttempts;
   return Math.max(1, Math.min(5, Math.round(resolved)));
 }
 
@@ -435,10 +470,19 @@ function resolveApiNumberSetting({
 }
 
 const API_MAX_ATTEMPTS = resolveApiMaxAttempts();
+const RETRY_BASE_DELAY_DEFAULT = USE_LOCAL_RETRY_PROFILE
+  ? LOCAL_API_RETRY_BASE_DELAY_MS
+  : DEFAULT_API_RETRY_BASE_DELAY_MS;
+const RETRY_MAX_DELAY_DEFAULT = USE_LOCAL_RETRY_PROFILE
+  ? LOCAL_API_RETRY_MAX_DELAY_MS
+  : DEFAULT_API_RETRY_MAX_DELAY_MS;
+const RETRY_JITTER_DEFAULT = USE_LOCAL_RETRY_PROFILE
+  ? LOCAL_API_RETRY_JITTER_MS
+  : DEFAULT_API_RETRY_JITTER_MS;
 const API_RETRY_BASE_DELAY_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_BASE_DELAY_MS__"],
   envKeys: ["VEJICE_API_RETRY_BASE_DELAY_MS"],
-  defaultValue: DEFAULT_API_RETRY_BASE_DELAY_MS,
+  defaultValue: RETRY_BASE_DELAY_DEFAULT,
   min: 100,
   max: 5000,
   round: true,
@@ -446,7 +490,7 @@ const API_RETRY_BASE_DELAY_MS = resolveApiNumberSetting({
 const API_RETRY_MAX_DELAY_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_MAX_DELAY_MS__"],
   envKeys: ["VEJICE_API_RETRY_MAX_DELAY_MS"],
-  defaultValue: DEFAULT_API_RETRY_MAX_DELAY_MS,
+  defaultValue: RETRY_MAX_DELAY_DEFAULT,
   min: 250,
   max: 20000,
   round: true,
@@ -454,7 +498,7 @@ const API_RETRY_MAX_DELAY_MS = resolveApiNumberSetting({
 const API_RETRY_JITTER_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_JITTER_MS__"],
   envKeys: ["VEJICE_API_RETRY_JITTER_MS"],
-  defaultValue: DEFAULT_API_RETRY_JITTER_MS,
+  defaultValue: RETRY_JITTER_DEFAULT,
   min: 0,
   max: 5000,
   round: true,

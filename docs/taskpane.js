@@ -8475,11 +8475,37 @@ function resolveApiUrl() {
   return "/api/postavi_vejice";
 }
 var API_URL = resolveApiUrl();
+function isLocalhostHostname() {
+  var hostname = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
+  var normalized = typeof hostname === "string" ? hostname.trim().toLowerCase() : "";
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+}
+function isLocalApiTarget() {
+  var _window$location3;
+  var url = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
+  var safeUrl = typeof url === "string" ? url.trim() : "";
+  if (safeUrl) {
+    try {
+      var _window$location2;
+      var baseOrigin = typeof window !== "undefined" && typeof ((_window$location2 = window.location) === null || _window$location2 === void 0 ? void 0 : _window$location2.origin) === "string" ? window.location.origin : "http://localhost";
+      var parsed = new URL(safeUrl, baseOrigin);
+      if (isLocalhostHostname(parsed.hostname)) return true;
+    } catch (_err) {
+      // Fall through to origin-based heuristic.
+    }
+  }
+  return typeof window !== "undefined" && typeof ((_window$location3 = window.location) === null || _window$location3 === void 0 ? void 0 : _window$location3.hostname) === "string" && isLocalhostHostname(window.location.hostname);
+}
+var USE_LOCAL_RETRY_PROFILE = isLocalApiTarget(API_URL);
 var API_KEY = typeof window !== "undefined" && window.__VEJICE_API_KEY || "";
 var DEFAULT_API_MAX_ATTEMPTS = 2;
+var LOCAL_API_MAX_ATTEMPTS = 1;
 var DEFAULT_API_RETRY_BASE_DELAY_MS = 400;
 var DEFAULT_API_RETRY_MAX_DELAY_MS = 2500;
 var DEFAULT_API_RETRY_JITTER_MS = 250;
+var LOCAL_API_RETRY_BASE_DELAY_MS = 150;
+var LOCAL_API_RETRY_MAX_DELAY_MS = 900;
+var LOCAL_API_RETRY_JITTER_MS = 90;
 var DEFAULT_API_CIRCUIT_BREAKER_THRESHOLD = 4;
 var DEFAULT_API_CIRCUIT_BREAKER_COOLDOWN_MS = 20000;
 var boolFromString = function boolFromString(value) {
@@ -8814,7 +8840,8 @@ function resolveApiMaxAttempts() {
   var _window$__VEJICE_API_, _process$env$VEJICE_A, _process$env5, _process$env6, _ref2;
   var winValue = typeof window !== "undefined" ? numberFromUnknown((_window$__VEJICE_API_ = window.__VEJICE_API_MAX_ATTEMPTS) !== null && _window$__VEJICE_API_ !== void 0 ? _window$__VEJICE_API_ : window.__VEJICE_MAX_API_ATTEMPTS__) : undefined;
   var envValue = typeof process !== "undefined" ? numberFromUnknown((_process$env$VEJICE_A = (_process$env5 = process.env) === null || _process$env5 === void 0 ? void 0 : _process$env5.VEJICE_API_MAX_ATTEMPTS) !== null && _process$env$VEJICE_A !== void 0 ? _process$env$VEJICE_A : (_process$env6 = process.env) === null || _process$env6 === void 0 ? void 0 : _process$env6.VEJICE_MAX_API_ATTEMPTS) : undefined;
-  var resolved = (_ref2 = winValue !== null && winValue !== void 0 ? winValue : envValue) !== null && _ref2 !== void 0 ? _ref2 : DEFAULT_API_MAX_ATTEMPTS;
+  var defaultAttempts = USE_LOCAL_RETRY_PROFILE ? LOCAL_API_MAX_ATTEMPTS : DEFAULT_API_MAX_ATTEMPTS;
+  var resolved = (_ref2 = winValue !== null && winValue !== void 0 ? winValue : envValue) !== null && _ref2 !== void 0 ? _ref2 : defaultAttempts;
   return Math.max(1, Math.min(5, Math.round(resolved)));
 }
 function resolveApiNumberSetting(_ref3) {
@@ -8872,10 +8899,13 @@ function resolveApiNumberSetting(_ref3) {
   return Math.max(min, Math.min(max, normalized));
 }
 var API_MAX_ATTEMPTS = resolveApiMaxAttempts();
+var RETRY_BASE_DELAY_DEFAULT = USE_LOCAL_RETRY_PROFILE ? LOCAL_API_RETRY_BASE_DELAY_MS : DEFAULT_API_RETRY_BASE_DELAY_MS;
+var RETRY_MAX_DELAY_DEFAULT = USE_LOCAL_RETRY_PROFILE ? LOCAL_API_RETRY_MAX_DELAY_MS : DEFAULT_API_RETRY_MAX_DELAY_MS;
+var RETRY_JITTER_DEFAULT = USE_LOCAL_RETRY_PROFILE ? LOCAL_API_RETRY_JITTER_MS : DEFAULT_API_RETRY_JITTER_MS;
 var API_RETRY_BASE_DELAY_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_BASE_DELAY_MS__"],
   envKeys: ["VEJICE_API_RETRY_BASE_DELAY_MS"],
-  defaultValue: DEFAULT_API_RETRY_BASE_DELAY_MS,
+  defaultValue: RETRY_BASE_DELAY_DEFAULT,
   min: 100,
   max: 5000,
   round: true
@@ -8883,7 +8913,7 @@ var API_RETRY_BASE_DELAY_MS = resolveApiNumberSetting({
 var API_RETRY_MAX_DELAY_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_MAX_DELAY_MS__"],
   envKeys: ["VEJICE_API_RETRY_MAX_DELAY_MS"],
-  defaultValue: DEFAULT_API_RETRY_MAX_DELAY_MS,
+  defaultValue: RETRY_MAX_DELAY_DEFAULT,
   min: 250,
   max: 20000,
   round: true
@@ -8891,7 +8921,7 @@ var API_RETRY_MAX_DELAY_MS = resolveApiNumberSetting({
 var API_RETRY_JITTER_MS = resolveApiNumberSetting({
   windowKeys: ["__VEJICE_API_RETRY_JITTER_MS__"],
   envKeys: ["VEJICE_API_RETRY_JITTER_MS"],
-  defaultValue: DEFAULT_API_RETRY_JITTER_MS,
+  defaultValue: RETRY_JITTER_DEFAULT,
   min: 0,
   max: 5000,
   round: true
@@ -11005,17 +11035,15 @@ function _nonIterableRest() { throw new TypeError("Invalid attempt to destructur
 function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
 function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
 function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
+function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/babel/babel/blob/main/packages/babel-helpers/LICENSE */ var e, t, r = "function" == typeof Symbol ? Symbol : {}, n = r.iterator || "@@iterator", o = r.toStringTag || "@@toStringTag"; function i(r, n, o, i) { var c = n && n.prototype instanceof Generator ? n : Generator, u = Object.create(c.prototype); return _regeneratorDefine2(u, "_invoke", function (r, n, o) { var i, c, u, f = 0, p = o || [], y = !1, G = { p: 0, n: 0, v: e, a: d, f: d.bind(e, 4), d: function d(t, r) { return i = t, c = 0, u = e, G.n = r, a; } }; function d(r, n) { for (c = r, u = n, t = 0; !y && f && !o && t < p.length; t++) { var o, i = p[t], d = G.p, l = i[2]; r > 3 ? (o = l === n) && (u = i[(c = i[4]) ? 5 : (c = 3, 3)], i[4] = i[5] = e) : i[0] <= d && ((o = r < 2 && d < i[1]) ? (c = 0, G.v = n, G.n = i[1]) : d < l && (o = r < 3 || i[0] > n || n > l) && (i[4] = r, i[5] = n, G.n = l, c = 0)); } if (o || r > 1) return a; throw y = !0, n; } return function (o, p, l) { if (f > 1) throw TypeError("Generator is already running"); for (y && 1 === p && d(p, l), c = p, u = l; (t = c < 2 ? e : u) || !y;) { i || (c ? c < 3 ? (c > 1 && (G.n = -1), d(c, u)) : G.n = u : G.v = u); try { if (f = 2, i) { if (c || (o = "next"), t = i[o]) { if (!(t = t.call(i, u))) throw TypeError("iterator result is not an object"); if (!t.done) return t; u = t.value, c < 2 && (c = 0); } else 1 === c && (t = i.return) && t.call(i), c < 2 && (u = TypeError("The iterator does not provide a '" + o + "' method"), c = 1); i = e; } else if ((t = (y = G.n < 0) ? u : r.call(n, G)) !== a) break; } catch (t) { i = e, c = 1, u = t; } finally { f = 1; } } return { value: t, done: y }; }; }(r, o, i), !0), u; } var a = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} t = Object.getPrototypeOf; var c = [][n] ? t(t([][n]())) : (_regeneratorDefine2(t = {}, n, function () { return this; }), t), u = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(c); function f(e) { return Object.setPrototypeOf ? Object.setPrototypeOf(e, GeneratorFunctionPrototype) : (e.__proto__ = GeneratorFunctionPrototype, _regeneratorDefine2(e, o, "GeneratorFunction")), e.prototype = Object.create(u), e; } return GeneratorFunction.prototype = GeneratorFunctionPrototype, _regeneratorDefine2(u, "constructor", GeneratorFunctionPrototype), _regeneratorDefine2(GeneratorFunctionPrototype, "constructor", GeneratorFunction), GeneratorFunction.displayName = "GeneratorFunction", _regeneratorDefine2(GeneratorFunctionPrototype, o, "GeneratorFunction"), _regeneratorDefine2(u), _regeneratorDefine2(u, o, "Generator"), _regeneratorDefine2(u, n, function () { return this; }), _regeneratorDefine2(u, "toString", function () { return "[object Generator]"; }), (_regenerator = function _regenerator() { return { w: i, m: f }; })(); }
+function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
 function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread(); }
 function _nonIterableSpread() { throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArray(r) { if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r); }
 function _arrayWithoutHoles(r) { if (Array.isArray(r)) return _arrayLikeToArray(r); }
-function _regenerator() { /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/babel/babel/blob/main/packages/babel-helpers/LICENSE */ var e, t, r = "function" == typeof Symbol ? Symbol : {}, n = r.iterator || "@@iterator", o = r.toStringTag || "@@toStringTag"; function i(r, n, o, i) { var c = n && n.prototype instanceof Generator ? n : Generator, u = Object.create(c.prototype); return _regeneratorDefine2(u, "_invoke", function (r, n, o) { var i, c, u, f = 0, p = o || [], y = !1, G = { p: 0, n: 0, v: e, a: d, f: d.bind(e, 4), d: function d(t, r) { return i = t, c = 0, u = e, G.n = r, a; } }; function d(r, n) { for (c = r, u = n, t = 0; !y && f && !o && t < p.length; t++) { var o, i = p[t], d = G.p, l = i[2]; r > 3 ? (o = l === n) && (u = i[(c = i[4]) ? 5 : (c = 3, 3)], i[4] = i[5] = e) : i[0] <= d && ((o = r < 2 && d < i[1]) ? (c = 0, G.v = n, G.n = i[1]) : d < l && (o = r < 3 || i[0] > n || n > l) && (i[4] = r, i[5] = n, G.n = l, c = 0)); } if (o || r > 1) return a; throw y = !0, n; } return function (o, p, l) { if (f > 1) throw TypeError("Generator is already running"); for (y && 1 === p && d(p, l), c = p, u = l; (t = c < 2 ? e : u) || !y;) { i || (c ? c < 3 ? (c > 1 && (G.n = -1), d(c, u)) : G.n = u : G.v = u); try { if (f = 2, i) { if (c || (o = "next"), t = i[o]) { if (!(t = t.call(i, u))) throw TypeError("iterator result is not an object"); if (!t.done) return t; u = t.value, c < 2 && (c = 0); } else 1 === c && (t = i.return) && t.call(i), c < 2 && (u = TypeError("The iterator does not provide a '" + o + "' method"), c = 1); i = e; } else if ((t = (y = G.n < 0) ? u : r.call(n, G)) !== a) break; } catch (t) { i = e, c = 1, u = t; } finally { f = 1; } } return { value: t, done: y }; }; }(r, o, i), !0), u; } var a = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} t = Object.getPrototypeOf; var c = [][n] ? t(t([][n]())) : (_regeneratorDefine2(t = {}, n, function () { return this; }), t), u = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(c); function f(e) { return Object.setPrototypeOf ? Object.setPrototypeOf(e, GeneratorFunctionPrototype) : (e.__proto__ = GeneratorFunctionPrototype, _regeneratorDefine2(e, o, "GeneratorFunction")), e.prototype = Object.create(u), e; } return GeneratorFunction.prototype = GeneratorFunctionPrototype, _regeneratorDefine2(u, "constructor", GeneratorFunctionPrototype), _regeneratorDefine2(GeneratorFunctionPrototype, "constructor", GeneratorFunction), GeneratorFunction.displayName = "GeneratorFunction", _regeneratorDefine2(GeneratorFunctionPrototype, o, "GeneratorFunction"), _regeneratorDefine2(u), _regeneratorDefine2(u, o, "Generator"), _regeneratorDefine2(u, n, function () { return this; }), _regeneratorDefine2(u, "toString", function () { return "[object Generator]"; }), (_regenerator = function _regenerator() { return { w: i, m: f }; })(); }
-function _regeneratorDefine2(e, r, n, t) { var i = Object.defineProperty; try { i({}, "", {}); } catch (e) { i = 0; } _regeneratorDefine2 = function _regeneratorDefine(e, r, n, t) { function o(r, n) { _regeneratorDefine2(e, r, function (e) { return this._invoke(r, n, e); }); } r ? i ? i(e, r, { value: n, enumerable: !t, configurable: !t, writable: !t }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2)); }, _regeneratorDefine2(e, r, n, t); }
 function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t.return || t.return(); } finally { if (u) throw o; } } }; }
 function _unsupportedIterableToArray(r, a) { if (r) { if ("string" == typeof r) return _arrayLikeToArray(r, a); var t = {}.toString.call(r).slice(8, -1); return "Object" === t && r.constructor && (t = r.constructor.name), "Map" === t || "Set" === t ? Array.from(r) : "Arguments" === t || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : void 0; } }
 function _arrayLikeToArray(r, a) { (null == a || a > r.length) && (a = r.length); for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e]; return n; }
-function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
-function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
 function _classCallCheck(a, n) { if (!(a instanceof n)) throw new TypeError("Cannot call a class as a function"); }
 function _defineProperties(e, r) { for (var t = 0; t < r.length; t++) { var o = r[t]; o.enumerable = o.enumerable || !1, o.configurable = !0, "value" in o && (o.writable = !0), Object.defineProperty(e, _toPropertyKey(o.key), o); } }
 function _createClass(e, r, t) { return r && _defineProperties(e.prototype, r), t && _defineProperties(e, t), Object.defineProperty(e, "prototype", { writable: !1 }), e; }
@@ -11024,6 +11052,8 @@ function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t =
 function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, { value: t, enumerable: !0, configurable: !0, writable: !0 }) : e[r] = t, e; }
 function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" == _typeof(i) ? i : i + ""; }
 function _toPrimitive(t, r) { if ("object" != _typeof(t) || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != _typeof(i)) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
+function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
+function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
 
 
 
@@ -11040,6 +11070,11 @@ var LEMMA_HEURISTIC_MIN_LEN = 700;
 var API_RECHUNK_MAX_DEPTH = 2;
 var API_RECHUNK_MIN_CHARS = 260;
 var SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
+var CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
+var LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 2;
+var CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
+var CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
+var CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 var API_FAILURE_COOLDOWN_MS = 90000;
 var TRAILING_COMMA_REGEX = /[,\s]+$/;
 var LOG_PREFIX = "[Vejice DEBUG DUMP]";
@@ -11058,6 +11093,60 @@ function throwIfAborted(signal) {
     throw reason;
   }
   throw new Error(typeof reason === "string" ? reason : "Request aborted");
+}
+function runWithConcurrency(_x, _x2, _x3) {
+  return _runWithConcurrency.apply(this, arguments);
+}
+function _runWithConcurrency() {
+  _runWithConcurrency = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(items, concurrency, worker) {
+    var safeConcurrency, results, cursor, runners;
+    return _regenerator().w(function (_context5) {
+      while (1) switch (_context5.n) {
+        case 0:
+          if (!(!Array.isArray(items) || !items.length)) {
+            _context5.n = 1;
+            break;
+          }
+          return _context5.a(2, []);
+        case 1:
+          safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, items.length));
+          results = new Array(items.length);
+          cursor = 0;
+          runners = Array.from({
+            length: safeConcurrency
+          }, /*#__PURE__*/_asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee4() {
+            var index;
+            return _regenerator().w(function (_context4) {
+              while (1) switch (_context4.n) {
+                case 0:
+                  if (false) // removed by dead control flow
+{}
+                  index = cursor++;
+                  if (!(index >= items.length)) {
+                    _context4.n = 1;
+                    break;
+                  }
+                  return _context4.a(2);
+                case 1:
+                  _context4.n = 2;
+                  return worker(items[index], index);
+                case 2:
+                  results[index] = _context4.v;
+                  _context4.n = 0;
+                  break;
+                case 3:
+                  return _context4.a(2);
+              }
+            }, _callee4);
+          })));
+          _context5.n = 2;
+          return Promise.all(runners);
+        case 2:
+          return _context5.a(2, results);
+      }
+    }, _callee5);
+  }));
+  return _runWithConcurrency.apply(this, arguments);
 }
 if (typeof window !== "undefined") {
   if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
@@ -11130,6 +11219,9 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
     this.lastDebugDump = null;
     this.debugDumps = [];
     this.apiChunkFailureCooldownUntil = new Map();
+    this.chunkApiCacheMaxEntries = resolveChunkApiCacheMaxEntries();
+    this.chunkApiCacheTtlMs = resolveChunkApiCacheTtlMs();
+    this.chunkApiResponseCache = new Map();
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || function () {},
       onSentenceTooLong: notifiers.onSentenceTooLong || function () {},
@@ -11140,16 +11232,17 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
   return _createClass(CommaSuggestionEngine, [{
     key: "analyzeParagraph",
     value: function () {
-      var _analyzeParagraph = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(_ref2) {
+      var _analyzeParagraph = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(_ref2) {
         var _this = this;
-        var paragraphIndex, originalText, normalizedOriginalText, paragraphDocOffset, _ref2$forceSentenceCh, forceSentenceChunks, _ref2$conservativeSen, conservativeSentenceFallback, _ref2$abortSignal, abortSignal, paragraphText, forceSentenceByLength, useSentenceChunks, debugEnabled, debugDump, chunks, normalizedSource, processedMeta, chunkDetails, apiErrors, nonCommaChunkSkips, nonCommaChunkSalvaged, makeSnippet, logSkippedChunk, _processChunk, _iterator3, _step3, chunk, hasDetailedChunk, canFallbackToSentences, _anchorsEntry, correctedParagraph, sourceTokens, targetTokens, anchorsEntry, suggestions, suggestionDedupKeys, debugOpFlow, _i, _chunkDetails, _entry$metaRef, _entry$metaRef$remapp, entry, detailRef, apiOpsPresent, ops, fallbackOps, correctionOps, correctionTracking, correctionsPresent, _entry$metaRef2, usingFallbackOnly, allOps, opFlow, _iterator4, _step4, _entry$metaRef3, op, offset, baseOp, adjustedOp, suggestion, dedupKey, _t4, _t5, _t6, _t7;
-        return _regenerator().w(function (_context2) {
-          while (1) switch (_context2.p = _context2.n) {
+        var paragraphIndex, originalText, normalizedOriginalText, paragraphDocOffset, _ref2$forceSentenceCh, forceSentenceChunks, _ref2$conservativeSen, conservativeSentenceFallback, _ref2$abortSignal, abortSignal, paragraphText, forceSentenceByLength, useSentenceChunks, debugEnabled, debugDump, chunks, normalizedSource, makeSnippet, logSkippedChunk, mergeChunkProcessResults, _processChunk, chunkAnalyzeConcurrency, chunkResults, mergedChunkResults, processedMeta, chunkDetails, apiErrors, nonCommaChunkSkips, nonCommaChunkSalvaged, compareChunks, hasDetailedChunk, canFallbackToSentences, _anchorsEntry, correctedParagraph, sourceTokens, targetTokens, anchorsEntry, suggestions, suggestionDedupKeys, debugOpFlow, _iterator4, _step4, _entry$metaRef, _entry$metaRef$remapp, entry, detailRef, apiOpsPresent, ops, fallbackOps, correctionOps, correctionTracking, correctionsPresent, _entry$metaRef2, usingFallbackOnly, allOps, opFlow, _iterator5, _step5, _entry$metaRef3, op, offset, baseOp, adjustedOp, suggestion, dedupKey, _t6, _t7, _t8, _t9;
+        return _regenerator().w(function (_context3) {
+          while (1) switch (_context3.p = _context3.n) {
             case 0:
               paragraphIndex = _ref2.paragraphIndex, originalText = _ref2.originalText, normalizedOriginalText = _ref2.normalizedOriginalText, paragraphDocOffset = _ref2.paragraphDocOffset, _ref2$forceSentenceCh = _ref2.forceSentenceChunks, forceSentenceChunks = _ref2$forceSentenceCh === void 0 ? false : _ref2$forceSentenceCh, _ref2$conservativeSen = _ref2.conservativeSentenceFallback, conservativeSentenceFallback = _ref2$conservativeSen === void 0 ? false : _ref2$conservativeSen, _ref2$abortSignal = _ref2.abortSignal, abortSignal = _ref2$abortSignal === void 0 ? null : _ref2$abortSignal;
               throwIfAborted(abortSignal);
               paragraphText = typeof originalText === "string" ? originalText : "";
               pruneExpiredChunkFailureCooldowns(this.apiChunkFailureCooldownUntil);
+              this.pruneChunkApiResponseCache(Date.now());
               forceSentenceByLength = paragraphText.length > PARAGRAPH_FIRST_MAX_CHARS;
               useSentenceChunks = forceSentenceChunks || forceSentenceByLength;
               debugEnabled = isDeepDebugEnabled();
@@ -11166,13 +11259,13 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
               } : null;
               chunks = null;
               if (!useSentenceChunks) {
-                _context2.n = 2;
+                _context3.n = 2;
                 break;
               }
-              _context2.n = 1;
+              _context3.n = 1;
               return splitParagraphIntoChunksWithLemmas(originalText, MAX_PARAGRAPH_CHARS, this.anchorProvider);
             case 1:
-              chunks = _context2.v;
+              chunks = _context3.v;
             case 2:
               if (!Array.isArray(chunks) || !chunks.length) {
                 chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
@@ -11181,11 +11274,11 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 });
               }
               if (chunks.length) {
-                _context2.n = 4;
+                _context3.n = 4;
                 break;
               }
-              _t4 = [];
-              _context2.n = 3;
+              _t6 = [];
+              _context3.n = 3;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -11195,25 +11288,20 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 documentOffset: paragraphDocOffset
               });
             case 3:
-              _t5 = _context2.v;
-              return _context2.a(2, {
-                suggestions: _t4,
+              _t7 = _context3.v;
+              return _context3.a(2, {
+                suggestions: _t6,
                 apiErrors: 0,
                 nonCommaSkips: 0,
                 nonCommaSalvaged: 0,
                 processedAny: false,
-                anchorsEntry: _t5
+                anchorsEntry: _t7
               });
             case 4:
               normalizedSource = typeof normalizedOriginalText === "string" ? normalizedOriginalText : (0,_textUtils_js__WEBPACK_IMPORTED_MODULE_1__.normalizeParagraphWhitespace)(originalText);
               chunks.forEach(function (chunk) {
                 chunk.normalizedText = normalizedSource.slice(chunk.start, chunk.end);
               });
-              processedMeta = [];
-              chunkDetails = [];
-              apiErrors = 0;
-              nonCommaChunkSkips = 0;
-              nonCommaChunkSalvaged = 0;
               makeSnippet = function makeSnippet(value) {
                 var max = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 140;
                 return typeof value === "string" ? value.slice(0, max).replace(/\s+/g, " ").trim() : "";
@@ -11241,19 +11329,56 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                   // Ignore logging failures in restricted runtimes.
                 }
               };
+              mergeChunkProcessResults = function mergeChunkProcessResults() {
+                var results = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : [];
+                var merged = {
+                  processedMeta: [],
+                  chunkDetails: [],
+                  apiErrors: 0,
+                  nonCommaSkips: 0,
+                  nonCommaSalvaged: 0
+                };
+                var _iterator = _createForOfIteratorHelper(results),
+                  _step;
+                try {
+                  for (_iterator.s(); !(_step = _iterator.n()).done;) {
+                    var entry = _step.value;
+                    if (!entry) continue;
+                    if (Array.isArray(entry.processedMeta) && entry.processedMeta.length) {
+                      var _merged$processedMeta;
+                      (_merged$processedMeta = merged.processedMeta).push.apply(_merged$processedMeta, _toConsumableArray(entry.processedMeta));
+                    }
+                    if (Array.isArray(entry.chunkDetails) && entry.chunkDetails.length) {
+                      var _merged$chunkDetails;
+                      (_merged$chunkDetails = merged.chunkDetails).push.apply(_merged$chunkDetails, _toConsumableArray(entry.chunkDetails));
+                    }
+                    merged.apiErrors += entry.apiErrors || 0;
+                    merged.nonCommaSkips += entry.nonCommaSkips || 0;
+                    merged.nonCommaSalvaged += entry.nonCommaSalvaged || 0;
+                  }
+                } catch (err) {
+                  _iterator.e(err);
+                } finally {
+                  _iterator.f();
+                }
+                return merged;
+              };
               _processChunk = /*#__PURE__*/function () {
                 var _ref3 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(chunk) {
                   var _detail;
                   var depth,
                     chunkInputText,
                     meta,
+                    chunkResult,
                     detail,
                     chunkRequestText,
                     chunkFailureKey,
                     cooldownUntil,
+                    cachedDetail,
                     retryChunks,
-                    _iterator,
-                    _step,
+                    retryResults,
+                    _iterator2,
+                    _step2,
                     retryChunk,
                     correctedChunk,
                     baseForDiff,
@@ -11270,8 +11395,9 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                     _detail6,
                     _detail7,
                     salvageRetryChunks,
-                    _iterator2,
-                    _step2,
+                    salvageResults,
+                    _iterator3,
+                    _step3,
                     _retryChunk,
                     shouldForceSyntheticAnchoring,
                     commaOnlyOps,
@@ -11280,7 +11406,9 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                     _args = arguments,
                     _t,
                     _t2,
-                    _t3;
+                    _t3,
+                    _t4,
+                    _t5;
                   return _regenerator().w(function (_context) {
                     while (1) switch (_context.p = _context.n) {
                       case 0:
@@ -11295,7 +11423,13 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                           forceSyntheticAnchoring: false,
                           lowAnchorReliability: Boolean(chunk === null || chunk === void 0 ? void 0 : chunk.lowAnchorReliability)
                         };
-                        processedMeta.push(meta);
+                        chunkResult = {
+                          processedMeta: [meta],
+                          chunkDetails: [],
+                          apiErrors: 0,
+                          nonCommaSkips: 0,
+                          nonCommaSalvaged: 0
+                        };
                         if (!chunk.tooLong) {
                           _context.n = 1;
                           break;
@@ -11305,7 +11439,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                         });
                         _this.notifiers.onSentenceTooLong(paragraphIndex, chunk.length);
                         meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-                        return _context.a(2);
+                        return _context.a(2, chunkResult);
                       case 1:
                         detail = null;
                         chunkRequestText = chunkInputText;
@@ -11319,75 +11453,89 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                           depth: depth,
                           cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now())
                         });
-                        apiErrors++;
+                        chunkResult.apiErrors++;
                         _this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, new Error("Chunk skipped due to recent API failure cooldown"));
                         meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-                        return _context.a(2);
+                        return _context.a(2, chunkResult);
                       case 2:
-                        _context.p = 2;
-                        _context.n = 3;
+                        cachedDetail = _this.getChunkApiCachedDetail(chunkRequestText);
+                        if (!cachedDetail) {
+                          _context.n = 3;
+                          break;
+                        }
+                        detail = cachedDetail;
+                        _this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
+                        _context.n = 16;
+                        break;
+                      case 3:
+                        _context.p = 3;
+                        _context.n = 4;
                         return _this.apiClient.popraviPovedDetailed(chunkRequestText, {
                           signal: abortSignal
                         });
-                      case 3:
+                      case 4:
                         detail = _context.v;
                         _this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
-                        _context.n = 14;
+                        _this.setChunkApiCachedDetail(chunkRequestText, detail);
+                        _context.n = 16;
                         break;
-                      case 4:
-                        _context.p = 4;
+                      case 5:
+                        _context.p = 5;
                         _t = _context.v;
                         if (!isAbortLikeError(_t, abortSignal)) {
-                          _context.n = 5;
+                          _context.n = 6;
                           break;
                         }
                         throw _t;
-                      case 5:
+                      case 6:
                         retryChunks = splitFailedChunkForRetry(chunk, depth);
                         if (!(Array.isArray(retryChunks) && retryChunks.length > 1)) {
-                          _context.n = 13;
+                          _context.n = 15;
                           break;
                         }
-                        processedMeta.pop();
-                        _iterator = _createForOfIteratorHelper(retryChunks);
-                        _context.p = 6;
-                        _iterator.s();
-                      case 7:
-                        if ((_step = _iterator.n()).done) {
-                          _context.n = 9;
-                          break;
-                        }
-                        retryChunk = _step.value;
-                        _context.n = 8;
-                        return _processChunk(retryChunk, depth + 1);
+                        retryResults = [];
+                        _iterator2 = _createForOfIteratorHelper(retryChunks);
+                        _context.p = 7;
+                        _iterator2.s();
                       case 8:
-                        _context.n = 7;
-                        break;
+                        if ((_step2 = _iterator2.n()).done) {
+                          _context.n = 11;
+                          break;
+                        }
+                        retryChunk = _step2.value;
+                        _t2 = retryResults;
+                        _context.n = 9;
+                        return _processChunk(retryChunk, depth + 1);
                       case 9:
-                        _context.n = 11;
-                        break;
+                        _t2.push.call(_t2, _context.v);
                       case 10:
-                        _context.p = 10;
-                        _t2 = _context.v;
-                        _iterator.e(_t2);
+                        _context.n = 8;
+                        break;
                       case 11:
-                        _context.p = 11;
-                        _iterator.f();
-                        return _context.f(11);
+                        _context.n = 13;
+                        break;
                       case 12:
-                        return _context.a(2);
+                        _context.p = 12;
+                        _t3 = _context.v;
+                        _iterator2.e(_t3);
                       case 13:
+                        _context.p = 13;
+                        _iterator2.f();
+                        return _context.f(13);
+                      case 14:
+                        return _context.a(2, mergeChunkProcessResults(retryResults));
+                      case 15:
                         _this.apiChunkFailureCooldownUntil.set(chunkFailureKey, Date.now() + API_FAILURE_COOLDOWN_MS);
                         logSkippedChunk("apiError", chunk, {
                           depth: depth,
                           apiError: (_t === null || _t === void 0 ? void 0 : _t.message) || String(_t || "API error"),
                           cooldownMs: API_FAILURE_COOLDOWN_MS
                         });
-                        apiErrors++;
+                        chunkResult.apiErrors++;
                         _this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, _t);
                         meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-                        return _context.a(2);
-                      case 14:
+                        return _context.a(2, chunkResult);
+                      case 16:
                         correctedChunk = detail.correctedText;
                         baseForDiff = chunk.text || chunkInputText || "";
                         apiCommaOps = normalizeApiCommaOps((_detail = detail) === null || _detail === void 0 ? void 0 : _detail.commaOps, baseForDiff, correctedChunk);
@@ -11417,7 +11565,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                           });
                         }
                         if (!(!hasApiCommaOps && hasNonCommaDrift && !hasCommaDiffOps)) {
-                          _context.n = 15;
+                          _context.n = 17;
                           break;
                         }
                         logSkippedChunk("nonCommaChange", chunk, {
@@ -11425,55 +11573,58 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                           correctedSnippet: makeSnippet(correctedChunk)
                         });
                         _this.notifiers.onChunkNonCommaChanges(paragraphIndex, chunk.index, chunk.text, correctedChunk);
-                        nonCommaChunkSkips++;
+                        chunkResult.nonCommaSkips++;
                         meta.syntheticTokens = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(chunk.text, "p".concat(paragraphIndex, "_c").concat(chunk.index, "_syn_"));
-                        return _context.a(2);
-                      case 15:
+                        return _context.a(2, chunkResult);
+                      case 17:
                         if (!(!hasApiCommaOps && hasNonCommaDrift && hasCommaDiffOps)) {
-                          _context.n = 24;
+                          _context.n = 27;
                           break;
                         }
                         salvageRetryChunks = splitFailedChunkForRetry(chunk, depth);
                         if (!(commaDiffOps.length >= SALVAGE_RECHUNK_MIN_DIFF_OPS && Array.isArray(salvageRetryChunks) && salvageRetryChunks.length > 1)) {
-                          _context.n = 23;
+                          _context.n = 26;
                           break;
                         }
-                        processedMeta.pop();
-                        _iterator2 = _createForOfIteratorHelper(salvageRetryChunks);
-                        _context.p = 16;
-                        _iterator2.s();
-                      case 17:
-                        if ((_step2 = _iterator2.n()).done) {
-                          _context.n = 19;
-                          break;
-                        }
-                        _retryChunk = _step2.value;
-                        _context.n = 18;
-                        return _processChunk(_retryChunk, depth + 1);
-                      case 18:
-                        _context.n = 17;
-                        break;
+                        salvageResults = [];
+                        _iterator3 = _createForOfIteratorHelper(salvageRetryChunks);
+                        _context.p = 18;
+                        _iterator3.s();
                       case 19:
-                        _context.n = 21;
-                        break;
+                        if ((_step3 = _iterator3.n()).done) {
+                          _context.n = 22;
+                          break;
+                        }
+                        _retryChunk = _step3.value;
+                        _t4 = salvageResults;
+                        _context.n = 20;
+                        return _processChunk(_retryChunk, depth + 1);
                       case 20:
-                        _context.p = 20;
-                        _t3 = _context.v;
-                        _iterator2.e(_t3);
+                        _t4.push.call(_t4, _context.v);
                       case 21:
-                        _context.p = 21;
-                        _iterator2.f();
-                        return _context.f(21);
+                        _context.n = 19;
+                        break;
                       case 22:
-                        return _context.a(2);
+                        _context.n = 24;
+                        break;
                       case 23:
-                        nonCommaChunkSalvaged++;
+                        _context.p = 23;
+                        _t5 = _context.v;
+                        _iterator3.e(_t5);
+                      case 24:
+                        _context.p = 24;
+                        _iterator3.f();
+                        return _context.f(24);
+                      case 25:
+                        return _context.a(2, mergeChunkProcessResults(salvageResults));
+                      case 26:
+                        chunkResult.nonCommaSalvaged++;
                         logSkippedChunk("nonCommaChangeSalvaged", chunk, {
                           depth: depth,
                           correctedSnippet: makeSnippet(correctedChunk),
                           fallbackCommaOps: commaDiffOps.length
                         });
-                      case 24:
+                      case 27:
                         meta.detail = detail;
                         shouldForceSyntheticAnchoring = hasNonCommaDrift && !hasApiCommaOps;
                         meta.forceSyntheticAnchoring = shouldForceSyntheticAnchoring;
@@ -11483,12 +11634,12 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                         meta.correctedText = useCommaOnlyCorrectedChunk ? buildCommaOnlyCorrectedText(baseForDiff, commaOnlyOps) : correctedChunk;
                         diffOps = hasApiCommaOps ? [] : commaDiffOps;
                         if (!(!meta.detail && !diffOps.length && !apiCommaOps.length)) {
-                          _context.n = 25;
+                          _context.n = 28;
                           break;
                         }
-                        return _context.a(2);
-                      case 25:
-                        chunkDetails.push({
+                        return _context.a(2, chunkResult);
+                      case 28:
+                        chunkResult.chunkDetails.push({
                           chunk: chunk,
                           metaRef: meta,
                           baseForDiff: baseForDiff,
@@ -11496,51 +11647,68 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                           diffOps: diffOps,
                           apiCommaOps: apiCommaOps
                         });
-                      case 26:
-                        return _context.a(2);
+                        return _context.a(2, chunkResult);
                     }
-                  }, _callee, null, [[16, 20, 21, 22], [6, 10, 11, 12], [2, 4]]);
+                  }, _callee, null, [[18, 23, 24, 25], [7, 12, 13, 14], [3, 5]]);
                 }));
-                return function processChunk(_x2) {
+                return function processChunk(_x5) {
                   return _ref3.apply(this, arguments);
                 };
               }();
-              _iterator3 = _createForOfIteratorHelper(chunks);
-              _context2.p = 5;
-              _iterator3.s();
-            case 6:
-              if ((_step3 = _iterator3.n()).done) {
-                _context2.n = 8;
-                break;
-              }
-              chunk = _step3.value;
-              throwIfAborted(abortSignal);
-              _context2.n = 7;
-              return _processChunk(chunk, 0);
-            case 7:
-              _context2.n = 6;
-              break;
-            case 8:
-              _context2.n = 10;
-              break;
-            case 9:
-              _context2.p = 9;
-              _t6 = _context2.v;
-              _iterator3.e(_t6);
-            case 10:
-              _context2.p = 10;
-              _iterator3.f();
-              return _context2.f(10);
-            case 11:
+              chunkAnalyzeConcurrency = resolveChunkAnalyzeConcurrency();
+              _context3.n = 5;
+              return runWithConcurrency(chunks, chunkAnalyzeConcurrency, /*#__PURE__*/function () {
+                var _ref4 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(chunk) {
+                  return _regenerator().w(function (_context2) {
+                    while (1) switch (_context2.n) {
+                      case 0:
+                        throwIfAborted(abortSignal);
+                        return _context2.a(2, _processChunk(chunk, 0));
+                    }
+                  }, _callee2);
+                }));
+                return function (_x6) {
+                  return _ref4.apply(this, arguments);
+                };
+              }());
+            case 5:
+              chunkResults = _context3.v;
+              mergedChunkResults = mergeChunkProcessResults(chunkResults);
+              processedMeta = mergedChunkResults.processedMeta;
+              chunkDetails = mergedChunkResults.chunkDetails;
+              apiErrors = mergedChunkResults.apiErrors;
+              nonCommaChunkSkips = mergedChunkResults.nonCommaSkips;
+              nonCommaChunkSalvaged = mergedChunkResults.nonCommaSalvaged;
+              compareChunks = function compareChunks(aChunk, bChunk) {
+                var _aChunk$index, _bChunk$index;
+                var aStart = Number.isFinite(aChunk === null || aChunk === void 0 ? void 0 : aChunk.start) ? aChunk.start : 0;
+                var bStart = Number.isFinite(bChunk === null || bChunk === void 0 ? void 0 : bChunk.start) ? bChunk.start : 0;
+                if (aStart !== bStart) return aStart - bStart;
+                var aEnd = Number.isFinite(aChunk === null || aChunk === void 0 ? void 0 : aChunk.end) ? aChunk.end : aStart;
+                var bEnd = Number.isFinite(bChunk === null || bChunk === void 0 ? void 0 : bChunk.end) ? bChunk.end : bStart;
+                if (aEnd !== bEnd) return aEnd - bEnd;
+                var aIndex = String((_aChunk$index = aChunk === null || aChunk === void 0 ? void 0 : aChunk.index) !== null && _aChunk$index !== void 0 ? _aChunk$index : "");
+                var bIndex = String((_bChunk$index = bChunk === null || bChunk === void 0 ? void 0 : bChunk.index) !== null && _bChunk$index !== void 0 ? _bChunk$index : "");
+                return aIndex.localeCompare(bIndex, undefined, {
+                  numeric: true,
+                  sensitivity: "base"
+                });
+              };
+              processedMeta.sort(function (a, b) {
+                return compareChunks(a === null || a === void 0 ? void 0 : a.chunk, b === null || b === void 0 ? void 0 : b.chunk);
+              });
+              chunkDetails.sort(function (a, b) {
+                return compareChunks(a === null || a === void 0 ? void 0 : a.chunk, b === null || b === void 0 ? void 0 : b.chunk);
+              });
               hasDetailedChunk = processedMeta.some(function (meta) {
                 return meta.detail;
               });
               canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;
               if (!(!hasDetailedChunk && canFallbackToSentences && (apiErrors > 0 || nonCommaChunkSkips > 0))) {
-                _context2.n = 12;
+                _context3.n = 6;
                 break;
               }
-              return _context2.a(2, this.analyzeParagraph({
+              return _context3.a(2, this.analyzeParagraph({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
                 normalizedOriginalText: normalizedOriginalText,
@@ -11549,12 +11717,12 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 conservativeSentenceFallback: conservativeSentenceFallback,
                 abortSignal: abortSignal
               }));
-            case 12:
+            case 6:
               if (hasDetailedChunk) {
-                _context2.n = 14;
+                _context3.n = 8;
                 break;
               }
-              _context2.n = 13;
+              _context3.n = 7;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -11563,9 +11731,9 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 targetTokens: [],
                 documentOffset: paragraphDocOffset
               });
-            case 13:
-              _anchorsEntry = _context2.v;
-              return _context2.a(2, {
+            case 7:
+              _anchorsEntry = _context3.v;
+              return _context3.a(2, {
                 suggestions: [],
                 apiErrors: apiErrors,
                 nonCommaSkips: nonCommaChunkSkips,
@@ -11573,7 +11741,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 processedAny: false,
                 anchorsEntry: _anchorsEntry
               });
-            case 14:
+            case 8:
               correctedParagraph = processedMeta.map(function (meta) {
                 var _meta$chunk$trailing;
                 return meta.correctedText + ((_meta$chunk$trailing = meta.chunk.trailing) !== null && _meta$chunk$trailing !== void 0 ? _meta$chunk$trailing : "");
@@ -11609,7 +11777,7 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                   targetTokens.push.apply(targetTokens, _toConsumableArray((0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.tokenizeForAnchoring)(_targetSeed, "".concat(basePrefix, "synt_"))));
                 }
               });
-              _context2.n = 15;
+              _context3.n = 9;
               return this.anchorProvider.getAnchors({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
@@ -11618,18 +11786,20 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 targetTokens: targetTokens,
                 documentOffset: paragraphDocOffset
               });
-            case 15:
-              anchorsEntry = _context2.v;
+            case 9:
+              anchorsEntry = _context3.v;
               suggestions = [];
               suggestionDedupKeys = new Set();
               debugOpFlow = debugEnabled ? [] : null;
-              _i = 0, _chunkDetails = chunkDetails;
-            case 16:
-              if (!(_i < _chunkDetails.length)) {
-                _context2.n = 29;
+              _iterator4 = _createForOfIteratorHelper(chunkDetails);
+              _context3.p = 10;
+              _iterator4.s();
+            case 11:
+              if ((_step4 = _iterator4.n()).done) {
+                _context3.n = 24;
                 break;
               }
-              entry = _chunkDetails[_i];
+              entry = _step4.value;
               detailRef = (_entry$metaRef = entry.metaRef) !== null && _entry$metaRef !== void 0 && _entry$metaRef.detail ? _objectSpread(_objectSpread({}, entry.metaRef.detail), {}, {
                 corrections: (_entry$metaRef$remapp = entry.metaRef.remappedCorrections) !== null && _entry$metaRef$remapp !== void 0 ? _entry$metaRef$remapp : entry.metaRef.detail.corrections
               }) : null;
@@ -11677,11 +11847,11 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
               usingFallbackOnly = !ops.length;
               allOps = mergePreferredCommaOps(ops, fallbackOps);
               if (allOps.length) {
-                _context2.n = 17;
+                _context3.n = 12;
                 break;
               }
-              return _context2.a(3, 28);
-            case 17:
+              return _context3.a(3, 23);
+            case 12:
               opFlow = debugEnabled ? {
                 chunkIndex: entry.chunk.index,
                 fromApiCommaOps: apiOpsPresent ? ops.map(function (op) {
@@ -11698,15 +11868,15 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 keptOps: [],
                 droppedOps: []
               } : null;
-              _iterator4 = _createForOfIteratorHelper(allOps);
-              _context2.p = 18;
-              _iterator4.s();
-            case 19:
-              if ((_step4 = _iterator4.n()).done) {
-                _context2.n = 24;
+              _iterator5 = _createForOfIteratorHelper(allOps);
+              _context3.p = 13;
+              _iterator5.s();
+            case 14:
+              if ((_step5 = _iterator5.n()).done) {
+                _context3.n = 19;
                 break;
               }
-              op = _step4.value;
+              op = _step5.value;
               offset = entry.chunk.start;
               baseOp = op;
               adjustedOp = _objectSpread(_objectSpread({}, baseOp), {}, {
@@ -11715,25 +11885,25 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 correctedPos: (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset
               });
               if (isOpConsistentWithTexts(adjustedOp, originalText, correctedParagraph)) {
-                _context2.n = 20;
+                _context3.n = 15;
                 break;
               }
               if (opFlow) opFlow.droppedOps.push({
                 reason: "inconsistent_with_texts",
                 op: adjustedOp
               });
-              return _context2.a(3, 23);
-            case 20:
+              return _context3.a(3, 18);
+            case 15:
               if (!shouldSuppressDueToRepeatedToken(anchorsEntry, adjustedOp)) {
-                _context2.n = 21;
+                _context3.n = 16;
                 break;
               }
               if (opFlow) opFlow.droppedOps.push({
                 reason: "repeated_token_suppression",
                 op: adjustedOp
               });
-              return _context2.a(3, 23);
-            case 21:
+              return _context3.a(3, 18);
+            case 16:
               suggestion = buildSuggestionFromOp({
                 op: adjustedOp,
                 paragraphIndex: paragraphIndex,
@@ -11743,12 +11913,12 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 lowAnchorReliability: Boolean((_entry$metaRef3 = entry.metaRef) === null || _entry$metaRef3 === void 0 ? void 0 : _entry$metaRef3.lowAnchorReliability)
               });
               if (!suggestion) {
-                _context2.n = 23;
+                _context3.n = 18;
                 break;
               }
               dedupKey = buildSuggestionDedupKey(suggestion);
               if (!(dedupKey && suggestionDedupKeys.has(dedupKey))) {
-                _context2.n = 22;
+                _context3.n = 17;
                 break;
               }
               if (opFlow) {
@@ -11759,8 +11929,8 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                   dedupKey: dedupKey
                 });
               }
-              return _context2.a(3, 23);
-            case 22:
+              return _context3.a(3, 18);
+            case 17:
               if (dedupKey) {
                 suggestionDedupKeys.add(dedupKey);
               }
@@ -11770,29 +11940,39 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 suggestionId: suggestion.id,
                 dedupKey: dedupKey
               });
-            case 23:
-              _context2.n = 19;
+            case 18:
+              _context3.n = 14;
               break;
-            case 24:
-              _context2.n = 26;
+            case 19:
+              _context3.n = 21;
               break;
-            case 25:
-              _context2.p = 25;
-              _t7 = _context2.v;
-              _iterator4.e(_t7);
-            case 26:
-              _context2.p = 26;
-              _iterator4.f();
-              return _context2.f(26);
-            case 27:
+            case 20:
+              _context3.p = 20;
+              _t8 = _context3.v;
+              _iterator5.e(_t8);
+            case 21:
+              _context3.p = 21;
+              _iterator5.f();
+              return _context3.f(21);
+            case 22:
               if (opFlow && debugOpFlow) {
                 debugOpFlow.push(opFlow);
               }
-            case 28:
-              _i++;
-              _context2.n = 16;
+            case 23:
+              _context3.n = 11;
               break;
-            case 29:
+            case 24:
+              _context3.n = 26;
+              break;
+            case 25:
+              _context3.p = 25;
+              _t9 = _context3.v;
+              _iterator4.e(_t9);
+            case 26:
+              _context3.p = 26;
+              _iterator4.f();
+              return _context3.f(26);
+            case 27:
               if (debugEnabled && debugDump) {
                 debugDump.final = {
                   correctedParagraph: correctedParagraph,
@@ -11823,10 +12003,10 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 pushDeepDebugDump(debugDump);
               }
               if (!(!suggestions.length && canFallbackToSentences && nonCommaChunkSkips > 0)) {
-                _context2.n = 30;
+                _context3.n = 28;
                 break;
               }
-              return _context2.a(2, this.analyzeParagraph({
+              return _context3.a(2, this.analyzeParagraph({
                 paragraphIndex: paragraphIndex,
                 originalText: originalText,
                 normalizedOriginalText: normalizedOriginalText,
@@ -11835,8 +12015,8 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 conservativeSentenceFallback: conservativeSentenceFallback,
                 abortSignal: abortSignal
               }));
-            case 30:
-              return _context2.a(2, {
+            case 28:
+              return _context3.a(2, {
                 suggestions: suggestions,
                 apiErrors: apiErrors,
                 nonCommaSkips: nonCommaChunkSkips,
@@ -11846,24 +12026,94 @@ var CommaSuggestionEngine = /*#__PURE__*/function () {
                 correctedParagraph: correctedParagraph
               });
           }
-        }, _callee2, this, [[18, 25, 26, 27], [5, 9, 10, 11]]);
+        }, _callee3, this, [[13, 20, 21, 22], [10, 25, 26, 27]]);
       }));
-      function analyzeParagraph(_x) {
+      function analyzeParagraph(_x4) {
         return _analyzeParagraph.apply(this, arguments);
       }
       return analyzeParagraph;
     }()
+  }, {
+    key: "getChunkApiCachedDetail",
+    value: function getChunkApiCachedDetail(chunkText) {
+      if (!this.isChunkApiCacheEnabled()) return null;
+      var safeText = typeof chunkText === "string" ? chunkText : "";
+      if (!safeText) return null;
+      var key = buildChunkApiCacheKey(safeText);
+      var nowTs = Date.now();
+      var entry = this.chunkApiResponseCache.get(key);
+      if (!entry) return null;
+      if (!entry.expiresAt || entry.expiresAt <= nowTs || entry.chunkText !== safeText) {
+        this.chunkApiResponseCache.delete(key);
+        return null;
+      }
+      // Refresh entry recency to approximate LRU behavior.
+      this.chunkApiResponseCache.delete(key);
+      this.chunkApiResponseCache.set(key, entry);
+      return cloneChunkApiDetail(entry.detail);
+    }
+  }, {
+    key: "setChunkApiCachedDetail",
+    value: function setChunkApiCachedDetail(chunkText, detail) {
+      if (!this.isChunkApiCacheEnabled()) return;
+      var safeText = typeof chunkText === "string" ? chunkText : "";
+      if (!safeText || !detail || _typeof(detail) !== "object") return;
+      var key = buildChunkApiCacheKey(safeText);
+      var nowTs = Date.now();
+      this.chunkApiResponseCache.set(key, {
+        chunkText: safeText,
+        expiresAt: nowTs + this.chunkApiCacheTtlMs,
+        detail: cloneChunkApiDetail(detail)
+      });
+      this.pruneChunkApiResponseCache(nowTs);
+    }
+  }, {
+    key: "isChunkApiCacheEnabled",
+    value: function isChunkApiCacheEnabled() {
+      return this.chunkApiCacheMaxEntries > 0 && this.chunkApiCacheTtlMs > 0;
+    }
+  }, {
+    key: "pruneChunkApiResponseCache",
+    value: function pruneChunkApiResponseCache() {
+      var nowTs = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : Date.now();
+      if (!this.chunkApiResponseCache || typeof this.chunkApiResponseCache.entries !== "function") return;
+      if (!this.isChunkApiCacheEnabled()) {
+        this.chunkApiResponseCache.clear();
+        return;
+      }
+      var _iterator6 = _createForOfIteratorHelper(this.chunkApiResponseCache.entries()),
+        _step6;
+      try {
+        for (_iterator6.s(); !(_step6 = _iterator6.n()).done;) {
+          var _step6$value = _slicedToArray(_step6.value, 2),
+            key = _step6$value[0],
+            entry = _step6$value[1];
+          if (!entry || !entry.expiresAt || entry.expiresAt <= nowTs) {
+            this.chunkApiResponseCache.delete(key);
+          }
+        }
+      } catch (err) {
+        _iterator6.e(err);
+      } finally {
+        _iterator6.f();
+      }
+      while (this.chunkApiResponseCache.size > this.chunkApiCacheMaxEntries) {
+        var oldestKey = this.chunkApiResponseCache.keys().next().value;
+        if (typeof oldestKey === "undefined") break;
+        this.chunkApiResponseCache.delete(oldestKey);
+      }
+    }
   }]);
 }();
-function buildSuggestionFromOp(_ref4) {
+function buildSuggestionFromOp(_ref5) {
   var _op$originalPos2, _op$correctedPos;
-  var op = _ref4.op,
-    paragraphIndex = _ref4.paragraphIndex,
-    anchorsEntry = _ref4.anchorsEntry,
-    originalText = _ref4.originalText,
-    correctedText = _ref4.correctedText,
-    _ref4$lowAnchorReliab = _ref4.lowAnchorReliability,
-    lowAnchorReliability = _ref4$lowAnchorReliab === void 0 ? false : _ref4$lowAnchorReliab;
+  var op = _ref5.op,
+    paragraphIndex = _ref5.paragraphIndex,
+    anchorsEntry = _ref5.anchorsEntry,
+    originalText = _ref5.originalText,
+    correctedText = _ref5.correctedText,
+    _ref5$lowAnchorReliab = _ref5.lowAnchorReliability,
+    lowAnchorReliability = _ref5$lowAnchorReliab === void 0 ? false : _ref5$lowAnchorReliab;
   if (!op) return null;
   if (op.kind === "delete") {
     var _op$originalPos;
@@ -11931,7 +12181,7 @@ function buildSuggestionFromOp(_ref4) {
   });
 }
 function buildSuggestionDedupKey(suggestion) {
-  var _suggestion$meta, _suggestion$meta2, _ref5, _ref6, _ref7, _ref8, _anchor$sourceTokenAt, _anchor$sourceTokenAt2, _anchor$targetTokenAt, _anchor$sourceTokenBe, _anchor$targetTokenBe, _anchor$highlightAnch;
+  var _suggestion$meta, _suggestion$meta2, _ref6, _ref7, _ref8, _ref9, _anchor$sourceTokenAt, _anchor$sourceTokenAt2, _anchor$targetTokenAt, _anchor$sourceTokenBe, _anchor$targetTokenBe, _anchor$highlightAnch;
   if (!suggestion || _typeof(suggestion) !== "object") return null;
   var paragraphIndex = Number.isFinite(suggestion.paragraphIndex) ? suggestion.paragraphIndex : "p";
   var kind = typeof suggestion.kind === "string" ? suggestion.kind : "k";
@@ -11946,22 +12196,22 @@ function buildSuggestionDedupKey(suggestion) {
     return [paragraphIndex, visualBounds.start, visualBounds.end].join("|");
   }
   var anchor = (suggestion === null || suggestion === void 0 || (_suggestion$meta2 = suggestion.meta) === null || _suggestion$meta2 === void 0 ? void 0 : _suggestion$meta2.anchor) || {};
-  var tokenId = (_ref5 = (_ref6 = (_ref7 = (_ref8 = (_anchor$sourceTokenAt = anchor === null || anchor === void 0 || (_anchor$sourceTokenAt2 = anchor.sourceTokenAt) === null || _anchor$sourceTokenAt2 === void 0 ? void 0 : _anchor$sourceTokenAt2.tokenId) !== null && _anchor$sourceTokenAt !== void 0 ? _anchor$sourceTokenAt : anchor === null || anchor === void 0 || (_anchor$targetTokenAt = anchor.targetTokenAt) === null || _anchor$targetTokenAt === void 0 ? void 0 : _anchor$targetTokenAt.tokenId) !== null && _ref8 !== void 0 ? _ref8 : anchor === null || anchor === void 0 || (_anchor$sourceTokenBe = anchor.sourceTokenBefore) === null || _anchor$sourceTokenBe === void 0 ? void 0 : _anchor$sourceTokenBe.tokenId) !== null && _ref7 !== void 0 ? _ref7 : anchor === null || anchor === void 0 || (_anchor$targetTokenBe = anchor.targetTokenBefore) === null || _anchor$targetTokenBe === void 0 ? void 0 : _anchor$targetTokenBe.tokenId) !== null && _ref6 !== void 0 ? _ref6 : anchor === null || anchor === void 0 || (_anchor$highlightAnch = anchor.highlightAnchorTarget) === null || _anchor$highlightAnch === void 0 ? void 0 : _anchor$highlightAnch.tokenId) !== null && _ref5 !== void 0 ? _ref5 : "na";
+  var tokenId = (_ref6 = (_ref7 = (_ref8 = (_ref9 = (_anchor$sourceTokenAt = anchor === null || anchor === void 0 || (_anchor$sourceTokenAt2 = anchor.sourceTokenAt) === null || _anchor$sourceTokenAt2 === void 0 ? void 0 : _anchor$sourceTokenAt2.tokenId) !== null && _anchor$sourceTokenAt !== void 0 ? _anchor$sourceTokenAt : anchor === null || anchor === void 0 || (_anchor$targetTokenAt = anchor.targetTokenAt) === null || _anchor$targetTokenAt === void 0 ? void 0 : _anchor$targetTokenAt.tokenId) !== null && _ref9 !== void 0 ? _ref9 : anchor === null || anchor === void 0 || (_anchor$sourceTokenBe = anchor.sourceTokenBefore) === null || _anchor$sourceTokenBe === void 0 ? void 0 : _anchor$sourceTokenBe.tokenId) !== null && _ref8 !== void 0 ? _ref8 : anchor === null || anchor === void 0 || (_anchor$targetTokenBe = anchor.targetTokenBefore) === null || _anchor$targetTokenBe === void 0 ? void 0 : _anchor$targetTokenBe.tokenId) !== null && _ref7 !== void 0 ? _ref7 : anchor === null || anchor === void 0 || (_anchor$highlightAnch = anchor.highlightAnchorTarget) === null || _anchor$highlightAnch === void 0 ? void 0 : _anchor$highlightAnch.tokenId) !== null && _ref6 !== void 0 ? _ref6 : "na";
   return [paragraphIndex, kind, "na", "t".concat(tokenId), Number.isFinite(opOriginalPos) ? opOriginalPos : "na", Number.isFinite(opCorrectedPos) ? opCorrectedPos : "na"].join("|");
 }
 function firstFiniteValue() {
   var values = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : [];
-  var _iterator5 = _createForOfIteratorHelper(values),
-    _step5;
+  var _iterator7 = _createForOfIteratorHelper(values),
+    _step7;
   try {
-    for (_iterator5.s(); !(_step5 = _iterator5.n()).done;) {
-      var value = _step5.value;
+    for (_iterator7.s(); !(_step7 = _iterator7.n()).done;) {
+      var value = _step7.value;
       if (Number.isFinite(value)) return value;
     }
   } catch (err) {
-    _iterator5.e(err);
+    _iterator7.e(err);
   } finally {
-    _iterator5.f();
+    _iterator7.f();
   }
   return null;
 }
@@ -11989,11 +12239,11 @@ function resolveSuggestionVisualBounds(suggestion) {
     end: end
   };
 }
-function computeSuggestionConfidence(_ref9) {
+function computeSuggestionConfidence(_ref0) {
   var _metadata$sourceToken, _metadata$sourceToken2, _metadata$targetToken, _metadata$targetToken2, _metadata$highlightAn;
-  var kind = _ref9.kind,
-    op = _ref9.op,
-    metadata = _ref9.metadata;
+  var kind = _ref0.kind,
+    op = _ref0.op,
+    metadata = _ref0.metadata;
   var score = 0.5;
   var reasons = [];
   if (op !== null && op !== void 0 && op.fromCorrections) {
@@ -12074,9 +12324,9 @@ function buildSnippetsFromMetadata(metadata, originalText, correctedText) {
     snippets.leftSnippet = originalText.slice(Math.max(0, metadata.charStart - 24), metadata.charStart).trim();
     snippets.rightSnippet = originalText.slice(metadata.charEnd, metadata.charEnd + 24).trim();
   } else if (correctedText) {
-    var _ref0, _metadata$targetCharS, _ref1, _metadata$targetCharE;
-    var start = (_ref0 = (_metadata$targetCharS = metadata.targetCharStart) !== null && _metadata$targetCharS !== void 0 ? _metadata$targetCharS : metadata.charStart) !== null && _ref0 !== void 0 ? _ref0 : 0;
-    var end = (_ref1 = (_metadata$targetCharE = metadata.targetCharEnd) !== null && _metadata$targetCharE !== void 0 ? _metadata$targetCharE : metadata.charEnd) !== null && _ref1 !== void 0 ? _ref1 : start;
+    var _ref1, _metadata$targetCharS, _ref10, _metadata$targetCharE;
+    var start = (_ref1 = (_metadata$targetCharS = metadata.targetCharStart) !== null && _metadata$targetCharS !== void 0 ? _metadata$targetCharS : metadata.charStart) !== null && _ref1 !== void 0 ? _ref1 : 0;
+    var end = (_ref10 = (_metadata$targetCharE = metadata.targetCharEnd) !== null && _metadata$targetCharE !== void 0 ? _metadata$targetCharE : metadata.charEnd) !== null && _ref10 !== void 0 ? _ref10 : start;
     snippets.leftSnippet = correctedText.slice(Math.max(0, start - 24), start).trim();
     snippets.rightSnippet = correctedText.slice(end, end + 24).trim();
   }
@@ -12171,34 +12421,39 @@ function buildChunkFailureKey(paragraphIndex) {
   var safeText = typeof text === "string" ? text : "";
   return "".concat(safeParagraph, ":").concat(safeText.length, ":").concat(hashTextForCooldownKey(safeText));
 }
+function buildChunkApiCacheKey() {
+  var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
+  var safeText = typeof text === "string" ? text : "";
+  return "".concat(safeText.length, ":").concat(hashTextForCooldownKey(safeText));
+}
 function pruneExpiredChunkFailureCooldowns(cooldownMap) {
   if (!cooldownMap || typeof cooldownMap.forEach !== "function") return;
   var now = Date.now();
-  var _iterator6 = _createForOfIteratorHelper(cooldownMap.entries()),
-    _step6;
+  var _iterator8 = _createForOfIteratorHelper(cooldownMap.entries()),
+    _step8;
   try {
-    for (_iterator6.s(); !(_step6 = _iterator6.n()).done;) {
-      var _step6$value = _slicedToArray(_step6.value, 2),
-        key = _step6$value[0],
-        until = _step6$value[1];
+    for (_iterator8.s(); !(_step8 = _iterator8.n()).done;) {
+      var _step8$value = _slicedToArray(_step8.value, 2),
+        key = _step8$value[0],
+        until = _step8$value[1];
       if (!Number.isFinite(until) || until <= now) {
         cooldownMap.delete(key);
       }
     }
   } catch (err) {
-    _iterator6.e(err);
+    _iterator8.e(err);
   } finally {
-    _iterator6.f();
+    _iterator8.f();
   }
 }
 function splitParagraphIntoChunks() {
   var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
   var maxLen = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : MAX_PARAGRAPH_CHARS;
-  var _ref10 = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {},
-    _ref10$preferWholePar = _ref10.preferWholeParagraph,
-    preferWholeParagraph = _ref10$preferWholePar === void 0 ? true : _ref10$preferWholePar,
-    _ref10$conservativePa = _ref10.conservativePack,
-    conservativePack = _ref10$conservativePa === void 0 ? false : _ref10$conservativePa;
+  var _ref11 = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {},
+    _ref11$preferWholePar = _ref11.preferWholeParagraph,
+    preferWholeParagraph = _ref11$preferWholePar === void 0 ? true : _ref11$preferWholePar,
+    _ref11$conservativePa = _ref11.conservativePack,
+    conservativePack = _ref11$conservativePa === void 0 ? false : _ref11$conservativePa;
   var safeText = typeof text === "string" ? text : "";
   if (!safeText) return [];
   // For normal-sized paragraphs, keep full context in a single API call.
@@ -12236,8 +12491,8 @@ function splitParagraphIntoChunks() {
   var pushSentence = function pushSentence(contentEnd) {
     var gapEnd = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : contentEnd;
     if (typeof contentEnd !== "number" || contentEnd <= start) {
-      var _ref11;
-      start = Math.max(start, (_ref11 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref11 !== void 0 ? _ref11 : start);
+      var _ref12;
+      start = Math.max(start, (_ref12 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref12 !== void 0 ? _ref12 : start);
       return;
     }
     sentences.push({
@@ -12298,9 +12553,9 @@ function splitParagraphIntoChunks() {
     });
   }
   var mergedSentences = [];
-  for (var _i2 = 0, _sentences = sentences; _i2 < _sentences.length; _i2++) {
+  for (var _i = 0, _sentences = sentences; _i < _sentences.length; _i++) {
     var _sentence$end, _sentence$start;
-    var sentence = _sentences[_i2];
+    var sentence = _sentences[_i];
     var sentenceLen = Math.max(0, ((_sentence$end = sentence.end) !== null && _sentence$end !== void 0 ? _sentence$end : 0) - ((_sentence$start = sentence.start) !== null && _sentence$start !== void 0 ? _sentence$start : 0));
     var previous = mergedSentences[mergedSentences.length - 1];
     // Merge tiny fragments like "3." / "M." into previous chunk to avoid extra API calls.
@@ -12332,7 +12587,7 @@ function splitParagraphIntoChunksWithLemmas() {
   return _splitParagraphIntoChunksWithLemmas.apply(this, arguments);
 }
 function _splitParagraphIntoChunksWithLemmas() {
-  _splitParagraphIntoChunksWithLemmas = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3() {
+  _splitParagraphIntoChunksWithLemmas = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee6() {
     var text,
       maxLen,
       anchorProvider,
@@ -12347,36 +12602,36 @@ function _splitParagraphIntoChunksWithLemmas() {
       reconstructed,
       chunks,
       lowAnchorReliability,
-      _args3 = arguments,
-      _t8;
-    return _regenerator().w(function (_context3) {
-      while (1) switch (_context3.p = _context3.n) {
+      _args6 = arguments,
+      _t0;
+    return _regenerator().w(function (_context6) {
+      while (1) switch (_context6.p = _context6.n) {
         case 0:
-          text = _args3.length > 0 && _args3[0] !== undefined ? _args3[0] : "";
-          maxLen = _args3.length > 1 && _args3[1] !== undefined ? _args3[1] : MAX_PARAGRAPH_CHARS;
-          anchorProvider = _args3.length > 2 ? _args3[2] : undefined;
+          text = _args6.length > 0 && _args6[0] !== undefined ? _args6[0] : "";
+          maxLen = _args6.length > 1 && _args6[1] !== undefined ? _args6[1] : MAX_PARAGRAPH_CHARS;
+          anchorProvider = _args6.length > 2 ? _args6[2] : undefined;
           safeText = typeof text === "string" ? text : "";
           if (safeText) {
-            _context3.n = 1;
+            _context6.n = 1;
             break;
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 1:
           if (!(!anchorProvider || typeof anchorProvider.fetchLemmaTokens !== "function")) {
-            _context3.n = 2;
+            _context6.n = 2;
             break;
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 2:
           mode = resolveLemmaSplitMode();
           if (!(mode === "off")) {
-            _context3.n = 3;
+            _context6.n = 3;
             break;
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 3:
           if (!(mode !== "force" && !shouldUseLemmaSplitHeuristic(safeText, maxLen))) {
-            _context3.n = 4;
+            _context6.n = 4;
             break;
           }
           if (isDeepDebugEnabled()) {
@@ -12385,32 +12640,32 @@ function _splitParagraphIntoChunksWithLemmas() {
               length: safeText.length
             });
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 4:
-          _context3.p = 4;
-          _context3.n = 5;
+          _context6.p = 4;
+          _context6.n = 5;
           return anchorProvider.fetchLemmaTokens(safeText);
         case 5:
-          lemmaTokens = _context3.v;
+          lemmaTokens = _context6.v;
           splitTokens = lemmaTokens;
           reconstructedConfidence = 1;
           usedReconstructedOffsets = false;
           nativeQuality = evaluateLemmaOffsetsQuality(safeText, lemmaTokens);
           useNativeOffsetsAuthoritatively = nativeQuality.coverage >= LEMMA_SPLIT_CONFIDENCE_THRESHOLD;
           if (useNativeOffsetsAuthoritatively) {
-            _context3.n = 7;
+            _context6.n = 7;
             break;
           }
           reconstructed = reconstructLemmaOffsets(safeText, lemmaTokens);
           reconstructedConfidence = reconstructed.confidence;
           if (!(mode === "safe" && reconstructed.confidence < LEMMA_SPLIT_CONFIDENCE_THRESHOLD)) {
-            _context3.n = 6;
+            _context6.n = 6;
             break;
           }
           if (isDeepDebugEnabled()) {
             console.log("[Vejice Split]", "lemma split fallback -> low reconstruction confidence", reconstructed);
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 6:
           if (reconstructed.tokens.length) {
             splitTokens = reconstructed.tokens;
@@ -12424,7 +12679,7 @@ function _splitParagraphIntoChunksWithLemmas() {
               tokenCount: splitTokens.length
             });
           }
-          _context3.n = 8;
+          _context6.n = 8;
           break;
         case 7:
           if (isDeepDebugEnabled()) {
@@ -12433,13 +12688,13 @@ function _splitParagraphIntoChunksWithLemmas() {
         case 8:
           chunks = buildChunksFromLemmaTokens(safeText, splitTokens, maxLen);
           if (!(!Array.isArray(chunks) || !chunks.length)) {
-            _context3.n = 9;
+            _context6.n = 9;
             break;
           }
-          return _context3.a(2, null);
+          return _context6.a(2, null);
         case 9:
           lowAnchorReliability = !useNativeOffsetsAuthoritatively || usedReconstructedOffsets;
-          return _context3.a(2, chunks.map(function (chunk) {
+          return _context6.a(2, chunks.map(function (chunk) {
             return _objectSpread(_objectSpread({}, chunk), {}, {
               lowAnchorReliability: lowAnchorReliability,
               lemmaNativeCoverage: nativeQuality.coverage,
@@ -12448,11 +12703,11 @@ function _splitParagraphIntoChunksWithLemmas() {
             });
           }));
         case 10:
-          _context3.p = 10;
-          _t8 = _context3.v;
-          return _context3.a(2, null);
+          _context6.p = 10;
+          _t0 = _context6.v;
+          return _context6.a(2, null);
       }
-    }, _callee3, null, [[4, 10]]);
+    }, _callee6, null, [[4, 10]]);
   }));
   return _splitParagraphIntoChunksWithLemmas.apply(this, arguments);
 }
@@ -12467,6 +12722,108 @@ function resolveLemmaSplitMode() {
     return envMode;
   }
   return "safe";
+}
+function resolveChunkAnalyzeConcurrency() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_ANALYZE_CONCURRENCY;
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env2;
+    override = (_process$env2 = process.env) === null || _process$env2 === void 0 ? void 0 : _process$env2.VEJICE_CHUNK_ANALYZE_CONCURRENCY;
+  }
+  var parsed = Number(override);
+  var defaultValue = isLocalSpeedProfileEnabled() ? LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT : CHUNK_ANALYZE_CONCURRENCY_DEFAULT;
+  var value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultValue;
+  return Math.max(1, Math.min(value, CHUNK_ANALYZE_CONCURRENCY_MAX));
+}
+function parseBooleanLike(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return undefined;
+  }
+  if (typeof value !== "string") return undefined;
+  var normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+}
+function isLocalhostRuntime() {
+  var _window$location;
+  if (typeof window === "undefined") return false;
+  var host = typeof ((_window$location = window.location) === null || _window$location === void 0 ? void 0 : _window$location.hostname) === "string" ? window.location.hostname.trim().toLowerCase() : "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+function isLocalSpeedProfileEnabled() {
+  if (typeof window !== "undefined") {
+    var override = parseBooleanLike(window.__VEJICE_LOCAL_SPEED_PROFILE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    var _process$env3;
+    var envOverride = parseBooleanLike((_process$env3 = process.env) === null || _process$env3 === void 0 ? void 0 : _process$env3.VEJICE_LOCAL_SPEED_PROFILE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isLocalhostRuntime();
+}
+function resolveChunkApiCacheMaxEntries() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_API_CACHE_MAX_ENTRIES;
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env4;
+    override = (_process$env4 = process.env) === null || _process$env4 === void 0 ? void 0 : _process$env4.VEJICE_CHUNK_API_CACHE_MAX_ENTRIES;
+  }
+  var parsed = Number(override);
+  var value = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT;
+  return Math.max(0, Math.min(value, 5000));
+}
+function resolveChunkApiCacheTtlMs() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = window.__VEJICE_CHUNK_API_CACHE_TTL_MS;
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env5;
+    override = (_process$env5 = process.env) === null || _process$env5 === void 0 ? void 0 : _process$env5.VEJICE_CHUNK_API_CACHE_TTL_MS;
+  }
+  var parsed = Number(override);
+  var value = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : CHUNK_API_CACHE_TTL_MS_DEFAULT;
+  return Math.max(0, Math.min(value, 60 * 60 * 1000));
+}
+function cloneChunkApiDetail(detail) {
+  if (!detail || _typeof(detail) !== "object") return detail;
+  try {
+    if (typeof structuredClone === "function") {
+      return structuredClone(detail);
+    }
+  } catch (_err) {
+    // Fall back to JSON clone.
+  }
+  try {
+    return JSON.parse(JSON.stringify(detail));
+  } catch (_err) {
+    // As a last resort, shallow-clone top-level fields.
+  }
+  return _objectSpread(_objectSpread({}, detail), {}, {
+    raw: detail.raw && _typeof(detail.raw) === "object" ? _objectSpread({}, detail.raw) : detail.raw,
+    sourceTokens: Array.isArray(detail.sourceTokens) ? detail.sourceTokens.map(function (t) {
+      return _objectSpread({}, t);
+    }) : [],
+    targetTokens: Array.isArray(detail.targetTokens) ? detail.targetTokens.map(function (t) {
+      return _objectSpread({}, t);
+    }) : [],
+    corrections: Array.isArray(detail.corrections) ? detail.corrections.map(function (c) {
+      return _objectSpread({}, c);
+    }) : detail.corrections,
+    commaOps: Array.isArray(detail.commaOps) ? detail.commaOps.map(function (op) {
+      return _objectSpread({}, op);
+    }) : detail.commaOps
+  });
 }
 function shouldUseLemmaSplitHeuristic() {
   var text = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : "";
@@ -12584,8 +12941,8 @@ function buildChunksFromLemmaTokens() {
   var pushSentence = function pushSentence(contentEnd) {
     var gapEnd = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : contentEnd;
     if (typeof contentEnd !== "number" || contentEnd <= sentenceStart) {
-      var _ref12;
-      sentenceStart = Math.max(sentenceStart, (_ref12 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref12 !== void 0 ? _ref12 : sentenceStart);
+      var _ref13;
+      sentenceStart = Math.max(sentenceStart, (_ref13 = gapEnd !== null && gapEnd !== void 0 ? gapEnd : contentEnd) !== null && _ref13 !== void 0 ? _ref13 : sentenceStart);
       return;
     }
     sentences.push({
@@ -12613,9 +12970,9 @@ function buildChunksFromLemmaTokens() {
     });
   }
   var mergedSentences = [];
-  for (var _i3 = 0, _sentences2 = sentences; _i3 < _sentences2.length; _i3++) {
+  for (var _i2 = 0, _sentences2 = sentences; _i2 < _sentences2.length; _i2++) {
     var _sentence$end2, _sentence$start2;
-    var sentence = _sentences2[_i3];
+    var sentence = _sentences2[_i2];
     var sentenceLen = Math.max(0, ((_sentence$end2 = sentence.end) !== null && _sentence$end2 !== void 0 ? _sentence$end2 : 0) - ((_sentence$start2 = sentence.start) !== null && _sentence$start2 !== void 0 ? _sentence$start2 : 0));
     var previous = mergedSentences[mergedSentences.length - 1];
     if (previous && sentenceLen > 0 && sentenceLen < MIN_CHUNK_MERGE_CHARS && sentence.end > previous.end && sentence.end - previous.start <= maxLen) {
@@ -12627,8 +12984,8 @@ function buildChunksFromLemmaTokens() {
     mergedSentences.push(_objectSpread({}, sentence));
   }
   var expandedUnits = [];
-  for (var _i4 = 0, _mergedSentences = mergedSentences; _i4 < _mergedSentences.length; _i4++) {
-    var unit = _mergedSentences[_i4];
+  for (var _i3 = 0, _mergedSentences = mergedSentences; _i3 < _mergedSentences.length; _i3++) {
+    var unit = _mergedSentences[_i3];
     var parts = splitLargeLemmaUnit(text, unit, maxLen);
     if (parts && parts.length) {
       expandedUnits.push.apply(expandedUnits, _toConsumableArray(parts));
@@ -12674,18 +13031,18 @@ function splitLargeLemmaUnit(text, unit, maxLen) {
       }
     }
     if (splitAt < 0) {
-      for (var _i5 = Math.max(minSplit, target - LEMMA_SPLIT_WINDOW_CHARS); _i5 >= minSplit; _i5--) {
-        var _ch = text[_i5];
+      for (var _i4 = Math.max(minSplit, target - LEMMA_SPLIT_WINDOW_CHARS); _i4 >= minSplit; _i4--) {
+        var _ch = text[_i4];
         if (_ch === "," || _ch === ";" || _ch === ":") {
-          splitAt = _i5 + 1;
+          splitAt = _i4 + 1;
           break;
         }
       }
     }
     if (splitAt < 0) {
-      for (var _i6 = target; _i6 <= maxSplit; _i6++) {
-        if (/\s/.test(text[_i6] || "")) {
-          splitAt = _i6 + 1;
+      for (var _i5 = target; _i5 <= maxSplit; _i5++) {
+        if (/\s/.test(text[_i5] || "")) {
+          splitAt = _i5 + 1;
           break;
         }
       }
@@ -12730,12 +13087,12 @@ function packLemmaSentenceUnits(units, maxLen) {
     current = null;
     unitCount = 0;
   };
-  var _iterator7 = _createForOfIteratorHelper(units),
-    _step7;
+  var _iterator9 = _createForOfIteratorHelper(units),
+    _step9;
   try {
-    for (_iterator7.s(); !(_step7 = _iterator7.n()).done;) {
+    for (_iterator9.s(); !(_step9 = _iterator9.n()).done;) {
       var _unit$end2, _current$start, _current$end, _current$start2, _unit$end3, _unit$start2;
-      var unit = _step7.value;
+      var unit = _step9.value;
       if (!current) {
         current = _objectSpread({}, unit);
         unitCount = 1;
@@ -12757,9 +13114,9 @@ function packLemmaSentenceUnits(units, maxLen) {
       unitCount = 1;
     }
   } catch (err) {
-    _iterator7.e(err);
+    _iterator9.e(err);
   } finally {
-    _iterator7.f();
+    _iterator9.f();
   }
   pushCurrent();
   return packed;
@@ -12853,8 +13210,8 @@ function remapCorrections(corrections, idMap) {
   }
   if (_typeof(corrections) === "object") {
     var remapped = {};
-    for (var _i7 = 0, _Object$entries = Object.entries(corrections); _i7 < _Object$entries.length; _i7++) {
-      var _Object$entries$_i = _slicedToArray(_Object$entries[_i7], 2),
+    for (var _i6 = 0, _Object$entries = Object.entries(corrections); _i6 < _Object$entries.length; _i6++) {
+      var _Object$entries$_i = _slicedToArray(_Object$entries[_i6], 2),
         key = _Object$entries$_i[0],
         group = _Object$entries$_i[1];
       remapped[key] = remapGroup(group);
@@ -12930,8 +13287,8 @@ function hasCommaAtBoundary(text, pos) {
   if (typeof text !== "string" || !text.length) return false;
   var safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
   var direct = [safePos - 1, safePos, safePos + 1];
-  for (var _i8 = 0, _direct = direct; _i8 < _direct.length; _i8++) {
-    var idx = _direct[_i8];
+  for (var _i7 = 0, _direct = direct; _i7 < _direct.length; _i7++) {
+    var idx = _direct[_i7];
     if (idx >= 0 && idx < text.length && text[idx] === ",") {
       return true;
     }
@@ -12971,11 +13328,11 @@ function normalizeApiCommaOps(rawOps) {
   var targetLen = typeof correctedText === "string" ? correctedText.length : 0;
   var normalized = [];
   var seen = new Set();
-  var _iterator8 = _createForOfIteratorHelper(rawOps),
-    _step8;
+  var _iterator0 = _createForOfIteratorHelper(rawOps),
+    _step0;
   try {
-    for (_iterator8.s(); !(_step8 = _iterator8.n()).done;) {
-      var raw = _step8.value;
+    for (_iterator0.s(); !(_step0 = _iterator0.n()).done;) {
+      var raw = _step0.value;
       if (!raw || _typeof(raw) !== "object") continue;
       var kind = raw.kind === "delete" || raw.kind === "insert" ? raw.kind : null;
       if (!kind) continue;
@@ -12999,9 +13356,9 @@ function normalizeApiCommaOps(rawOps) {
       }));
     }
   } catch (err) {
-    _iterator8.e(err);
+    _iterator0.e(err);
   } finally {
-    _iterator8.f();
+    _iterator0.f();
   }
   return collapseDuplicateDiffOps(filterCommaOps(originalText, correctedText, normalized));
 }
@@ -13009,8 +13366,8 @@ function findCommaIndexAtBoundary(text, pos) {
   if (typeof text !== "string" || !text.length) return -1;
   var safePos = Number.isFinite(pos) ? Math.max(0, Math.min(Math.floor(pos), text.length)) : 0;
   var direct = [safePos - 1, safePos, safePos + 1];
-  for (var _i9 = 0, _direct2 = direct; _i9 < _direct2.length; _i9++) {
-    var idx = _direct2[_i9];
+  for (var _i8 = 0, _direct2 = direct; _i8 < _direct2.length; _i8++) {
+    var idx = _direct2[_i8];
     if (idx >= 0 && idx < text.length && text[idx] === ",") {
       return idx;
     }
@@ -13047,11 +13404,11 @@ function buildCommaOnlyCorrectedText() {
   if (!normalized.length) return base;
   var working = base;
   var delta = 0;
-  var _iterator9 = _createForOfIteratorHelper(normalized),
-    _step9;
+  var _iterator1 = _createForOfIteratorHelper(normalized),
+    _step1;
   try {
-    for (_iterator9.s(); !(_step9 = _iterator9.n()).done;) {
-      var op = _step9.value;
+    for (_iterator1.s(); !(_step1 = _iterator1.n()).done;) {
+      var op = _step1.value;
       var targetPos = Math.max(0, Math.min(op.originalPos + delta, working.length));
       if (op.kind === "delete") {
         var commaIndex = findCommaIndexAtBoundary(working, targetPos);
@@ -13066,9 +13423,9 @@ function buildCommaOnlyCorrectedText() {
       }
     }
   } catch (err) {
-    _iterator9.e(err);
+    _iterator1.e(err);
   } finally {
-    _iterator9.f();
+    _iterator1.f();
   }
   return working;
 }
@@ -13182,18 +13539,18 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
   if (!groups.length) return [];
   var ops = [];
   var seen = new Set();
-  var _iterator0 = _createForOfIteratorHelper(groups),
-    _step0;
+  var _iterator10 = _createForOfIteratorHelper(groups),
+    _step10;
   try {
-    for (_iterator0.s(); !(_step0 = _iterator0.n()).done;) {
-      var group = _step0.value;
+    for (_iterator10.s(); !(_step10 = _iterator10.n()).done;) {
+      var group = _step10.value;
       var entries = Array.isArray(group === null || group === void 0 ? void 0 : group.corrections) ? group.corrections : [];
-      var _iterator10 = _createForOfIteratorHelper(entries),
-        _step10;
+      var _iterator12 = _createForOfIteratorHelper(entries),
+        _step12;
       try {
-        for (_iterator10.s(); !(_step10 = _iterator10.n()).done;) {
+        for (_iterator12.s(); !(_step12 = _iterator12.n()).done;) {
           var _entry$source_id, _anchorsEntry$sourceA, _anchor$tokenText, _anchorsEntry$sourceA3;
-          var entry = _step10.value;
+          var entry = _step12.value;
           var analysis = analyzeCommaChangeFromCorrections(entry === null || entry === void 0 ? void 0 : entry.source_text, entry === null || entry === void 0 ? void 0 : entry.text);
           if (!analysis) continue;
           var tokenId = (_entry$source_id = entry === null || entry === void 0 ? void 0 : entry.source_id) !== null && _entry$source_id !== void 0 ? _entry$source_id : group === null || group === void 0 ? void 0 : group.source_start;
@@ -13287,28 +13644,28 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           }
         }
       } catch (err) {
-        _iterator10.e(err);
+        _iterator12.e(err);
       } finally {
-        _iterator10.f();
+        _iterator12.f();
       }
     }
   } catch (err) {
-    _iterator0.e(err);
+    _iterator10.e(err);
   } finally {
-    _iterator0.f();
+    _iterator10.f();
   }
   if (tracking && (_tracking$intents = tracking.intents) !== null && _tracking$intents !== void 0 && _tracking$intents.length) {
     tracking.blockedOriginalPositions = new Set(tracking.blockedOriginalPositions || []);
     tracking.blockedCorrectedPositions = new Set(tracking.blockedCorrectedPositions || []);
-    var _iterator1 = _createForOfIteratorHelper(tracking.intents),
-      _step1;
+    var _iterator11 = _createForOfIteratorHelper(tracking.intents),
+      _step11;
     try {
-      for (_iterator1.s(); !(_step1 = _iterator1.n()).done;) {
-        var _ref13, _ref14, _intent$baseText, _intent$analysis, _intent$analysis2, _intent$analysis3;
-        var intent = _step1.value;
+      for (_iterator11.s(); !(_step11 = _iterator11.n()).done;) {
+        var _ref14, _ref15, _intent$baseText, _intent$analysis, _intent$analysis2, _intent$analysis3;
+        var intent = _step11.value;
         var anchor = intent === null || intent === void 0 ? void 0 : intent.anchor;
         if (!anchor) continue;
-        var baseText = (_ref13 = (_ref14 = (_intent$baseText = intent.baseText) !== null && _intent$baseText !== void 0 ? _intent$baseText : (_intent$analysis = intent.analysis) === null || _intent$analysis === void 0 ? void 0 : _intent$analysis.baseText) !== null && _ref14 !== void 0 ? _ref14 : anchor.tokenText) !== null && _ref13 !== void 0 ? _ref13 : "";
+        var baseText = (_ref14 = (_ref15 = (_intent$baseText = intent.baseText) !== null && _intent$baseText !== void 0 ? _intent$baseText : (_intent$analysis = intent.analysis) === null || _intent$analysis === void 0 ? void 0 : _intent$analysis.baseText) !== null && _ref15 !== void 0 ? _ref15 : anchor.tokenText) !== null && _ref14 !== void 0 ? _ref14 : "";
         var charStart = anchor.charStart;
         if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
         if ((_intent$analysis2 = intent.analysis) !== null && _intent$analysis2 !== void 0 && _intent$analysis2.removeComma) {
@@ -13323,9 +13680,9 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         }
       }
     } catch (err) {
-      _iterator1.e(err);
+      _iterator11.e(err);
     } finally {
-      _iterator1.f();
+      _iterator11.f();
     }
   }
   return ops;
@@ -13469,17 +13826,17 @@ function buildDeleteSuggestionMetadata(entry, charIndex) {
     highlightText: highlightText
   };
 }
-function buildInsertSuggestionMetadata(entry, _ref15) {
-  var _entry$documentOffset2, _ref16, _ref17, _ref18, _ref19, _sourceAround$at, _highlightAnchor$char, _entry$originalText2, _entry$paragraphIndex2;
-  var originalCharIndex = _ref15.originalCharIndex,
-    targetCharIndex = _ref15.targetCharIndex;
+function buildInsertSuggestionMetadata(entry, _ref16) {
+  var _entry$documentOffset2, _ref17, _ref18, _ref19, _ref20, _sourceAround$at, _highlightAnchor$char, _entry$originalText2, _entry$paragraphIndex2;
+  var originalCharIndex = _ref16.originalCharIndex,
+    targetCharIndex = _ref16.targetCharIndex;
   if (!entry) return null;
   var srcIndex = typeof originalCharIndex === "number" ? originalCharIndex : -1;
   var targetIndex = typeof targetCharIndex === "number" ? targetCharIndex : srcIndex;
   var sourceAround = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.findAnchorsNearChar)(entry, "source", srcIndex);
   var targetAround = (0,_anchoring_SyntheticAnchorProvider_js__WEBPACK_IMPORTED_MODULE_2__.findAnchorsNearChar)(entry, "target", targetIndex);
   var documentOffset = (_entry$documentOffset2 = entry === null || entry === void 0 ? void 0 : entry.documentOffset) !== null && _entry$documentOffset2 !== void 0 ? _entry$documentOffset2 : 0;
-  var highlightAnchor = (_ref16 = (_ref17 = (_ref18 = (_ref19 = (_sourceAround$at = sourceAround.at) !== null && _sourceAround$at !== void 0 ? _sourceAround$at : sourceAround.before) !== null && _ref19 !== void 0 ? _ref19 : sourceAround.after) !== null && _ref18 !== void 0 ? _ref18 : targetAround.at) !== null && _ref17 !== void 0 ? _ref17 : targetAround.before) !== null && _ref16 !== void 0 ? _ref16 : targetAround.after;
+  var highlightAnchor = (_ref17 = (_ref18 = (_ref19 = (_ref20 = (_sourceAround$at = sourceAround.at) !== null && _sourceAround$at !== void 0 ? _sourceAround$at : sourceAround.before) !== null && _ref20 !== void 0 ? _ref20 : sourceAround.after) !== null && _ref19 !== void 0 ? _ref19 : targetAround.at) !== null && _ref18 !== void 0 ? _ref18 : targetAround.before) !== null && _ref17 !== void 0 ? _ref17 : targetAround.after;
   var highlightCharStart = (_highlightAnchor$char = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charStart) !== null && _highlightAnchor$char !== void 0 ? _highlightAnchor$char : srcIndex;
   var highlightCharEnd = highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.charEnd;
   if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) && typeof highlightCharStart === "number" && highlightCharStart >= 0 && typeof (highlightAnchor === null || highlightAnchor === void 0 ? void 0 : highlightAnchor.tokenText) === "string" && highlightAnchor.tokenText.length > 0) {
@@ -13865,8 +14222,8 @@ var API_UNAVAILABLE_MESSAGE = "Storitev CJVT Vejice trenutno ni na voljo. Znova 
 var NO_ISSUES_FOUND_MESSAGE = "Ni bilo najdenih manjkajo\u010Dih ali napa\u010Dnih vejic.";
 var MARKER_RENDER_FAILED_MESSAGE = "Napake so bile najdene, vendar jih v Word Online ni bilo mogo\u010De ozna\u010Diti.";
 var PARAGRAPH_TIMEOUT_MESSAGE = "Nekateri odstavki niso bili pregledani zaradi casovne omejitve.";
-var ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS = 3;
-var ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS = 12;
+var ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT = 5;
+var ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT = 24;
 var ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
 var ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD_DEFAULT = 2;
 var ONLINE_RENDER_STATE_MAX_PARAGRAPHS = 1200;
@@ -13889,6 +14246,24 @@ function parseBooleanFlag(value) {
   if (BOOLEAN_FALSE.has(normalized)) return false;
   return undefined;
 }
+function isLocalhostRuntime() {
+  var _window$location;
+  if (typeof window === "undefined") return false;
+  var host = typeof ((_window$location = window.location) === null || _window$location === void 0 ? void 0 : _window$location.hostname) === "string" ? window.location.hostname.trim().toLowerCase() : "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+function isLocalSpeedProfileEnabled() {
+  if (typeof window !== "undefined") {
+    var override = parseBooleanFlag(window.__VEJICE_LOCAL_SPEED_PROFILE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    var _process$env2;
+    var envOverride = parseBooleanFlag((_process$env2 = process.env) === null || _process$env2 === void 0 ? void 0 : _process$env2.VEJICE_LOCAL_SPEED_PROFILE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isLocalhostRuntime();
+}
 function isDesktopVerboseLoggingEnabled() {
   if (typeof window !== "undefined") {
     var _parseBooleanFlag;
@@ -13896,8 +14271,8 @@ function isDesktopVerboseLoggingEnabled() {
     if (typeof override === "boolean") return override;
   }
   if (typeof process !== "undefined") {
-    var _parseBooleanFlag2, _process$env2, _process$env3;
-    var envOverride = (_parseBooleanFlag2 = parseBooleanFlag((_process$env2 = process.env) === null || _process$env2 === void 0 ? void 0 : _process$env2.VEJICE_DESKTOP_VERBOSE_LOGS)) !== null && _parseBooleanFlag2 !== void 0 ? _parseBooleanFlag2 : parseBooleanFlag((_process$env3 = process.env) === null || _process$env3 === void 0 ? void 0 : _process$env3.VEJICE_VERBOSE_LOGS);
+    var _parseBooleanFlag2, _process$env3, _process$env4;
+    var envOverride = (_parseBooleanFlag2 = parseBooleanFlag((_process$env3 = process.env) === null || _process$env3 === void 0 ? void 0 : _process$env3.VEJICE_DESKTOP_VERBOSE_LOGS)) !== null && _parseBooleanFlag2 !== void 0 ? _parseBooleanFlag2 : parseBooleanFlag((_process$env4 = process.env) === null || _process$env4 === void 0 ? void 0 : _process$env4.VEJICE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
   return false;
@@ -13918,10 +14293,10 @@ function isParagraphCacheDisabled() {
     if (typeof enableOverride === "boolean") return !enableOverride;
   }
   if (typeof process !== "undefined") {
-    var _parseBooleanFlag4, _process$env4, _process$env5, _process$env6;
-    var disableEnv = (_parseBooleanFlag4 = parseBooleanFlag((_process$env4 = process.env) === null || _process$env4 === void 0 ? void 0 : "true")) !== null && _parseBooleanFlag4 !== void 0 ? _parseBooleanFlag4 : parseBooleanFlag((_process$env5 = process.env) === null || _process$env5 === void 0 ? void 0 : "");
+    var _parseBooleanFlag4, _process$env5, _process$env6, _process$env7;
+    var disableEnv = (_parseBooleanFlag4 = parseBooleanFlag((_process$env5 = process.env) === null || _process$env5 === void 0 ? void 0 : "true")) !== null && _parseBooleanFlag4 !== void 0 ? _parseBooleanFlag4 : parseBooleanFlag((_process$env6 = process.env) === null || _process$env6 === void 0 ? void 0 : "");
     if (typeof disableEnv === "boolean") return disableEnv;
-    var enableEnv = parseBooleanFlag((_process$env6 = process.env) === null || _process$env6 === void 0 ? void 0 : "");
+    var enableEnv = parseBooleanFlag((_process$env7 = process.env) === null || _process$env7 === void 0 ? void 0 : "");
     if (typeof enableEnv === "boolean") return !enableEnv;
   }
   return false;
@@ -13938,13 +14313,13 @@ function shouldUseLemmatizerAnchors() {
     if (typeof override === "boolean") return override;
   }
   if (typeof process !== "undefined") {
-    var _parseBooleanFlag5, _process$env7, _process$env8, _process$env9, _process$env0;
-    var envValue = (_parseBooleanFlag5 = parseBooleanFlag((_process$env7 = process.env) === null || _process$env7 === void 0 ? void 0 : "true")) !== null && _parseBooleanFlag5 !== void 0 ? _parseBooleanFlag5 : parseBooleanFlag((_process$env8 = process.env) === null || _process$env8 === void 0 ? void 0 : "true");
+    var _parseBooleanFlag5, _process$env8, _process$env9, _process$env0, _process$env1;
+    var envValue = (_parseBooleanFlag5 = parseBooleanFlag((_process$env8 = process.env) === null || _process$env8 === void 0 ? void 0 : "true")) !== null && _parseBooleanFlag5 !== void 0 ? _parseBooleanFlag5 : parseBooleanFlag((_process$env9 = process.env) === null || _process$env9 === void 0 ? void 0 : "true");
     if (typeof envValue === "boolean") return envValue;
-    if ((_process$env9 = process.env) !== null && _process$env9 !== void 0 && "https://127.0.0.1:4001/lemmas") {
+    if ((_process$env0 = process.env) !== null && _process$env0 !== void 0 && "https://127.0.0.1:4001/lemmas") {
       log("Lemmas endpoint override via env:", "https://127.0.0.1:4001/lemmas");
     }
-    if ((_process$env0 = process.env) !== null && _process$env0 !== void 0 && "8000") {
+    if ((_process$env1 = process.env) !== null && _process$env1 !== void 0 && "8000") {
       log("Lemmas timeout override via env:", "8000");
     }
   }
@@ -14053,8 +14428,8 @@ function resolveOnlineUnstableBackoffThreshold() {
     override = parsePositiveInteger(window.__VEJICE_ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD);
   }
   if (override == null && typeof process !== "undefined") {
-    var _process$env1;
-    override = parsePositiveInteger((_process$env1 = process.env) === null || _process$env1 === void 0 ? void 0 : "999999");
+    var _process$env10;
+    override = parsePositiveInteger((_process$env10 = process.env) === null || _process$env10 === void 0 ? void 0 : "999999");
   }
   return override !== null && override !== void 0 ? override : ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD_DEFAULT;
 }
@@ -14506,8 +14881,10 @@ var ACTION_TYPE_APPLY = "apply";
 var ACTION_TYPE_REJECT = "reject";
 var ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
 var ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
+var ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
+var LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 2;
 var DESKTOP_ANALYZE_CONCURRENCY_DEFAULT = 4;
-var POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1800;
+var POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1200;
 var CHECK_ABORT_REASON_TIMEOUT = "check-timeout";
 var CHECK_ABORT_REASON_CANCELLED = "check-cancelled";
 var CHECK_ABORT_REASON_SUPERSEDED = "check-superseded";
@@ -14547,8 +14924,8 @@ function resolveOnlineCheckTimeoutMs() {
     timeoutOverride = parsePositiveInteger(window.__VEJICE_ONLINE_CHECK_TIMEOUT_MS);
   }
   if (timeoutOverride == null && typeof process !== "undefined") {
-    var _process$env10;
-    timeoutOverride = parsePositiveInteger((_process$env10 = process.env) === null || _process$env10 === void 0 ? void 0 : _process$env10.VEJICE_ONLINE_CHECK_TIMEOUT_MS);
+    var _process$env11;
+    timeoutOverride = parsePositiveInteger((_process$env11 = process.env) === null || _process$env11 === void 0 ? void 0 : _process$env11.VEJICE_ONLINE_CHECK_TIMEOUT_MS);
   }
   return timeoutOverride !== null && timeoutOverride !== void 0 ? timeoutOverride : ONLINE_CHECK_TIMEOUT_MS_DEFAULT;
 }
@@ -14558,10 +14935,34 @@ function resolveOnlineParagraphTimeoutMs() {
     timeoutOverride = parsePositiveInteger(window.__VEJICE_ONLINE_PARAGRAPH_TIMEOUT_MS);
   }
   if (timeoutOverride == null && typeof process !== "undefined") {
-    var _process$env11;
-    timeoutOverride = parsePositiveInteger((_process$env11 = process.env) === null || _process$env11 === void 0 ? void 0 : _process$env11.VEJICE_ONLINE_PARAGRAPH_TIMEOUT_MS);
+    var _process$env12;
+    timeoutOverride = parsePositiveInteger((_process$env12 = process.env) === null || _process$env12 === void 0 ? void 0 : _process$env12.VEJICE_ONLINE_PARAGRAPH_TIMEOUT_MS);
   }
   return timeoutOverride !== null && timeoutOverride !== void 0 ? timeoutOverride : ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT;
+}
+function resolveOnlineHighlightFlushParagraphs() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS);
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env13;
+    override = parsePositiveInteger((_process$env13 = process.env) === null || _process$env13 === void 0 ? void 0 : _process$env13.VEJICE_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS);
+  }
+  var value = override !== null && override !== void 0 ? override : ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT;
+  return Math.max(1, Math.min(value, 50));
+}
+function resolveOnlineHighlightFlushSuggestions() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS);
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env14;
+    override = parsePositiveInteger((_process$env14 = process.env) === null || _process$env14 === void 0 ? void 0 : _process$env14.VEJICE_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS);
+  }
+  var value = override !== null && override !== void 0 ? override : ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT;
+  return Math.max(1, Math.min(value, 200));
 }
 function resolveDesktopAnalyzeConcurrency() {
   var override = null;
@@ -14569,10 +14970,23 @@ function resolveDesktopAnalyzeConcurrency() {
     override = parsePositiveInteger(window.__VEJICE_DESKTOP_ANALYZE_CONCURRENCY);
   }
   if (override == null && typeof process !== "undefined") {
-    var _process$env12;
-    override = parsePositiveInteger((_process$env12 = process.env) === null || _process$env12 === void 0 ? void 0 : _process$env12.VEJICE_DESKTOP_ANALYZE_CONCURRENCY);
+    var _process$env15;
+    override = parsePositiveInteger((_process$env15 = process.env) === null || _process$env15 === void 0 ? void 0 : _process$env15.VEJICE_DESKTOP_ANALYZE_CONCURRENCY);
   }
   var value = override !== null && override !== void 0 ? override : DESKTOP_ANALYZE_CONCURRENCY_DEFAULT;
+  return Math.max(1, Math.min(value, 8));
+}
+function resolveOnlineAnalyzeConcurrency() {
+  var override = null;
+  if (typeof window !== "undefined") {
+    override = parsePositiveInteger(window.__VEJICE_ONLINE_ANALYZE_CONCURRENCY);
+  }
+  if (override == null && typeof process !== "undefined") {
+    var _process$env16;
+    override = parsePositiveInteger((_process$env16 = process.env) === null || _process$env16 === void 0 ? void 0 : _process$env16.VEJICE_ONLINE_ANALYZE_CONCURRENCY);
+  }
+  var defaultValue = isLocalSpeedProfileEnabled() ? LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT : ONLINE_ANALYZE_CONCURRENCY_DEFAULT;
+  var value = override !== null && override !== void 0 ? override : defaultValue;
   return Math.max(1, Math.min(value, 8));
 }
 function resolvePostApplyCheckCooldownMs() {
@@ -14581,8 +14995,8 @@ function resolvePostApplyCheckCooldownMs() {
     override = parsePositiveInteger(window.__VEJICE_POST_APPLY_CHECK_COOLDOWN_MS);
   }
   if (override == null && typeof process !== "undefined") {
-    var _process$env13;
-    override = parsePositiveInteger((_process$env13 = process.env) === null || _process$env13 === void 0 ? void 0 : _process$env13.VEJICE_POST_APPLY_CHECK_COOLDOWN_MS);
+    var _process$env17;
+    override = parsePositiveInteger((_process$env17 = process.env) === null || _process$env17 === void 0 ? void 0 : _process$env17.VEJICE_POST_APPLY_CHECK_COOLDOWN_MS);
   }
   return override !== null && override !== void 0 ? override : POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT;
 }
@@ -20934,8 +21348,8 @@ function checkDocumentTextOnline(_x107) {
   return _checkDocumentTextOnline.apply(this, arguments);
 }
 function _checkDocumentTextOnline() {
-  _checkDocumentTextOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee57(checkToken) {
-    var checkStartedAt, paragraphsProcessed, suggestionsDetected, suggestions, apiErrors, nonCommaSkips, nonCommaSalvaged, unchangedHardSkips, unstableBackoffSkips, rerenderSkipped, scopedMarkerClears, cacheHits, cacheMisses, paragraphTimingCount, paragraphTimingTotalMs, paragraphTimingMaxMs, paragraphTimingMinMs, paragraphCacheDisabled, checkAbortController, checkAbortSignal, totalDurationMsRaw, perParagraphMsRaw, avgParagraphMsRaw, minParagraphMsRaw, maxParagraphMsRaw, _t41;
+  _checkDocumentTextOnline = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee58(checkToken) {
+    var checkStartedAt, paragraphsProcessed, suggestionsDetected, suggestions, apiErrors, nonCommaSkips, nonCommaSalvaged, unchangedHardSkips, unstableBackoffSkips, rerenderSkipped, scopedMarkerClears, cacheHits, cacheMisses, paragraphTimingCount, paragraphTimingTotalMs, paragraphTimingMaxMs, paragraphTimingMinMs, paragraphCacheDisabled, checkAbortController, checkAbortSignal, totalDurationMsRaw, perParagraphMsRaw, avgParagraphMsRaw, minParagraphMsRaw, maxParagraphMsRaw, _t43;
     return _regenerator().w(function (_context59) {
       while (1) switch (_context59.p = _context59.n) {
         case 0:
@@ -20965,10 +21379,10 @@ function _checkDocumentTextOnline() {
           _context59.p = 1;
           _context59.n = 2;
           return Word.run(/*#__PURE__*/function () {
-            var _ref75 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee56(context) {
-              var paras, documentCharOffset, pendingHighlightParagraphs, pendingHighlightSuggestions, markerParagraphCleanupDone, paragraphTimeoutMs, flushHighlightsIfNeeded, clearPreviousRenderMarkers, renderSuggestionsForParagraph, _loop2, _ret, idx;
+            var _ref75 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee57(context) {
+              var paras, documentCharOffset, pendingHighlightParagraphs, pendingHighlightSuggestions, markerParagraphCleanupDone, paragraphTimeoutMs, flushParagraphThreshold, flushSuggestionThreshold, flushHighlightsIfNeeded, clearPreviousRenderMarkers, renderSuggestionsForParagraph, onlineAnalyzeConcurrency, recordParagraphTiming, analysisJobs, idx, paragraphStartedAt, p, original, normalizedOriginal, trimmed, paragraphDocOffset, snapshot, cached, _cachedAnchors$origin, cachedAnchors, renderReadyCached, renderOutcome, remainingCheckMs, paragraphGuardTimeoutMs, timeoutReason, analysisResults, _iterator39, _step39, analyzed, job, paragraphPhaseStartedAt, _result4$anchorsEntry, _result4$anchorsEntry2, _result4, paragraphApiErrors, paragraphNonCommaSkips, paragraphNonCommaSalvaged, paragraphStable, cacheEntry, renderReadyResult, _renderOutcome, renderElapsedMs, analysisElapsedMs, _t40, _t41, _t42;
               return _regenerator().w(function (_context58) {
-                while (1) switch (_context58.n) {
+                while (1) switch (_context58.p = _context58.n) {
                   case 0:
                     ensureCheckActionActive(checkToken);
                     _context58.n = 1;
@@ -20998,6 +21412,12 @@ function _checkDocumentTextOnline() {
                     pendingHighlightSuggestions = 0;
                     markerParagraphCleanupDone = new Set();
                     paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
+                    flushParagraphThreshold = resolveOnlineHighlightFlushParagraphs();
+                    flushSuggestionThreshold = resolveOnlineHighlightFlushSuggestions();
+                    log("Online highlight flush thresholds", {
+                      paragraphs: flushParagraphThreshold,
+                      suggestions: flushSuggestionThreshold
+                    });
                     flushHighlightsIfNeeded = /*#__PURE__*/function () {
                       var _ref76 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee53(highlightedInParagraph) {
                         var shouldFlushNow;
@@ -21013,7 +21433,7 @@ function _checkDocumentTextOnline() {
                               ensureCheckActionActive(checkToken);
                               pendingHighlightParagraphs++;
                               pendingHighlightSuggestions += highlightedInParagraph;
-                              shouldFlushNow = pendingHighlightParagraphs >= ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS || pendingHighlightSuggestions >= ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS;
+                              shouldFlushNow = pendingHighlightParagraphs >= flushParagraphThreshold || pendingHighlightSuggestions >= flushSuggestionThreshold;
                               if (!shouldFlushNow) {
                                 _context54.n = 3;
                                 break;
@@ -21210,311 +21630,407 @@ function _checkDocumentTextOnline() {
                         return _ref79.apply(this, arguments);
                       };
                     }();
-                    _loop2 = /*#__PURE__*/_regenerator().m(function _loop2(idx) {
-                      var p, original, normalizedOriginal, trimmed, paragraphDocOffset, snapshot, paragraphStartedAt, cached, _cachedAnchors$origin, cachedAnchors, renderReadyCached, renderOutcome, paragraphHash, _result3$anchorsEntry, _result3$anchorsEntry2, remainingCheckMs, paragraphGuardTimeoutMs, timeoutReason, _result3, paragraphApiErrors, paragraphNonCommaSkips, paragraphNonCommaSalvaged, paragraphStable, cacheEntry, renderReadyResult, _renderOutcome, paragraphElapsedMs, _t39, _t40;
-                      return _regenerator().w(function (_context57) {
-                        while (1) switch (_context57.p = _context57.n) {
-                          case 0:
-                            ensureCheckActionActive(checkToken);
-                            if (!(checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted)) {
-                              _context57.n = 1;
-                              break;
-                            }
-                            throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
-                          case 1:
-                            p = paras.items[idx];
-                            original = p.text || "";
-                            normalizedOriginal = (0,_engine_textUtils_js__WEBPACK_IMPORTED_MODULE_10__.normalizeParagraphWhitespace)(original);
-                            trimmed = normalizedOriginal.trim();
-                            paragraphDocOffset = documentCharOffset;
-                            documentCharOffset += original.length + 1;
-                            snapshot = {
-                              paragraphIndex: idx,
-                              sourceText: original,
-                              paragraphDocOffset: paragraphDocOffset
-                            };
-                            if (trimmed) {
-                              _context57.n = 7;
-                              break;
-                            }
-                            _context57.n = 2;
-                            return clearPreviousRenderMarkers(idx, p);
-                          case 2:
-                            recordUnstableOnlineParagraphOutcome(idx, original, {
-                              nonCommaSkips: 0
-                            });
-                            _context57.p = 3;
-                            _context57.n = 4;
-                            return anchorProvider.getAnchors({
-                              paragraphIndex: idx,
-                              originalText: original,
-                              correctedText: original,
-                              sourceTokens: [],
-                              targetTokens: [],
-                              documentOffset: paragraphDocOffset
-                            });
-                          case 4:
-                            _context57.n = 6;
-                            break;
-                          case 5:
-                            _context57.p = 5;
-                            _t39 = _context57.v;
-                            warn("P".concat(idx, " ONLINE: empty-paragraph anchor init failed"), _t39);
-                          case 6:
-                            if (!paragraphCacheDisabled) {
-                              onlineParagraphAnalysisCache[idx] = null;
-                            }
-                            return _context57.a(2, 0);
-                          case 7:
-                            if (!(trimmed.length > MAX_PARAGRAPH_CHARS)) {
-                              _context57.n = 9;
-                              break;
-                            }
-                            _context57.n = 8;
-                            return clearPreviousRenderMarkers(idx, p);
-                          case 8:
-                            recordUnstableOnlineParagraphOutcome(idx, original, {
-                              nonCommaSkips: 0
-                            });
-                            notifyParagraphTooLong(idx, trimmed.length);
-                            if (!paragraphCacheDisabled) {
-                              onlineParagraphAnalysisCache[idx] = null;
-                            }
-                            return _context57.a(2, 0);
-                          case 9:
-                            paragraphStartedAt = tnow();
-                            _context57.p = 10;
-                            log("P".concat(idx, " ONLINE: len=").concat(original.length, " | \"").concat(SNIP(trimmed), "\""));
-                            paragraphsProcessed++;
-                            if (!(!paragraphCacheDisabled && isOnlineParagraphUnchangedAndSuggestionFree(snapshot))) {
-                              _context57.n = 12;
-                              break;
-                            }
-                            _context57.n = 11;
-                            return clearPreviousRenderMarkers(idx, p);
-                          case 11:
-                            cacheHits++;
-                            unchangedHardSkips++;
-                            recordUnstableOnlineParagraphOutcome(idx, original, {
-                              nonCommaSkips: 0
-                            });
-                            log("Online hard-skip unchanged paragraph (clean cache)", {
-                              paragraphIndex: idx
-                            });
-                            return _context57.a(2, 0);
-                          case 12:
-                            if (!shouldBackoffUnstableOnlineParagraph(idx, original)) {
-                              _context57.n = 14;
-                              break;
-                            }
-                            _context57.n = 13;
-                            return clearPreviousRenderMarkers(idx, p);
-                          case 13:
-                            unstableBackoffSkips++;
-                            cacheHits++;
-                            log("Online unstable paragraph backoff skip", {
-                              paragraphIndex: idx,
-                              threshold: resolveOnlineUnstableBackoffThreshold()
-                            });
-                            return _context57.a(2, 0);
-                          case 14:
-                            cached = paragraphCacheDisabled ? null : tryGetOnlineParagraphCacheResult(snapshot);
-                            if (!cached) {
-                              _context57.n = 17;
-                              break;
-                            }
-                            cacheHits++;
-                            cachedAnchors = anchorProvider.getAnchorsForParagraph(idx);
-                            renderReadyCached = prepareSuggestionsForRender({
-                              paragraphIndex: idx,
-                              snapshotText: original,
-                              sourceText: (_cachedAnchors$origin = cachedAnchors === null || cachedAnchors === void 0 ? void 0 : cachedAnchors.originalText) !== null && _cachedAnchors$origin !== void 0 ? _cachedAnchors$origin : original,
-                              suggestions: cached.suggestions
-                            });
-                            if (renderReadyCached.renderDedupDropped > 0) {
-                              log("Render dedupe (cached)", {
-                                paragraphIndex: idx,
-                                dropped: renderReadyCached.renderDedupDropped,
-                                before: cached.suggestions.length,
-                                after: renderReadyCached.suggestions.length
-                              });
-                            }
-                            if (renderReadyCached.planDropped > 0 || renderReadyCached.noopCount > 0 || renderReadyCached.mergedGroupCount > 0) {
-                              log("Render plan prune (cached)", {
-                                paragraphIndex: idx,
-                                dropped: renderReadyCached.planDropped,
-                                planCount: renderReadyCached.planCount,
-                                noop: renderReadyCached.noopCount,
-                                skipped: renderReadyCached.skippedCount,
-                                mergedGroups: renderReadyCached.mergedGroupCount,
-                                after: renderReadyCached.suggestions.length
-                              });
-                            }
-                            suggestionsDetected += renderReadyCached.suggestions.length;
-                            _context57.n = 15;
-                            return renderSuggestionsForParagraph({
-                              paragraphIndex: idx,
-                              paragraph: p,
-                              sourceText: original,
-                              suggestionsToRender: renderReadyCached.suggestions
-                            });
-                          case 15:
-                            renderOutcome = _context57.v;
-                            suggestions += renderOutcome.highlighted;
-                            _context57.n = 16;
-                            return flushHighlightsIfNeeded(renderOutcome.highlighted);
-                          case 16:
-                            recordUnstableOnlineParagraphOutcome(idx, original, {
-                              nonCommaSkips: 0
-                            });
-                            return _context57.a(2, 0);
-                          case 17:
-                            if (!paragraphCacheDisabled) {
-                              cacheMisses++;
-                            }
-                            paragraphHash = buildDesktopParagraphHash(original);
-                            _context57.p = 18;
-                            remainingCheckMs = (checkToken === null || checkToken === void 0 ? void 0 : checkToken.deadlineAt) > 0 ? Math.max(1, checkToken.deadlineAt - Date.now()) : paragraphTimeoutMs;
-                            paragraphGuardTimeoutMs = Math.min(paragraphTimeoutMs, remainingCheckMs);
-                            timeoutReason = paragraphGuardTimeoutMs < paragraphTimeoutMs ? CHECK_ABORT_REASON_TIMEOUT : CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT;
-                            _context57.n = 19;
-                            return runWithTimeout(function () {
-                              return commaEngine.analyzeParagraph({
-                                paragraphIndex: idx,
-                                originalText: original,
-                                normalizedOriginalText: normalizedOriginal,
-                                paragraphDocOffset: paragraphDocOffset,
-                                abortSignal: checkAbortSignal
-                              });
-                            }, paragraphGuardTimeoutMs, timeoutReason, "Paragraph ".concat(idx + 1, " timed out"));
-                          case 19:
-                            _result3 = _context57.v;
-                            ensureCheckActionActive(checkToken);
-                            paragraphApiErrors = _result3.apiErrors || 0;
-                            paragraphNonCommaSkips = _result3.nonCommaSkips || 0;
-                            paragraphNonCommaSalvaged = _result3.nonCommaSalvaged || 0;
-                            apiErrors += paragraphApiErrors;
-                            nonCommaSkips += paragraphNonCommaSkips;
-                            nonCommaSalvaged += paragraphNonCommaSalvaged;
-                            recordUnstableOnlineParagraphOutcome(idx, original, {
-                              nonCommaSkips: paragraphNonCommaSkips
-                            });
-                            paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
-                            if (!paragraphCacheDisabled && paragraphStable) {
-                              cacheEntry = makeOnlineParagraphCacheEntry(paragraphHash, _result3);
-                              onlineParagraphAnalysisCache[idx] = cacheEntry || null;
-                            } else if (!paragraphCacheDisabled) {
-                              onlineParagraphAnalysisCache[idx] = null;
-                            }
-                            renderReadyResult = prepareSuggestionsForRender({
-                              paragraphIndex: idx,
-                              snapshotText: original,
-                              sourceText: (_result3$anchorsEntry = _result3 === null || _result3 === void 0 || (_result3$anchorsEntry2 = _result3.anchorsEntry) === null || _result3$anchorsEntry2 === void 0 ? void 0 : _result3$anchorsEntry2.originalText) !== null && _result3$anchorsEntry !== void 0 ? _result3$anchorsEntry : original,
-                              suggestions: _result3.suggestions
-                            });
-                            if (renderReadyResult.renderDedupDropped > 0) {
-                              log("Render dedupe (fresh)", {
-                                paragraphIndex: idx,
-                                dropped: renderReadyResult.renderDedupDropped,
-                                before: Array.isArray(_result3.suggestions) ? _result3.suggestions.length : 0,
-                                after: renderReadyResult.suggestions.length
-                              });
-                            }
-                            if (renderReadyResult.planDropped > 0 || renderReadyResult.noopCount > 0 || renderReadyResult.mergedGroupCount > 0) {
-                              log("Render plan prune (fresh)", {
-                                paragraphIndex: idx,
-                                dropped: renderReadyResult.planDropped,
-                                planCount: renderReadyResult.planCount,
-                                noop: renderReadyResult.noopCount,
-                                skipped: renderReadyResult.skippedCount,
-                                mergedGroups: renderReadyResult.mergedGroupCount,
-                                after: renderReadyResult.suggestions.length
-                              });
-                            }
-                            suggestionsDetected += renderReadyResult.suggestions.length;
-                            _context57.n = 20;
-                            return renderSuggestionsForParagraph({
-                              paragraphIndex: idx,
-                              paragraph: p,
-                              sourceText: original,
-                              suggestionsToRender: renderReadyResult.suggestions
-                            });
-                          case 20:
-                            _renderOutcome = _context57.v;
-                            suggestions += _renderOutcome.highlighted;
-                            _context57.n = 21;
-                            return flushHighlightsIfNeeded(_renderOutcome.highlighted);
-                          case 21:
-                            _context57.n = 26;
-                            break;
-                          case 22:
-                            _context57.p = 22;
-                            _t40 = _context57.v;
-                            if (!paragraphCacheDisabled) {
-                              onlineParagraphAnalysisCache[idx] = null;
-                            }
-                            if (!(isAbortLikeError(_t40) || checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted || checkToken !== null && checkToken !== void 0 && checkToken.cancelled)) {
-                              _context57.n = 23;
-                              break;
-                            }
-                            throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
-                          case 23:
-                            if (!(_t40 instanceof CheckAbortError && _t40.reason === CHECK_ABORT_REASON_TIMEOUT)) {
-                              _context57.n = 24;
-                              break;
-                            }
-                            throw _t40;
-                          case 24:
-                            if (!(_t40 instanceof CheckAbortError && _t40.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT)) {
-                              _context57.n = 25;
-                              break;
-                            }
-                            apiErrors++;
-                            notifyParagraphTimeout(idx, paragraphTimeoutMs);
-                            return _context57.a(2, 0);
-                          case 25:
-                            apiErrors++;
-                            warn("P".concat(idx, " ONLINE: paragraph processing failed"), _t40);
-                            notifyApiUnavailable();
-                          case 26:
-                            _context57.p = 26;
-                            paragraphElapsedMs = Math.max(0, tnow() - paragraphStartedAt);
-                            paragraphTimingCount++;
-                            paragraphTimingTotalMs += paragraphElapsedMs;
-                            paragraphTimingMaxMs = Math.max(paragraphTimingMaxMs, paragraphElapsedMs);
-                            paragraphTimingMinMs = Math.min(paragraphTimingMinMs, paragraphElapsedMs);
-                            return _context57.f(26);
-                          case 27:
-                            return _context57.a(2);
-                        }
-                      }, _loop2, null, [[18, 22], [10,, 26, 27], [3, 5]]);
-                    });
+                    onlineAnalyzeConcurrency = resolveOnlineAnalyzeConcurrency();
+                    recordParagraphTiming = function recordParagraphTiming(elapsedMs) {
+                      var paragraphElapsedMs = Math.max(0, Number(elapsedMs) || 0);
+                      paragraphTimingCount++;
+                      paragraphTimingTotalMs += paragraphElapsedMs;
+                      paragraphTimingMaxMs = Math.max(paragraphTimingMaxMs, paragraphElapsedMs);
+                      paragraphTimingMinMs = Math.min(paragraphTimingMinMs, paragraphElapsedMs);
+                    };
+                    analysisJobs = [];
                     idx = 0;
                   case 4:
                     if (!(idx < paras.items.length)) {
-                      _context58.n = 7;
+                      _context58.n = 22;
                       break;
                     }
-                    return _context58.d(_regeneratorValues(_loop2(idx)), 5);
+                    ensureCheckActionActive(checkToken);
+                    if (!(checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted)) {
+                      _context58.n = 5;
+                      break;
+                    }
+                    throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
                   case 5:
-                    _ret = _context58.v;
-                    if (!(_ret === 0)) {
-                      _context58.n = 6;
+                    paragraphStartedAt = tnow();
+                    p = paras.items[idx];
+                    original = p.text || "";
+                    normalizedOriginal = (0,_engine_textUtils_js__WEBPACK_IMPORTED_MODULE_10__.normalizeParagraphWhitespace)(original);
+                    trimmed = normalizedOriginal.trim();
+                    paragraphDocOffset = documentCharOffset;
+                    documentCharOffset += original.length + 1;
+                    snapshot = {
+                      paragraphIndex: idx,
+                      sourceText: original,
+                      paragraphDocOffset: paragraphDocOffset
+                    };
+                    if (trimmed) {
+                      _context58.n = 11;
                       break;
                     }
-                    return _context58.a(3, 6);
+                    _context58.n = 6;
+                    return clearPreviousRenderMarkers(idx, p);
                   case 6:
+                    recordUnstableOnlineParagraphOutcome(idx, original, {
+                      nonCommaSkips: 0
+                    });
+                    _context58.p = 7;
+                    _context58.n = 8;
+                    return anchorProvider.getAnchors({
+                      paragraphIndex: idx,
+                      originalText: original,
+                      correctedText: original,
+                      sourceTokens: [],
+                      targetTokens: [],
+                      documentOffset: paragraphDocOffset
+                    });
+                  case 8:
+                    _context58.n = 10;
+                    break;
+                  case 9:
+                    _context58.p = 9;
+                    _t40 = _context58.v;
+                    warn("P".concat(idx, " ONLINE: empty-paragraph anchor init failed"), _t40);
+                  case 10:
+                    if (!paragraphCacheDisabled) {
+                      onlineParagraphAnalysisCache[idx] = null;
+                    }
+                    recordParagraphTiming(tnow() - paragraphStartedAt);
+                    return _context58.a(3, 21);
+                  case 11:
+                    if (!(trimmed.length > MAX_PARAGRAPH_CHARS)) {
+                      _context58.n = 13;
+                      break;
+                    }
+                    _context58.n = 12;
+                    return clearPreviousRenderMarkers(idx, p);
+                  case 12:
+                    recordUnstableOnlineParagraphOutcome(idx, original, {
+                      nonCommaSkips: 0
+                    });
+                    notifyParagraphTooLong(idx, trimmed.length);
+                    if (!paragraphCacheDisabled) {
+                      onlineParagraphAnalysisCache[idx] = null;
+                    }
+                    recordParagraphTiming(tnow() - paragraphStartedAt);
+                    return _context58.a(3, 21);
+                  case 13:
+                    log("P".concat(idx, " ONLINE: len=").concat(original.length, " | \"").concat(SNIP(trimmed), "\""));
+                    paragraphsProcessed++;
+                    if (!(!paragraphCacheDisabled && isOnlineParagraphUnchangedAndSuggestionFree(snapshot))) {
+                      _context58.n = 15;
+                      break;
+                    }
+                    _context58.n = 14;
+                    return clearPreviousRenderMarkers(idx, p);
+                  case 14:
+                    cacheHits++;
+                    unchangedHardSkips++;
+                    recordUnstableOnlineParagraphOutcome(idx, original, {
+                      nonCommaSkips: 0
+                    });
+                    log("Online hard-skip unchanged paragraph (clean cache)", {
+                      paragraphIndex: idx
+                    });
+                    recordParagraphTiming(tnow() - paragraphStartedAt);
+                    return _context58.a(3, 21);
+                  case 15:
+                    if (!shouldBackoffUnstableOnlineParagraph(idx, original)) {
+                      _context58.n = 17;
+                      break;
+                    }
+                    _context58.n = 16;
+                    return clearPreviousRenderMarkers(idx, p);
+                  case 16:
+                    unstableBackoffSkips++;
+                    cacheHits++;
+                    log("Online unstable paragraph backoff skip", {
+                      paragraphIndex: idx,
+                      threshold: resolveOnlineUnstableBackoffThreshold()
+                    });
+                    recordParagraphTiming(tnow() - paragraphStartedAt);
+                    return _context58.a(3, 21);
+                  case 17:
+                    cached = paragraphCacheDisabled ? null : tryGetOnlineParagraphCacheResult(snapshot);
+                    if (!cached) {
+                      _context58.n = 20;
+                      break;
+                    }
+                    cacheHits++;
+                    cachedAnchors = anchorProvider.getAnchorsForParagraph(idx);
+                    renderReadyCached = prepareSuggestionsForRender({
+                      paragraphIndex: idx,
+                      snapshotText: original,
+                      sourceText: (_cachedAnchors$origin = cachedAnchors === null || cachedAnchors === void 0 ? void 0 : cachedAnchors.originalText) !== null && _cachedAnchors$origin !== void 0 ? _cachedAnchors$origin : original,
+                      suggestions: cached.suggestions
+                    });
+                    if (renderReadyCached.renderDedupDropped > 0) {
+                      log("Render dedupe (cached)", {
+                        paragraphIndex: idx,
+                        dropped: renderReadyCached.renderDedupDropped,
+                        before: cached.suggestions.length,
+                        after: renderReadyCached.suggestions.length
+                      });
+                    }
+                    if (renderReadyCached.planDropped > 0 || renderReadyCached.noopCount > 0 || renderReadyCached.mergedGroupCount > 0) {
+                      log("Render plan prune (cached)", {
+                        paragraphIndex: idx,
+                        dropped: renderReadyCached.planDropped,
+                        planCount: renderReadyCached.planCount,
+                        noop: renderReadyCached.noopCount,
+                        skipped: renderReadyCached.skippedCount,
+                        mergedGroups: renderReadyCached.mergedGroupCount,
+                        after: renderReadyCached.suggestions.length
+                      });
+                    }
+                    suggestionsDetected += renderReadyCached.suggestions.length;
+                    _context58.n = 18;
+                    return renderSuggestionsForParagraph({
+                      paragraphIndex: idx,
+                      paragraph: p,
+                      sourceText: original,
+                      suggestionsToRender: renderReadyCached.suggestions
+                    });
+                  case 18:
+                    renderOutcome = _context58.v;
+                    suggestions += renderOutcome.highlighted;
+                    _context58.n = 19;
+                    return flushHighlightsIfNeeded(renderOutcome.highlighted);
+                  case 19:
+                    recordUnstableOnlineParagraphOutcome(idx, original, {
+                      nonCommaSkips: 0
+                    });
+                    recordParagraphTiming(tnow() - paragraphStartedAt);
+                    return _context58.a(3, 21);
+                  case 20:
+                    if (!paragraphCacheDisabled) {
+                      cacheMisses++;
+                    }
+                    remainingCheckMs = (checkToken === null || checkToken === void 0 ? void 0 : checkToken.deadlineAt) > 0 ? Math.max(1, checkToken.deadlineAt - Date.now()) : paragraphTimeoutMs;
+                    paragraphGuardTimeoutMs = Math.min(paragraphTimeoutMs, remainingCheckMs);
+                    timeoutReason = paragraphGuardTimeoutMs < paragraphTimeoutMs ? CHECK_ABORT_REASON_TIMEOUT : CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT;
+                    analysisJobs.push({
+                      paragraphIndex: idx,
+                      paragraph: p,
+                      sourceText: original,
+                      normalizedOriginalText: normalizedOriginal,
+                      paragraphDocOffset: paragraphDocOffset,
+                      paragraphHash: buildDesktopParagraphHash(original),
+                      paragraphGuardTimeoutMs: paragraphGuardTimeoutMs,
+                      timeoutReason: timeoutReason,
+                      timeoutLabel: "Paragraph ".concat(idx + 1, " timed out")
+                    });
+                  case 21:
                     idx++;
                     _context58.n = 4;
                     break;
-                  case 7:
+                  case 22:
+                    if (analysisJobs.length > 0) {
+                      log("Online phase: analyze jobs", {
+                        jobs: analysisJobs.length,
+                        concurrency: onlineAnalyzeConcurrency,
+                        cacheHits: cacheHits,
+                        cacheMisses: cacheMisses
+                      });
+                    }
+                    _context58.n = 23;
+                    return runWithConcurrency(analysisJobs, onlineAnalyzeConcurrency, /*#__PURE__*/function () {
+                      var _ref80 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee56(job) {
+                        var startedAt, _result3, _t39;
+                        return _regenerator().w(function (_context57) {
+                          while (1) switch (_context57.p = _context57.n) {
+                            case 0:
+                              startedAt = tnow();
+                              _context57.p = 1;
+                              ensureCheckActionActive(checkToken);
+                              if (!(checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted)) {
+                                _context57.n = 2;
+                                break;
+                              }
+                              throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
+                            case 2:
+                              _context57.n = 3;
+                              return runWithTimeout(function () {
+                                return commaEngine.analyzeParagraph({
+                                  paragraphIndex: job.paragraphIndex,
+                                  originalText: job.sourceText,
+                                  normalizedOriginalText: job.normalizedOriginalText,
+                                  paragraphDocOffset: job.paragraphDocOffset,
+                                  abortSignal: checkAbortSignal
+                                });
+                              }, job.paragraphGuardTimeoutMs, job.timeoutReason, job.timeoutLabel);
+                            case 3:
+                              _result3 = _context57.v;
+                              return _context57.a(2, {
+                                job: job,
+                                result: _result3,
+                                error: null,
+                                durationMs: Math.max(0, tnow() - startedAt)
+                              });
+                            case 4:
+                              _context57.p = 4;
+                              _t39 = _context57.v;
+                              return _context57.a(2, {
+                                job: job,
+                                result: null,
+                                error: _t39,
+                                durationMs: Math.max(0, tnow() - startedAt)
+                              });
+                          }
+                        }, _callee56, null, [[1, 4]]);
+                      }));
+                      return function (_x131) {
+                        return _ref80.apply(this, arguments);
+                      };
+                    }());
+                  case 23:
+                    analysisResults = _context58.v;
+                    _iterator39 = _createForOfIteratorHelper(analysisResults);
+                    _context58.p = 24;
+                    _iterator39.s();
+                  case 25:
+                    if ((_step39 = _iterator39.n()).done) {
+                      _context58.n = 38;
+                      break;
+                    }
+                    analyzed = _step39.value;
+                    if (analyzed !== null && analyzed !== void 0 && analyzed.job) {
+                      _context58.n = 26;
+                      break;
+                    }
+                    return _context58.a(3, 37);
+                  case 26:
+                    job = analyzed.job;
+                    paragraphPhaseStartedAt = tnow();
+                    _context58.p = 27;
+                    ensureCheckActionActive(checkToken);
+                    if (!(checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted)) {
+                      _context58.n = 28;
+                      break;
+                    }
+                    throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
+                  case 28:
+                    if (!analyzed.error) {
+                      _context58.n = 29;
+                      break;
+                    }
+                    throw analyzed.error;
+                  case 29:
+                    _result4 = analyzed.result || {};
+                    paragraphApiErrors = _result4.apiErrors || 0;
+                    paragraphNonCommaSkips = _result4.nonCommaSkips || 0;
+                    paragraphNonCommaSalvaged = _result4.nonCommaSalvaged || 0;
+                    apiErrors += paragraphApiErrors;
+                    nonCommaSkips += paragraphNonCommaSkips;
+                    nonCommaSalvaged += paragraphNonCommaSalvaged;
+                    recordUnstableOnlineParagraphOutcome(job.paragraphIndex, job.sourceText, {
+                      nonCommaSkips: paragraphNonCommaSkips
+                    });
+                    paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
+                    if (!paragraphCacheDisabled && paragraphStable) {
+                      cacheEntry = makeOnlineParagraphCacheEntry(job.paragraphHash, _result4);
+                      onlineParagraphAnalysisCache[job.paragraphIndex] = cacheEntry || null;
+                    } else if (!paragraphCacheDisabled) {
+                      onlineParagraphAnalysisCache[job.paragraphIndex] = null;
+                    }
+                    renderReadyResult = prepareSuggestionsForRender({
+                      paragraphIndex: job.paragraphIndex,
+                      snapshotText: job.sourceText,
+                      sourceText: (_result4$anchorsEntry = _result4 === null || _result4 === void 0 || (_result4$anchorsEntry2 = _result4.anchorsEntry) === null || _result4$anchorsEntry2 === void 0 ? void 0 : _result4$anchorsEntry2.originalText) !== null && _result4$anchorsEntry !== void 0 ? _result4$anchorsEntry : job.sourceText,
+                      suggestions: _result4.suggestions
+                    });
+                    if (renderReadyResult.renderDedupDropped > 0) {
+                      log("Render dedupe (fresh)", {
+                        paragraphIndex: job.paragraphIndex,
+                        dropped: renderReadyResult.renderDedupDropped,
+                        before: Array.isArray(_result4.suggestions) ? _result4.suggestions.length : 0,
+                        after: renderReadyResult.suggestions.length
+                      });
+                    }
+                    if (renderReadyResult.planDropped > 0 || renderReadyResult.noopCount > 0 || renderReadyResult.mergedGroupCount > 0) {
+                      log("Render plan prune (fresh)", {
+                        paragraphIndex: job.paragraphIndex,
+                        dropped: renderReadyResult.planDropped,
+                        planCount: renderReadyResult.planCount,
+                        noop: renderReadyResult.noopCount,
+                        skipped: renderReadyResult.skippedCount,
+                        mergedGroups: renderReadyResult.mergedGroupCount,
+                        after: renderReadyResult.suggestions.length
+                      });
+                    }
+                    suggestionsDetected += renderReadyResult.suggestions.length;
+                    _context58.n = 30;
+                    return renderSuggestionsForParagraph({
+                      paragraphIndex: job.paragraphIndex,
+                      paragraph: job.paragraph,
+                      sourceText: job.sourceText,
+                      suggestionsToRender: renderReadyResult.suggestions
+                    });
+                  case 30:
+                    _renderOutcome = _context58.v;
+                    suggestions += _renderOutcome.highlighted;
+                    _context58.n = 31;
+                    return flushHighlightsIfNeeded(_renderOutcome.highlighted);
+                  case 31:
+                    _context58.n = 36;
+                    break;
+                  case 32:
+                    _context58.p = 32;
+                    _t41 = _context58.v;
+                    if (!paragraphCacheDisabled) {
+                      onlineParagraphAnalysisCache[job.paragraphIndex] = null;
+                    }
+                    if (!(isAbortLikeError(_t41) || checkAbortSignal !== null && checkAbortSignal !== void 0 && checkAbortSignal.aborted || checkToken !== null && checkToken !== void 0 && checkToken.cancelled)) {
+                      _context58.n = 33;
+                      break;
+                    }
+                    throw new CheckAbortError("Check was cancelled", (checkToken === null || checkToken === void 0 ? void 0 : checkToken.cancelReason) || CHECK_ABORT_REASON_CANCELLED);
+                  case 33:
+                    if (!(_t41 instanceof CheckAbortError && _t41.reason === CHECK_ABORT_REASON_TIMEOUT)) {
+                      _context58.n = 34;
+                      break;
+                    }
+                    throw _t41;
+                  case 34:
+                    if (!(_t41 instanceof CheckAbortError && _t41.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT)) {
+                      _context58.n = 35;
+                      break;
+                    }
+                    apiErrors++;
+                    notifyParagraphTimeout(job.paragraphIndex, paragraphTimeoutMs);
+                    return _context58.a(3, 37);
+                  case 35:
+                    apiErrors++;
+                    warn("P".concat(job.paragraphIndex, " ONLINE: paragraph processing failed"), _t41);
+                    notifyApiUnavailable();
+                  case 36:
+                    _context58.p = 36;
+                    renderElapsedMs = Math.max(0, tnow() - paragraphPhaseStartedAt);
+                    analysisElapsedMs = Math.max(0, Number(analyzed.durationMs) || 0);
+                    recordParagraphTiming(analysisElapsedMs + renderElapsedMs);
+                    return _context58.f(36);
+                  case 37:
+                    _context58.n = 25;
+                    break;
+                  case 38:
+                    _context58.n = 40;
+                    break;
+                  case 39:
+                    _context58.p = 39;
+                    _t42 = _context58.v;
+                    _iterator39.e(_t42);
+                  case 40:
+                    _context58.p = 40;
+                    _iterator39.f();
+                    return _context58.f(40);
+                  case 41:
                     persistPendingSuggestionsOnline();
-                    _context58.n = 8;
+                    _context58.n = 42;
                     return context.sync();
-                  case 8:
+                  case 42:
                     return _context58.a(2);
                 }
-              }, _callee56);
+              }, _callee57, null, [[27, 32, 36, 37], [24, 39, 40, 41], [7, 9]]);
             }));
             return function (_x126) {
               return _ref75.apply(this, arguments);
@@ -21537,15 +22053,15 @@ function _checkDocumentTextOnline() {
           break;
         case 3:
           _context59.p = 3;
-          _t41 = _context59.v;
-          if (_t41 instanceof CheckAbortError && _t41.reason === CHECK_ABORT_REASON_TIMEOUT) {
+          _t43 = _context59.v;
+          if (_t43 instanceof CheckAbortError && _t43.reason === CHECK_ABORT_REASON_TIMEOUT) {
             warn("checkDocumentTextOnline stopped due to timeout");
             queueScanNotification(CHECK_TIMEOUT_MESSAGE, "error");
-          } else if (_t41 instanceof CheckAbortError) {
-            warn("checkDocumentTextOnline cancelled", _t41.reason);
+          } else if (_t43 instanceof CheckAbortError) {
+            warn("checkDocumentTextOnline cancelled", _t43.reason);
             queueScanNotification(CHECK_CANCELLED_MESSAGE, "warn");
           } else {
-            errL("ERROR in checkDocumentTextOnline:", _t41);
+            errL("ERROR in checkDocumentTextOnline:", _t43);
           }
         case 4:
           _context59.p = 4;
@@ -21554,7 +22070,7 @@ function _checkDocumentTextOnline() {
         case 5:
           return _context59.a(2);
       }
-    }, _callee57, null, [[1, 3, 4, 5]]);
+    }, _callee58, null, [[1, 3, 4, 5]]);
   }));
   return _checkDocumentTextOnline.apply(this, arguments);
 }
@@ -22223,7 +22739,7 @@ function publishTaskpaneNotifications(messages) {
 /******/ 	
 /******/ 	/* webpack/runtime/getFullHash */
 /******/ 	!function() {
-/******/ 		__webpack_require__.h = function() { return "5f9dc59538033a664fda"; }
+/******/ 		__webpack_require__.h = function() { return "d82253d7e6960b4181d9"; }
 /******/ 	}();
 /******/ 	
 /******/ 	/* webpack/runtime/global */
