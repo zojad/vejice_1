@@ -4705,23 +4705,23 @@ export async function applySuggestionOnlineById(suggestionId = null) {
         "apply-single-suggestion"
       );
       const touchedIndexes = new Set();
+      let plannedEditApplied = false;
       for (let opIndex = 0; opIndex < plan.length; opIndex++) {
         const op = plan[opIndex];
-        const opSuggestionCount = Array.isArray(op?.suggestions) ? op.suggestions.length : 1;
         const range = plannedRanges[opIndex];
         if (!range) {
-          summary.failedSuggestions += opSuggestionCount;
+          summary.failedSuggestions += 1;
           continue;
         }
         try {
           const insertLocation =
             op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
           range.insertText(op.replacement, insertLocation);
-          summary.appliedSuggestions += opSuggestionCount;
+          plannedEditApplied = true;
           touchedIndexes.add(paragraphIndex);
         } catch (applyErr) {
           warn("applySuggestionOnlineById: failed planned op", applyErr);
-          summary.failedSuggestions += opSuggestionCount;
+          summary.failedSuggestions += 1;
         }
       }
       if (touchedIndexes.size > 0) {
@@ -4731,6 +4731,47 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       }
       summary.touchedParagraphs = touchedIndexes.size;
       await context.sync();
+
+      const isSuggestionApplied = async () => {
+        paragraph.load("text");
+        await context.sync();
+        const liveText = paragraph.text || "";
+        const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [targetSuggestion]);
+        if (verifyResult.noop.length > 0) return true;
+        if (targetSuggestion?.kind === "delete") {
+          const resolved = resolveDeleteOperationFromSnapshot(liveText, sourceText, targetSuggestion);
+          if (!resolved?.op && resolved?.skipReason === "delete_comma_not_found_near_hint") {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      if (plannedEditApplied) {
+        let verifiedApplied = await isSuggestionApplied();
+        if (!verifiedApplied) {
+          let fallbackApplied = false;
+          if (targetSuggestion?.kind === "insert") {
+            fallbackApplied = await applyInsertSuggestion(context, paragraph, targetSuggestion);
+          } else if (targetSuggestion?.kind === "delete") {
+            fallbackApplied = await applyDeleteSuggestion(context, paragraph, targetSuggestion);
+          }
+          if (fallbackApplied) {
+            await context.sync();
+            verifiedApplied = await isSuggestionApplied();
+          }
+        }
+        if (verifiedApplied) {
+          summary.appliedSuggestions += 1;
+          touchedIndexes.add(paragraphIndex);
+        } else {
+          warn("applySuggestionOnlineById: operation not verified after apply", {
+            suggestionId: targetSuggestion?.id ?? null,
+            kind: targetSuggestion?.kind ?? null,
+          });
+          summary.failedSuggestions += 1;
+        }
+      }
     });
 
     const targetIndex = findPendingSuggestionIndexById(summary.targetSuggestionId);
