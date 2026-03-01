@@ -37,6 +37,7 @@ const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd(
 const log = (...a) => DEBUG && console.log("[Vejice CHECK]", ...a);
 const warn = (...a) => DEBUG && console.warn("[Vejice CHECK]", ...a);
 const errL = (...a) => console.error("[Vejice CHECK]", ...a);
+
 const tnow = () => performance?.now?.() ?? Date.now();
 const roundMs = (ms) => (Number.isFinite(ms) ? Math.round(ms * 10) / 10 : 0);
 const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
@@ -212,12 +213,58 @@ function resetPendingSuggestionsOnline() {
   onlineMarkerBaselineByKey.clear();
   persistPendingSuggestionsOnline();
 }
+
+function normalizeSuggestionPositionForOrdering(suggestion) {
+  const primaryPos = getSuggestionSortPos(suggestion);
+  if (Number.isFinite(primaryPos)) return primaryPos;
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function comparePendingSuggestionsByDocumentOrder(left, right) {
+  const leftParagraph = Number.isFinite(left?.paragraphIndex)
+    ? left.paragraphIndex
+    : Number.MAX_SAFE_INTEGER;
+  const rightParagraph = Number.isFinite(right?.paragraphIndex)
+    ? right.paragraphIndex
+    : Number.MAX_SAFE_INTEGER;
+  if (leftParagraph !== rightParagraph) {
+    return leftParagraph - rightParagraph;
+  }
+
+  const leftPos = normalizeSuggestionPositionForOrdering(left);
+  const rightPos = normalizeSuggestionPositionForOrdering(right);
+  if (leftPos !== rightPos) {
+    return leftPos - rightPos;
+  }
+
+  const leftKind = typeof left?.kind === "string" ? left.kind : "";
+  const rightKind = typeof right?.kind === "string" ? right.kind : "";
+  if (leftKind !== rightKind) {
+    if (leftKind === "delete") return -1;
+    if (rightKind === "delete") return 1;
+    return leftKind.localeCompare(rightKind);
+  }
+
+  const leftId = String(left?.id ?? "");
+  const rightId = String(right?.id ?? "");
+  if (leftId !== rightId) {
+    return leftId.localeCompare(rightId);
+  }
+  return 0;
+}
+
+function sortPendingSuggestionsOnlineInPlace() {
+  if (!Array.isArray(pendingSuggestionsOnline) || pendingSuggestionsOnline.length < 2) return;
+  pendingSuggestionsOnline.sort(comparePendingSuggestionsByDocumentOrder);
+}
+
 function addPendingSuggestionOnline(suggestion, { persist = true } = {}) {
   const renderKey = buildSuggestionRenderDedupKey(suggestion);
   if (renderKey && pendingSuggestionRenderKeys.has(renderKey)) {
     return false;
   }
   pendingSuggestionsOnline.push(suggestion);
+  sortPendingSuggestionsOnlineInPlace();
   if (renderKey) {
     pendingSuggestionRenderKeys.add(renderKey);
   }
@@ -226,7 +273,38 @@ function addPendingSuggestionOnline(suggestion, { persist = true } = {}) {
   }
   return true;
 }
+
+function findPendingSuggestionIndexById(suggestionId) {
+  if (suggestionId === null || typeof suggestionId === "undefined") return -1;
+  const normalizedId = String(suggestionId).trim();
+  if (!normalizedId) return -1;
+  for (let i = 0; i < pendingSuggestionsOnline.length; i++) {
+    if (String(pendingSuggestionsOnline[i]?.id ?? "").trim() === normalizedId) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function removePendingSuggestionAt(index, { persist = true } = {}) {
+  if (!Number.isFinite(index)) return null;
+  const safeIndex = Math.floor(index);
+  if (safeIndex < 0 || safeIndex >= pendingSuggestionsOnline.length) return null;
+  const [removed] = pendingSuggestionsOnline.splice(safeIndex, 1);
+  if (!removed) return null;
+  const renderKey = buildSuggestionRenderDedupKey(removed);
+  if (renderKey) {
+    pendingSuggestionRenderKeys.delete(renderKey);
+  }
+  resetSuggestionMarkerState(removed);
+  if (persist) {
+    persistPendingSuggestionsOnline();
+  }
+  return removed;
+}
+
 export function getPendingSuggestionsOnline(debugSnapshot = false) {
+  sortPendingSuggestionsOnlineInPlace();
   if (!debugSnapshot) return pendingSuggestionsOnline;
   return pendingSuggestionsOnline.map((sug) => ({
     id: sug?.id,
@@ -738,7 +816,7 @@ const ACTION_TYPE_REJECT = "reject";
 const ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
 const ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
 const ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
-const LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 2;
+const LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const DESKTOP_ANALYZE_CONCURRENCY_DEFAULT = 4;
 const POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1200;
 const CHECK_ABORT_REASON_TIMEOUT = "check-timeout";
@@ -757,6 +835,7 @@ let activeActionState = {
   startedAt: 0,
 };
 let postApplyCheckCooldownUntil = 0;
+let onlineMarkerCleanupApiNotFoundLogged = false;
 
 class CheckAbortError extends Error {
   constructor(message, reason) {
@@ -994,6 +1073,12 @@ async function runWithTimeout(promiseFactory, timeoutMs, timeoutReason, timeoutM
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isApiNotFoundLikeError(err) {
+  const code = typeof err?.code === "string" ? err.code : "";
+  const message = typeof err?.message === "string" ? err.message.toLowerCase() : "";
+  return code === "ApiNotFound" || message.includes("apinotfound");
 }
 
 async function waitForOnlineScanCompletion({ timeoutMs = 120000, pollMs = 80, silent = false } = {}) {
@@ -3759,6 +3844,7 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
   const restoreWordUnderline = toWordUnderline(restoreMarker?.underline);
   const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
   const skipTagLookup = Boolean(options?.skipTagLookup);
+  const deleteTaggedControl = options?.deleteTaggedControl !== false;
   if (isWordOnline() && !skipTagLookup) {
     const markerTag = getSuggestionMarkerTag(suggestion, { create: false });
     if (markerTag) {
@@ -3779,7 +3865,9 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
                 // ignore: underlineColor not supported on some hosts
               }
             }
-            control.delete(true);
+            if (deleteTaggedControl) {
+              control.delete(true);
+            }
           }
           await context.sync();
           resetSuggestionMarkerState(suggestion);
@@ -3867,8 +3955,9 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
   resetSuggestionMarkerState(suggestion);
   return Boolean(range);
 }
-async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs) {
+async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs, options = {}) {
   const usingOverride = Array.isArray(suggestionsOverride);
+  const softClearOnly = Boolean(options?.softClearOnly);
   const source = usingOverride ? suggestionsOverride : pendingSuggestionsOnline;
   const normalizedEntries = [];
   for (const item of source) {
@@ -3902,7 +3991,9 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     }
     return result;
   }
-  const taggedResult = await clearSuggestionMarkersByTag(context, normalizedEntries);
+  const taggedResult = softClearOnly
+    ? { clearedCount: 0, unresolvedEntries: normalizedEntries }
+    : await clearSuggestionMarkersByTag(context, normalizedEntries);
   result.clearedByTagCount = taggedResult.clearedCount;
   let needsFinalSync = false;
   for (const entry of taggedResult.unresolvedEntries) {
@@ -3911,7 +4002,8 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     if (paragraph) {
       const clearedBeforeTrackedFallback = result.clearedFallbackCount;
       const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion, {
-        skipTagLookup: true,
+        skipTagLookup: false,
+        deleteTaggedControl: !softClearOnly,
       });
       if (cleared) {
         result.clearedFallbackCount += 1;
@@ -3937,7 +4029,16 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     try {
       await context.sync();
     } catch (syncErr) {
-      warn("clearOnlineSuggestionMarkers: final sync failed", syncErr);
+      if (isWordOnline() && isApiNotFoundLikeError(syncErr)) {
+        if (!onlineMarkerCleanupApiNotFoundLogged) {
+          onlineMarkerCleanupApiNotFoundLogged = true;
+          log(
+            "clearOnlineSuggestionMarkers: final sync ApiNotFound on this host; suppressing repeated warnings"
+          );
+        }
+      } else {
+        warn("clearOnlineSuggestionMarkers: final sync failed", syncErr);
+      }
     }
   }
   if (!suggestionsOverride) {
@@ -4492,6 +4593,277 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
     hintStart: start,
     preview: (sourceText || "").slice(from, to),
   };
+}
+
+export async function applySuggestionOnlineById(suggestionId = null) {
+  const startedAt = tnow();
+  const summary = {
+    status: "noop",
+    reason: null,
+    restored: 0,
+    pendingBefore: 0,
+    targetSuggestionId: null,
+    appliedSuggestions: 0,
+    skippedSuggestions: 0,
+    failedSuggestions: 0,
+    skippedUnresolvable: 0,
+    clearedMarkers: 0,
+    touchedParagraphs: 0,
+    pendingAfter: 0,
+    durationMs: 0,
+  };
+  const finalize = (status, reason = null) => {
+    summary.status = status;
+    summary.reason = reason;
+    summary.pendingAfter = pendingSuggestionsOnline.length;
+    summary.durationMs = Math.round(tnow() - startedAt);
+    return summary;
+  };
+
+  if (!pendingSuggestionsOnline.length) {
+    const restored = restorePendingSuggestionsOnline();
+    summary.restored = restored;
+    if (restored > 0) {
+      log(`applySuggestionOnlineById: restored ${restored} pending suggestions from storage`);
+    }
+  }
+  summary.pendingBefore = pendingSuggestionsOnline.length;
+  if (!pendingSuggestionsOnline.length) {
+    return finalize("noop", "no-pending-suggestions");
+  }
+
+  const targetIndexRaw =
+    suggestionId === null || typeof suggestionId === "undefined"
+      ? 0
+      : findPendingSuggestionIndexById(suggestionId);
+  if (targetIndexRaw < 0) {
+    return finalize("noop", "suggestion-not-found");
+  }
+  const targetSuggestion = pendingSuggestionsOnline[targetIndexRaw];
+  if (!targetSuggestion) {
+    return finalize("noop", "suggestion-not-found");
+  }
+  summary.targetSuggestionId = targetSuggestion.id ?? null;
+
+  const scanCompleted = await waitForOnlineScanCompletion();
+  if (!scanCompleted) {
+    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.", "warn");
+    flushScanNotifications();
+    return finalize("deferred", "scan-in-progress");
+  }
+  const actionToken = beginAction(ACTION_TYPE_APPLY);
+  if (!actionToken) {
+    return finalize("deferred", "action-in-progress");
+  }
+  let suggestionResolvedAsNoop = false;
+  try {
+    await Word.run(async (context) => {
+      const paragraphIndex = targetSuggestion?.paragraphIndex;
+      if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) {
+        summary.failedSuggestions = 1;
+        return;
+      }
+      const paras = await wordOnlineAdapter.getParagraphs(context);
+      const paragraph = paras.items[paragraphIndex];
+      if (!paragraph) {
+        summary.failedSuggestions = 1;
+        return;
+      }
+
+      const markerCleanupSummary = await clearOnlineSuggestionMarkers(
+        context,
+        [{ suggestion: targetSuggestion, paragraph }],
+        paras,
+        { softClearOnly: true }
+      );
+      summary.clearedMarkers =
+        (markerCleanupSummary?.clearedByTagCount || 0) +
+        (markerCleanupSummary?.clearedFallbackCount || 0);
+
+      const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+      const snapshotText = paragraph.text || "";
+      const sourceText = entry?.originalText ?? snapshotText;
+      const { plan, skipped, noop } = buildParagraphOperationsPlan(snapshotText, sourceText, [
+        targetSuggestion,
+      ]);
+
+      summary.skippedSuggestions += skipped.length + noop.length;
+      suggestionResolvedAsNoop = noop.length > 0;
+      if (!plan.length) {
+        if (!noop.length) {
+          summary.failedSuggestions += skipped.length ? 0 : 1;
+        }
+        await context.sync();
+        return;
+      }
+
+      const plannedRanges = await getRangesForPlannedOperations(
+        context,
+        paragraph,
+        snapshotText,
+        plan,
+        "apply-single-suggestion"
+      );
+      const touchedIndexes = new Set();
+      for (let opIndex = 0; opIndex < plan.length; opIndex++) {
+        const op = plan[opIndex];
+        const opSuggestionCount = Array.isArray(op?.suggestions) ? op.suggestions.length : 1;
+        const range = plannedRanges[opIndex];
+        if (!range) {
+          summary.failedSuggestions += opSuggestionCount;
+          continue;
+        }
+        try {
+          const insertLocation =
+            op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
+          range.insertText(op.replacement, insertLocation);
+          summary.appliedSuggestions += opSuggestionCount;
+          touchedIndexes.add(paragraphIndex);
+        } catch (applyErr) {
+          warn("applySuggestionOnlineById: failed planned op", applyErr);
+          summary.failedSuggestions += opSuggestionCount;
+        }
+      }
+      if (touchedIndexes.size > 0) {
+        await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
+          force: wordOnlineAdapter.shouldForceSpacingCleanup(),
+        });
+      }
+      summary.touchedParagraphs = touchedIndexes.size;
+      await context.sync();
+    });
+
+    const targetIndex = findPendingSuggestionIndexById(summary.targetSuggestionId);
+    if (summary.appliedSuggestions > 0 || suggestionResolvedAsNoop) {
+      if (targetIndex >= 0) {
+        removePendingSuggestionAt(targetIndex, { persist: false });
+        const paragraphIndex = targetSuggestion?.paragraphIndex;
+        if (Number.isFinite(paragraphIndex) && paragraphIndex >= 0) {
+          clearOnlineParagraphRenderState(paragraphIndex);
+          unstableOnlineParagraphBackoff.delete(paragraphIndex);
+        }
+      }
+      persistPendingSuggestionsOnline();
+      if (summary.appliedSuggestions > 0) {
+        startPostApplyCheckCooldown();
+        return finalize(summary.failedSuggestions > 0 ? "partial" : "applied");
+      }
+      return finalize("applied", "already-applied");
+    }
+
+    // Keep one-by-one flow moving forward: if this suggestion cannot be applied
+    // (stale anchors / unresolved op), drop it from the pending queue.
+    if (targetIndex >= 0) {
+      removePendingSuggestionAt(targetIndex, { persist: false });
+      summary.skippedUnresolvable = 1;
+      const paragraphIndex = targetSuggestion?.paragraphIndex;
+      if (Number.isFinite(paragraphIndex) && paragraphIndex >= 0) {
+        clearOnlineParagraphRenderState(paragraphIndex);
+        unstableOnlineParagraphBackoff.delete(paragraphIndex);
+      }
+      persistPendingSuggestionsOnline();
+    }
+    return finalize(
+      summary.failedSuggestions > 0 ? "partial" : "noop",
+      "suggestion-skipped-unresolvable"
+    );
+  } finally {
+    finishAction(actionToken);
+  }
+}
+
+export async function rejectSuggestionOnlineById(suggestionId = null) {
+  const startedAt = tnow();
+  const summary = {
+    status: "noop",
+    reason: null,
+    restored: 0,
+    pendingBefore: 0,
+    targetSuggestionId: null,
+    clearedMarkers: 0,
+    failedClear: 0,
+    rejectedSuggestions: 0,
+    pendingAfter: 0,
+    durationMs: 0,
+  };
+  const finalize = (status, reason = null) => {
+    summary.status = status;
+    summary.reason = reason;
+    summary.pendingAfter = pendingSuggestionsOnline.length;
+    summary.durationMs = Math.round(tnow() - startedAt);
+    return summary;
+  };
+
+  if (!pendingSuggestionsOnline.length) {
+    const restored = restorePendingSuggestionsOnline();
+    summary.restored = restored;
+    if (restored > 0) {
+      log(`rejectSuggestionOnlineById: restored ${restored} pending suggestions from storage`);
+    }
+  }
+  summary.pendingBefore = pendingSuggestionsOnline.length;
+  if (!pendingSuggestionsOnline.length) {
+    return finalize("noop", "no-pending-suggestions");
+  }
+
+  const targetIndexRaw =
+    suggestionId === null || typeof suggestionId === "undefined"
+      ? 0
+      : findPendingSuggestionIndexById(suggestionId);
+  if (targetIndexRaw < 0) {
+    return finalize("noop", "suggestion-not-found");
+  }
+  const targetSuggestion = pendingSuggestionsOnline[targetIndexRaw];
+  if (!targetSuggestion) {
+    return finalize("noop", "suggestion-not-found");
+  }
+  summary.targetSuggestionId = targetSuggestion.id ?? null;
+
+  const scanCompleted = await waitForOnlineScanCompletion();
+  if (!scanCompleted) {
+    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.", "warn");
+    flushScanNotifications();
+    return finalize("deferred", "scan-in-progress");
+  }
+  const actionToken = beginAction(ACTION_TYPE_REJECT);
+  if (!actionToken) {
+    return finalize("deferred", "action-in-progress");
+  }
+  try {
+    await Word.run(async (context) => {
+      const paragraphIndex = targetSuggestion?.paragraphIndex;
+      const hasParagraphIndex = Number.isFinite(paragraphIndex) && paragraphIndex >= 0;
+      const paras = await wordOnlineAdapter.getParagraphs(context);
+      const paragraph = hasParagraphIndex ? paras.items[paragraphIndex] || null : null;
+      const clearResult = await wordOnlineAdapter.clearHighlights(
+        context,
+        [{ suggestion: targetSuggestion, paragraph }],
+        paras,
+        { softClearOnly: true }
+      );
+      summary.clearedMarkers =
+        (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
+      summary.failedClear = clearResult?.failedCount || 0;
+      await context.sync();
+    });
+
+    const targetIndex = findPendingSuggestionIndexById(summary.targetSuggestionId);
+    if (targetIndex >= 0) {
+      removePendingSuggestionAt(targetIndex, { persist: false });
+      summary.rejectedSuggestions = 1;
+      const paragraphIndex = targetSuggestion?.paragraphIndex;
+      if (Number.isFinite(paragraphIndex) && paragraphIndex >= 0) {
+        clearOnlineParagraphRenderState(paragraphIndex);
+      }
+    }
+    persistPendingSuggestionsOnline();
+    if (summary.failedClear > 0) {
+      return finalize(summary.clearedMarkers > 0 ? "partial" : "rejected", "some-marker-clear-failures");
+    }
+    return finalize("rejected");
+  } finally {
+    finishAction(actionToken);
+  }
 }
 
 export async function applyAllSuggestionsOnline() {

@@ -26,7 +26,7 @@ const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 260;
 const SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
 const CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
-const LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 2;
+const LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
 const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
@@ -253,6 +253,67 @@ export class CommaSuggestionEngine {
       }
     };
 
+    const chunkMetaKey = (chunk) => {
+      const index = String(chunk?.index ?? "");
+      const start = Number.isFinite(chunk?.start) ? chunk.start : "";
+      const end = Number.isFinite(chunk?.end) ? chunk.end : "";
+      return `${index}|${start}|${end}`;
+    };
+
+    const summarizeProcessedMeta = (items = []) => {
+      let apiErrorsCount = 0;
+      let nonCommaSkipsCount = 0;
+      let nonCommaSalvagedCount = 0;
+      for (const meta of items) {
+        if (!meta) continue;
+        if (meta.nonCommaSalvaged) {
+          nonCommaSalvagedCount++;
+        }
+        if (meta.detail) continue;
+        if (meta.skipReason === "apiError" || meta.skipReason === "apiErrorCooldown") {
+          apiErrorsCount++;
+        } else if (meta.skipReason === "nonCommaChange") {
+          nonCommaSkipsCount++;
+        }
+      }
+      return {
+        apiErrors: apiErrorsCount,
+        nonCommaSkips: nonCommaSkipsCount,
+        nonCommaSalvaged: nonCommaSalvagedCount,
+      };
+    };
+
+    const mergeRetryArtifacts = (currentMeta, currentChunkDetails, retryMeta, retryChunkDetails) => {
+      const metaMap = new Map();
+      (currentMeta || []).forEach((meta) => {
+        if (!meta?.chunk) return;
+        metaMap.set(chunkMetaKey(meta.chunk), meta);
+      });
+      (retryMeta || []).forEach((meta) => {
+        if (!meta?.chunk) return;
+        const key = chunkMetaKey(meta.chunk);
+        const existing = metaMap.get(key);
+        if (!existing || (!existing.detail && meta.detail)) {
+          metaMap.set(key, meta);
+        }
+      });
+
+      const detailMap = new Map();
+      (currentChunkDetails || []).forEach((entry) => {
+        if (!entry?.chunk) return;
+        detailMap.set(chunkMetaKey(entry.chunk), entry);
+      });
+      (retryChunkDetails || []).forEach((entry) => {
+        if (!entry?.chunk) return;
+        detailMap.set(chunkMetaKey(entry.chunk), entry);
+      });
+
+      return {
+        processedMeta: Array.from(metaMap.values()),
+        chunkDetails: Array.from(detailMap.values()),
+      };
+    };
+
     const mergeChunkProcessResults = (results = []) => {
       const merged = {
         processedMeta: [],
@@ -276,8 +337,9 @@ export class CommaSuggestionEngine {
       return merged;
     };
 
-    const processChunk = async (chunk, depth = 0) => {
+    const processChunk = async (chunk, depth = 0, options = {}) => {
       throwIfAborted(abortSignal);
+      const ignoreCooldown = Boolean(options?.ignoreCooldown);
       const chunkInputText = chunk.normalizedText || chunk.text || "";
       const meta = {
         chunk,
@@ -286,6 +348,8 @@ export class CommaSuggestionEngine {
         syntheticTokens: null,
         forceSyntheticAnchoring: false,
         lowAnchorReliability: Boolean(chunk?.lowAnchorReliability),
+        skipReason: null,
+        nonCommaSalvaged: false,
       };
       const chunkResult = {
         processedMeta: [meta],
@@ -296,6 +360,7 @@ export class CommaSuggestionEngine {
       };
 
       if (chunk.tooLong) {
+        meta.skipReason = "tooLong";
         logSkippedChunk("tooLong", chunk, { depth });
         this.notifiers.onSentenceTooLong(paragraphIndex, chunk.length);
         meta.syntheticTokens = tokenizeForAnchoring(
@@ -308,7 +373,8 @@ export class CommaSuggestionEngine {
       const chunkRequestText = chunkInputText;
       const chunkFailureKey = buildChunkFailureKey(paragraphIndex, chunkRequestText);
       const cooldownUntil = this.apiChunkFailureCooldownUntil.get(chunkFailureKey) || 0;
-      if (cooldownUntil > Date.now()) {
+      if (!ignoreCooldown && cooldownUntil > Date.now()) {
+        meta.skipReason = "apiErrorCooldown";
         logSkippedChunk("apiErrorCooldown", chunk, {
           depth,
           cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now()),
@@ -352,6 +418,7 @@ export class CommaSuggestionEngine {
             chunkFailureKey,
             Date.now() + API_FAILURE_COOLDOWN_MS
           );
+          meta.skipReason = "apiError";
           logSkippedChunk("apiError", chunk, {
             depth,
             apiError: apiErr?.message || String(apiErr || "API error"),
@@ -397,6 +464,7 @@ export class CommaSuggestionEngine {
         });
       }
       if (!hasApiCommaOps && hasNonCommaDrift && !hasCommaDiffOps) {
+        meta.skipReason = "nonCommaChange";
         logSkippedChunk("nonCommaChange", chunk, {
           depth,
           correctedSnippet: makeSnippet(correctedChunk),
@@ -428,6 +496,7 @@ export class CommaSuggestionEngine {
           return mergeChunkProcessResults(salvageResults);
         }
         chunkResult.nonCommaSalvaged++;
+        meta.nonCommaSalvaged = true;
         logSkippedChunk("nonCommaChangeSalvaged", chunk, {
           depth,
           correctedSnippet: makeSnippet(correctedChunk),
@@ -470,8 +539,8 @@ export class CommaSuggestionEngine {
     );
 
     const mergedChunkResults = mergeChunkProcessResults(chunkResults);
-    const processedMeta = mergedChunkResults.processedMeta;
-    const chunkDetails = mergedChunkResults.chunkDetails;
+    let processedMeta = mergedChunkResults.processedMeta;
+    let chunkDetails = mergedChunkResults.chunkDetails;
     let apiErrors = mergedChunkResults.apiErrors;
     let nonCommaChunkSkips = mergedChunkResults.nonCommaSkips;
     let nonCommaChunkSalvaged = mergedChunkResults.nonCommaSalvaged;
@@ -489,6 +558,41 @@ export class CommaSuggestionEngine {
     };
     processedMeta.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
     chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+
+    const failedChunksForFinalRetry = processedMeta
+      .filter(
+        (meta) =>
+          meta &&
+          !meta.detail &&
+          (meta.skipReason === "apiError" || meta.skipReason === "apiErrorCooldown")
+      )
+      .map((meta) => meta.chunk)
+      .filter(Boolean);
+    if (failedChunksForFinalRetry.length > 0) {
+      const retryResults = [];
+      for (const failedChunk of failedChunksForFinalRetry) {
+        throwIfAborted(abortSignal);
+        const failedChunkText = failedChunk.normalizedText || failedChunk.text || "";
+        const failedChunkKey = buildChunkFailureKey(paragraphIndex, failedChunkText);
+        this.apiChunkFailureCooldownUntil.delete(failedChunkKey);
+        retryResults.push(await processChunk(failedChunk, 0, { ignoreCooldown: true }));
+      }
+      const retryMerged = mergeChunkProcessResults(retryResults);
+      const mergedAfterRetry = mergeRetryArtifacts(
+        processedMeta,
+        chunkDetails,
+        retryMerged.processedMeta,
+        retryMerged.chunkDetails
+      );
+      processedMeta = mergedAfterRetry.processedMeta;
+      chunkDetails = mergedAfterRetry.chunkDetails;
+      const recomputedStats = summarizeProcessedMeta(processedMeta);
+      apiErrors = recomputedStats.apiErrors;
+      nonCommaChunkSkips = recomputedStats.nonCommaSkips;
+      nonCommaChunkSalvaged = recomputedStats.nonCommaSalvaged;
+      processedMeta.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+      chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+    }
 
     const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
     const canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;

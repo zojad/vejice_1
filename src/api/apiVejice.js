@@ -67,7 +67,7 @@ const API_KEY =
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
   "";
 const DEFAULT_API_MAX_ATTEMPTS = 2;
-const LOCAL_API_MAX_ATTEMPTS = 1;
+const LOCAL_API_MAX_ATTEMPTS = 2;
 const DEFAULT_API_RETRY_BASE_DELAY_MS = 400;
 const DEFAULT_API_RETRY_MAX_DELAY_MS = 2500;
 const DEFAULT_API_RETRY_JITTER_MS = 250;
@@ -295,10 +295,14 @@ function requiresApiKey(url) {
 const DOT_GUARD_PLACEHOLDER = "\uE000";
 const DATE_DOT_PATTERN = /\b(\d{1,2})\.\s*(\d{1,2})(?:\.\s*(\d{2,4}))?\b/g;
 const INITIALS_DOT_PATTERN = /\b(?:[\p{L}]\.\s*){2,}/gu;
+const SHORT_ABBREV_DOT_PATTERN = /\b[\p{L}]{1,3}\.(?=\s+\p{L})/gu;
+const ORDINAL_DOT_PATTERN = /\b\d+\.(?=\s+\p{L})/g;
 const DOT_GUARD_PATTERNS = [
   INITIALS_DOT_PATTERN,
+  SHORT_ABBREV_DOT_PATTERN,
+  ORDINAL_DOT_PATTERN,
   /\b\d{1,2}\.\s*\d{1,2}\.\s*\d{2,4}\b/g,
-  /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec)\./giu,
+  /\b(?:npr|itd|itn|ipd|idr|oz|tj|dr|mr|ga|gos|prim|prof|doc|mag|jan|feb|mar|apr|jun|jul|avg|sep|okt|nov|dec|sv|st)\./giu,
   /\b(?:d\.\s*o\.\s*o\.|d\.\s*d\.|s\.\s*p\.|d\.\s*n\.\s*o\.|k\.\s*d\.)/giu,
 ];
 function numberFromUnknown(value) {

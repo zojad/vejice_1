@@ -10,8 +10,8 @@
   <Version>1.0.0.2</Version>
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
-  <DisplayName DefaultValue="Preverjanje vejic (Web)"/>
-  <Description DefaultValue="Preverite ustrezno rabo vejic v Word dokumentu (Word Online)."/>
+  <DisplayName DefaultValue="CJVT Vejice"/>
+  <Description DefaultValue="Preverite ustrezno rabo vejic"/>
 
   <!-- TOP-LEVEL: icons + support -->
   <IconUrl DefaultValue="https://localhost:4001/assets/icon-32.png"/>

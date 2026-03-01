@@ -24,8 +24,8 @@ export class WordOnlineAdapter {
     return this.textBridge.applySuggestion(context, paragraph, suggestion);
   }
 
-  clearHighlights(context, suggestionsOverride, paragraphs) {
-    return this.clearSuggestionMarkersImpl(context, suggestionsOverride, paragraphs);
+  clearHighlights(context, suggestionsOverride, paragraphs, options) {
+    return this.clearSuggestionMarkersImpl(context, suggestionsOverride, paragraphs, options);
   }
 
   shouldForceSpacingCleanup() {

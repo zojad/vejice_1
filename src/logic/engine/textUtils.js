@@ -39,7 +39,17 @@ export function isNumericComma(original, corrected, kind, pos) {
 
 export function normalizeForComparison(text) {
   if (typeof text !== "string") return "";
-  return text
+  let normalized = text;
+  // Tolerate encoding-related drift (e.g. diacritic loss / mojibake) in comma-only checks.
+  try {
+    normalized = normalized.normalize("NFKD");
+  } catch (_err) {
+    // Ignore runtimes without full Unicode normalization support.
+  }
+  return normalized
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\uFFFD/g, "")
+    .replace(/\u00EF\u00BF\u00BD/g, "")
     .replace(/\s+/g, "")
     .replace(/,/g, "")
     .replace(/[()]/g, "");

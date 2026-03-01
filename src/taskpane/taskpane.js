@@ -4,6 +4,8 @@ import {
   checkDocumentText,
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
+  applySuggestionOnlineById,
+  rejectSuggestionOnlineById,
   isDocumentCheckInProgress,
   getPendingSuggestionsOnline,
 } from "../logic/preveriVejice.js";
@@ -11,6 +13,7 @@ import { isWordOnline } from "../utils/host.js";
 import {
   readTaskpaneNotifications,
   clearTaskpaneNotifications,
+  publishTaskpaneNotifications,
   TASKPANE_NOTIFICATION_EVENT_NAME,
   TASKPANE_NOTIFICATION_STORAGE_KEY,
 } from "../utils/notifications.js";
@@ -21,6 +24,7 @@ const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
 let busy = false;
 let online = false;
 let checkRunInFlight = false;
+let currentSuggestionIndex = 0;
 let lastCheckClickAt = 0;
 const CHECK_CLICK_DEBOUNCE_MS = 800;
 const MAX_VISIBLE_NOTIFICATIONS = 30;
@@ -44,6 +48,14 @@ const setStatus = (message) => {
   if (statusLine) statusLine.textContent = message;
 };
 
+const pushNotification = (message, level = "info") => {
+  if (!message) return;
+  publishTaskpaneNotifications([message], {
+    source: online ? "online-taskpane" : "desktop-taskpane",
+    level,
+  });
+};
+
 const buildNotificationSignature = (items) => {
   if (!Array.isArray(items) || !items.length) return "empty";
   return items.map((item) => `${item.id}:${item.timestamp}`).join("|");
@@ -54,6 +66,9 @@ const renderNotifications = ({ force = false } = {}) => {
   const emptyEl = document.getElementById("notification-empty");
   const clearBtn = document.getElementById("btn-clear-notifications");
   if (!listEl || !emptyEl) return;
+  const previousListScrollTop = listEl.scrollTop;
+  const previousDocScrollTop =
+    document.documentElement?.scrollTop ?? document.body?.scrollTop ?? 0;
 
   const allItems = readTaskpaneNotifications();
   const visibleItems = allItems.slice(-MAX_VISIBLE_NOTIFICATIONS).reverse();
@@ -83,17 +98,30 @@ const renderNotifications = ({ force = false } = {}) => {
     li.title = [when, source].filter(Boolean).join(" | ");
     listEl.appendChild(li);
   }
+  listEl.scrollTop = previousListScrollTop;
+  if (document.documentElement) {
+    document.documentElement.scrollTop = previousDocScrollTop;
+  }
+  if (document.body) {
+    document.body.scrollTop = previousDocScrollTop;
+  }
 };
 
 const syncActionButtons = () => {
   const checkBtn = document.getElementById("btn-check");
+  const acceptOneBtn = document.getElementById("btn-accept-one");
+  const rejectOneBtn = document.getElementById("btn-reject-one");
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
   const checkInProgress = isDocumentCheckInProgress();
+  const pendingCount = online ? getPendingSuggestionsOnline().length : 0;
+  const hasPending = pendingCount > 0;
 
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
-  if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress;
-  if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress;
+  if (acceptOneBtn) acceptOneBtn.disabled = busy || !online || checkInProgress || !hasPending;
+  if (rejectOneBtn) rejectOneBtn.disabled = busy || !online || checkInProgress || !hasPending;
+  if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress || !hasPending;
+  if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress || !hasPending;
 };
 
 const setBusy = (nextBusy) => {
@@ -101,10 +129,30 @@ const setBusy = (nextBusy) => {
   syncActionButtons();
 };
 
+const clampCurrentSuggestionIndex = (total) => {
+  if (!Number.isFinite(total) || total <= 0) {
+    currentSuggestionIndex = 0;
+    return;
+  }
+  if (currentSuggestionIndex < 0) {
+    currentSuggestionIndex = 0;
+    return;
+  }
+  if (currentSuggestionIndex >= total) {
+    currentSuggestionIndex = total - 1;
+  }
+};
+
 const refreshPendingStatus = () => {
   if (!online) return;
   const pending = getPendingSuggestionsOnline();
-  setStatus(`Pripravljeno. Predlogi: ${pending.length}.`);
+  clampCurrentSuggestionIndex(pending.length);
+  if (!pending.length) {
+    setStatus("Pripravljeno. Predlogi: 0.");
+    return;
+  }
+  const ordinal = currentSuggestionIndex + 1;
+  setStatus(`Pripravljeno. Predlogi: ${pending.length}. Trenutni: ${ordinal}/${pending.length}.`);
 };
 
 const runCheck = async () => {
@@ -157,7 +205,7 @@ const runAccept = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Sprejemam predloge...");
+  setStatus("Sprejemam vse predloge...");
   try {
     const summary = await applyAllSuggestionsOnline();
     const applied = Number(summary?.appliedSuggestions ?? 0);
@@ -180,7 +228,7 @@ const runReject = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Zavra\u010dam predloge...");
+  setStatus("Zavra\u010dam vse predloge...");
   try {
     const summary = await rejectAllSuggestionsOnline();
     const rejected = Number(summary?.clearedMarkers ?? 0);
@@ -190,6 +238,104 @@ const runReject = async () => {
   } catch (err) {
     errL("reject failed", err);
     setStatus("Napaka pri zavracanju.");
+  } finally {
+    setBusy(false);
+    syncActionButtons();
+  }
+};
+
+const runAcceptOne = async () => {
+  if (!online) return;
+  if (busy || isDocumentCheckInProgress()) {
+    pushNotification("Počakajte, da se preverjanje konča.", "warn");
+    return;
+  }
+  const pendingList = getPendingSuggestionsOnline();
+  if (!pendingList.length) {
+    pushNotification("Ni predlogov za sprejem.", "info");
+    refreshPendingStatus();
+    return;
+  }
+  clampCurrentSuggestionIndex(pendingList.length);
+  const current = pendingList[currentSuggestionIndex];
+  if (!current) {
+    pushNotification("Predlog ni več na voljo.", "warn");
+    refreshPendingStatus();
+    return;
+  }
+  setBusy(true);
+  setStatus("Sprejemam trenutni predlog...");
+  try {
+    const summary = await applySuggestionOnlineById(current.id);
+    const pendingAfter = Number(summary?.pendingAfter ?? 0);
+    clampCurrentSuggestionIndex(pendingAfter);
+    if (summary?.status === "applied" || summary?.status === "partial") {
+      if (summary?.reason === "suggestion-skipped-unresolvable") {
+        pushNotification(
+          `Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`,
+          "warn"
+        );
+      } else {
+        pushNotification(`Sprejeto 1. Preostalo: ${pendingAfter}.`, "info");
+      }
+    } else if (summary?.reason === "already-applied") {
+      pushNotification(`Predlog je bil že upoštevan. Preostalo: ${pendingAfter}.`, "info");
+    } else if (summary?.reason === "suggestion-skipped-unresolvable") {
+      pushNotification(
+        `Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`,
+        "warn"
+      );
+    } else {
+      pushNotification("Predloga ni bilo mogoče sprejeti.", "warn");
+    }
+    refreshPendingStatus();
+    log("accept one summary", summary);
+  } catch (err) {
+    errL("accept one failed", err);
+    pushNotification("Napaka pri sprejemanju predloga.", "error");
+    refreshPendingStatus();
+  } finally {
+    setBusy(false);
+    syncActionButtons();
+  }
+};
+
+const runRejectOne = async () => {
+  if (!online) return;
+  if (busy || isDocumentCheckInProgress()) {
+    pushNotification("Počakajte, da se preverjanje konča.", "warn");
+    return;
+  }
+  const pendingList = getPendingSuggestionsOnline();
+  if (!pendingList.length) {
+    pushNotification("Ni predlogov za zavrnitev.", "info");
+    refreshPendingStatus();
+    return;
+  }
+  clampCurrentSuggestionIndex(pendingList.length);
+  const current = pendingList[currentSuggestionIndex];
+  if (!current) {
+    pushNotification("Predlog ni več na voljo.", "warn");
+    refreshPendingStatus();
+    return;
+  }
+  setBusy(true);
+  setStatus("Zavra\u010dam trenutni predlog...");
+  try {
+    const summary = await rejectSuggestionOnlineById(current.id);
+    const pendingAfter = Number(summary?.pendingAfter ?? 0);
+    clampCurrentSuggestionIndex(pendingAfter);
+    if (summary?.status === "rejected" || summary?.status === "partial") {
+      pushNotification(`Zavrnjeno 1. Preostalo: ${pendingAfter}.`, "info");
+    } else {
+      pushNotification("Predloga ni bilo mogoče zavrniti.", "warn");
+    }
+    refreshPendingStatus();
+    log("reject one summary", summary);
+  } catch (err) {
+    errL("reject one failed", err);
+    pushNotification("Napaka pri zavračanju predloga.", "error");
+    refreshPendingStatus();
   } finally {
     setBusy(false);
     syncActionButtons();
@@ -214,9 +360,13 @@ Office.onReady((info) => {
 
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
+  const acceptOneBtn = document.getElementById("btn-accept-one");
+  const rejectOneBtn = document.getElementById("btn-reject-one");
   const desktopNote = document.getElementById("desktop-note");
 
   if (!online) {
+    if (acceptOneBtn) acceptOneBtn.hidden = true;
+    if (rejectOneBtn) rejectOneBtn.hidden = true;
     if (acceptBtn) acceptBtn.hidden = true;
     if (rejectBtn) rejectBtn.hidden = true;
     if (desktopNote) desktopNote.hidden = false;
@@ -225,6 +375,8 @@ Office.onReady((info) => {
   const checkBtn = document.getElementById("btn-check");
   const clearNotificationsBtn = document.getElementById("btn-clear-notifications");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
+  if (acceptOneBtn) acceptOneBtn.addEventListener("click", () => void runAcceptOne());
+  if (rejectOneBtn) rejectOneBtn.addEventListener("click", () => void runRejectOne());
   if (acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
   if (rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
   if (clearNotificationsBtn) {
