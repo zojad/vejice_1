@@ -259,12 +259,13 @@ const runAcceptOne = async () => {
   try {
     const summary = await applySuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);
+    const accepted = Number(summary?.appliedSuggestions ?? 0);
     clampCurrentSuggestionIndex(pendingAfter);
     if (summary?.status === "applied" || summary?.status === "partial") {
       if (summary?.reason === "suggestion-skipped-unresolvable") {
         setStatus(`Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`);
       } else {
-        setStatus(`Sprejeto: 1. Preostalo: ${pendingAfter}.`);
+        setStatus(`Sprejeto: ${accepted > 0 ? accepted : 1}. Preostalo: ${pendingAfter}.`);
       }
     } else if (summary?.reason === "already-applied") {
       setStatus(`Predlog je bil že upoštevan. Preostalo: ${pendingAfter}.`);
@@ -304,9 +305,10 @@ const runRejectOne = async () => {
   try {
     const summary = await rejectSuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);
+    const rejected = Number(summary?.rejectedSuggestions ?? 0);
     clampCurrentSuggestionIndex(pendingAfter);
     if (summary?.status === "rejected" || summary?.status === "partial") {
-      setStatus(`Zavrnjeno: 1. Preostalo: ${pendingAfter}.`);
+      setStatus(`Zavrnjeno: ${rejected > 0 ? rejected : 1}. Preostalo: ${pendingAfter}.`);
     } else {
       setStatus("Predloga ni bilo mogoče zavrniti.");
     }
