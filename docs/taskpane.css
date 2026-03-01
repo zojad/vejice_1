@@ -45,8 +45,18 @@ body {
 
 .taskpane-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
+}
+
+.taskpane-secondary-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.taskpane-secondary-actions .task-btn {
+    width: 100%;
 }
 
 .task-btn {
@@ -58,6 +68,10 @@ body {
     font-weight: 600;
     min-width: 90px;
     padding: 9px 12px;
+}
+
+.task-btn-check {
+    width: 100%;
 }
 
 .task-btn:disabled {
@@ -98,8 +112,8 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    min-height: 120px;
-    max-height: 220px;
+    min-height: 90px;
+    max-height: 170px;
 }
 
 .taskpane-notifications-header {
@@ -150,6 +164,7 @@ body {
     margin-top: auto;
     border-top: 1px solid #e0e0e0;
     padding-top: 10px;
+    text-align: center;
 }
 
 .status-text {

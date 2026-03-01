@@ -13,7 +13,6 @@ import { isWordOnline } from "../utils/host.js";
 import {
   readTaskpaneNotifications,
   clearTaskpaneNotifications,
-  publishTaskpaneNotifications,
   TASKPANE_NOTIFICATION_EVENT_NAME,
   TASKPANE_NOTIFICATION_STORAGE_KEY,
 } from "../utils/notifications.js";
@@ -46,14 +45,6 @@ const resolveManifestMode = () => {
 const setStatus = (message) => {
   const statusLine = document.getElementById("status-line");
   if (statusLine) statusLine.textContent = message;
-};
-
-const pushNotification = (message, level = "info") => {
-  if (!message) return;
-  publishTaskpaneNotifications([message], {
-    source: online ? "online-taskpane" : "desktop-taskpane",
-    level,
-  });
 };
 
 const buildNotificationSignature = (items) => {
@@ -167,6 +158,8 @@ const runCheck = async () => {
   lastCheckClickAt = now;
   checkRunInFlight = true;
   setBusy(true);
+  clearTaskpaneNotifications();
+  renderNotifications({ force: true });
   setStatus("Preverjam dokument...");
   try {
     const summary = await checkDocumentText();
@@ -247,20 +240,18 @@ const runReject = async () => {
 const runAcceptOne = async () => {
   if (!online) return;
   if (busy || isDocumentCheckInProgress()) {
-    pushNotification("Počakajte, da se preverjanje konča.", "warn");
+    setStatus("Počakajte, da se preverjanje konča.");
     return;
   }
   const pendingList = getPendingSuggestionsOnline();
   if (!pendingList.length) {
-    pushNotification("Ni predlogov za sprejem.", "info");
-    refreshPendingStatus();
+    setStatus("Ni predlogov za sprejem.");
     return;
   }
   clampCurrentSuggestionIndex(pendingList.length);
   const current = pendingList[currentSuggestionIndex];
   if (!current) {
-    pushNotification("Predlog ni več na voljo.", "warn");
-    refreshPendingStatus();
+    setStatus("Predlog ni več na voljo.");
     return;
   }
   setBusy(true);
@@ -271,77 +262,63 @@ const runAcceptOne = async () => {
     clampCurrentSuggestionIndex(pendingAfter);
     if (summary?.status === "applied" || summary?.status === "partial") {
       if (summary?.reason === "suggestion-skipped-unresolvable") {
-        pushNotification(
-          `Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`,
-          "warn"
-        );
+        setStatus(`Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`);
       } else {
-        pushNotification(`Sprejeto 1. Preostalo: ${pendingAfter}.`, "info");
+        setStatus(`Sprejeto: 1. Preostalo: ${pendingAfter}.`);
       }
     } else if (summary?.reason === "already-applied") {
-      pushNotification(`Predlog je bil že upoštevan. Preostalo: ${pendingAfter}.`, "info");
+      setStatus(`Predlog je bil že upoštevan. Preostalo: ${pendingAfter}.`);
     } else if (summary?.reason === "suggestion-skipped-unresolvable") {
-      pushNotification(
-        `Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`,
-        "warn"
-      );
+      setStatus(`Predloga ni bilo mogoče sprejeti, zato je bil preskočen. Preostalo: ${pendingAfter}.`);
     } else {
-      pushNotification("Predloga ni bilo mogoče sprejeti.", "warn");
+      setStatus("Predloga ni bilo mogoče sprejeti.");
     }
-    refreshPendingStatus();
     log("accept one summary", summary);
   } catch (err) {
     errL("accept one failed", err);
-    pushNotification("Napaka pri sprejemanju predloga.", "error");
-    refreshPendingStatus();
+    setStatus("Napaka pri sprejemanju predloga.");
   } finally {
     setBusy(false);
     syncActionButtons();
   }
 };
-
 const runRejectOne = async () => {
   if (!online) return;
   if (busy || isDocumentCheckInProgress()) {
-    pushNotification("Počakajte, da se preverjanje konča.", "warn");
+    setStatus("Počakajte, da se preverjanje konča.");
     return;
   }
   const pendingList = getPendingSuggestionsOnline();
   if (!pendingList.length) {
-    pushNotification("Ni predlogov za zavrnitev.", "info");
-    refreshPendingStatus();
+    setStatus("Ni predlogov za zavrnitev.");
     return;
   }
   clampCurrentSuggestionIndex(pendingList.length);
   const current = pendingList[currentSuggestionIndex];
   if (!current) {
-    pushNotification("Predlog ni več na voljo.", "warn");
-    refreshPendingStatus();
+    setStatus("Predlog ni več na voljo.");
     return;
   }
   setBusy(true);
-  setStatus("Zavra\u010dam trenutni predlog...");
+  setStatus("Zavračam trenutni predlog...");
   try {
     const summary = await rejectSuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);
     clampCurrentSuggestionIndex(pendingAfter);
     if (summary?.status === "rejected" || summary?.status === "partial") {
-      pushNotification(`Zavrnjeno 1. Preostalo: ${pendingAfter}.`, "info");
+      setStatus(`Zavrnjeno: 1. Preostalo: ${pendingAfter}.`);
     } else {
-      pushNotification("Predloga ni bilo mogoče zavrniti.", "warn");
+      setStatus("Predloga ni bilo mogoče zavrniti.");
     }
-    refreshPendingStatus();
     log("reject one summary", summary);
   } catch (err) {
     errL("reject one failed", err);
-    pushNotification("Napaka pri zavračanju predloga.", "error");
-    refreshPendingStatus();
+    setStatus("Napaka pri zavračanju predloga.");
   } finally {
     setBusy(false);
     syncActionButtons();
   }
 };
-
 Office.onReady((info) => {
   if (info.host !== Office.HostType.Word) return;
 
@@ -353,18 +330,15 @@ Office.onReady((info) => {
   const mode = resolveManifestMode();
   online = mode ? mode === "web" : isWordOnline();
 
-  const hostLine = document.getElementById("host-line");
-  if (hostLine) {
-    hostLine.textContent = online ? "Word Online" : "Word Desktop";
-  }
-
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
   const acceptOneBtn = document.getElementById("btn-accept-one");
   const rejectOneBtn = document.getElementById("btn-reject-one");
+  const secondaryActions = document.getElementById("secondary-actions");
   const desktopNote = document.getElementById("desktop-note");
 
   if (!online) {
+    if (secondaryActions) secondaryActions.hidden = true;
     if (acceptOneBtn) acceptOneBtn.hidden = true;
     if (rejectOneBtn) rejectOneBtn.hidden = true;
     if (acceptBtn) acceptBtn.hidden = true;

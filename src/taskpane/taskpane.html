@@ -17,16 +17,18 @@
     </section>
     <main id="app-body" class="taskpane-root" style="display: none;">
         <header class="taskpane-header">
-            <h1 class="taskpane-title">CJVT Vejice</h1>
-            <p id="host-line" class="taskpane-subtitle"></p>
+            <h1 class="taskpane-title">Vejice 1.0</h1>
+            <p class="taskpane-note">Preverite vejice v dokumentu.</p>
         </header>
 
         <section class="taskpane-actions">
-            <button id="btn-check" class="task-btn task-btn-primary" type="button">Preveri</button>
-            <button id="btn-accept-one" class="task-btn task-btn-success" type="button">Sprejmi 1</button>
-            <button id="btn-reject-one" class="task-btn task-btn-danger" type="button">Zavrni 1</button>
-            <button id="btn-accept" class="task-btn task-btn-success" type="button">Sprejmi vse</button>
-            <button id="btn-reject" class="task-btn task-btn-danger" type="button">Zavrni vse</button>
+            <button id="btn-check" class="task-btn task-btn-primary task-btn-check" type="button">Preveri</button>
+            <div id="secondary-actions" class="taskpane-secondary-actions">
+                <button id="btn-accept-one" class="task-btn task-btn-success" type="button">Sprejmi 1</button>
+                <button id="btn-accept" class="task-btn task-btn-success" type="button">Sprejmi vse</button>
+                <button id="btn-reject-one" class="task-btn task-btn-danger" type="button">Zavrni 1</button>
+                <button id="btn-reject" class="task-btn task-btn-danger" type="button">Zavrni vse</button>
+            </div>
         </section>
 
         <p id="desktop-note" class="taskpane-note" hidden>
