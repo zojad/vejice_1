@@ -11,7 +11,7 @@
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
   <DisplayName DefaultValue="CJVT Vejice"/>
-  <Description DefaultValue="Preverite ustrezno rabo vejic"/>
+  <Description DefaultValue="Preverite ustrezno rabo vejic."/>
 
   <!-- TOP-LEVEL: icons + support -->
   <IconUrl DefaultValue="https://localhost:4001/assets/icon-32.png"/>
@@ -100,7 +100,7 @@
 
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
-        <bt:String id="CheckVejice.Label"   DefaultValue="Preveri vejice"/>
+        <bt:String id="CheckVejice.Label"   DefaultValue="Vejice"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>

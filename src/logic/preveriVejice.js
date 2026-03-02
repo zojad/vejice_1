@@ -4736,6 +4736,29 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
   };
 }
 
+function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion) {
+  const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [suggestion]);
+  if (verifyResult.noop.length > 0) return true;
+  if (suggestion?.kind === "delete") {
+    const resolved = resolveDeleteOperationFromSnapshot(liveText, sourceText, suggestion);
+    if (!resolved?.op && resolved?.skipReason === "delete_comma_not_found_near_hint") {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function revertAppliedSuggestionInParagraph(context, paragraph, suggestion) {
+  if (!suggestion || !paragraph) return false;
+  if (suggestion.kind === "insert") {
+    return applyDeleteSuggestion(context, paragraph, suggestion);
+  }
+  if (suggestion.kind === "delete") {
+    return applyInsertSuggestion(context, paragraph, suggestion);
+  }
+  return false;
+}
+
 export async function applySuggestionOnlineById(suggestionId = null) {
   const startedAt = tnow();
   const summary = {
@@ -4879,23 +4902,12 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       summary.touchedParagraphs = touchedIndexes.size;
       await context.sync();
 
-      const isSuggestionAppliedInLiveText = (liveText, suggestion) => {
-        const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [suggestion]);
-        if (verifyResult.noop.length > 0) return true;
-        if (suggestion?.kind === "delete") {
-          const resolved = resolveDeleteOperationFromSnapshot(liveText, sourceText, suggestion);
-          if (!resolved?.op && resolved?.skipReason === "delete_comma_not_found_near_hint") {
-            return true;
-          }
-        }
-        return false;
-      };
       const areSelectedSuggestionsApplied = async () => {
         paragraph.load("text");
         await context.sync();
         const liveText = paragraph.text || "";
         return selectedSuggestions.every((suggestion) =>
-          isSuggestionAppliedInLiveText(liveText, suggestion)
+          isSuggestionAppliedInLiveText(liveText, sourceText, suggestion)
         );
       };
 
@@ -4990,6 +5002,7 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
     clearedMarkers: 0,
     failedClear: 0,
     rejectedSuggestions: 0,
+    revertedAppliedSuggestions: 0,
     pendingAfter: 0,
     durationMs: 0,
   };
@@ -5046,6 +5059,8 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
       const hasParagraphIndex = Number.isFinite(paragraphIndex) && paragraphIndex >= 0;
       const paras = await wordOnlineAdapter.getParagraphs(context);
       const paragraph = hasParagraphIndex ? paras.items[paragraphIndex] || null : null;
+      const entry = hasParagraphIndex ? anchorProvider.getAnchorsForParagraph(paragraphIndex) : null;
+      const sourceText = entry?.originalText ?? paragraph?.text ?? "";
       const clearResult = await wordOnlineAdapter.clearHighlights(
         context,
         selectedSuggestions.map((suggestion) => ({ suggestion, paragraph })),
@@ -5054,6 +5069,36 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
       summary.clearedMarkers =
         (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
       summary.failedClear = clearResult?.failedCount || 0;
+
+      if (paragraph) {
+        const revertCandidates = [...selectedSuggestions].sort((left, right) => {
+          const leftKind = left?.kind === "insert" ? 0 : left?.kind === "delete" ? 1 : 2;
+          const rightKind = right?.kind === "insert" ? 0 : right?.kind === "delete" ? 1 : 2;
+          return leftKind - rightKind;
+        });
+        if (revertCandidates.length > 0) {
+          const touchedIndexes = new Set();
+          for (const suggestion of revertCandidates) {
+            paragraph.load("text");
+            await context.sync();
+            const liveText = paragraph.text || "";
+            if (!isSuggestionAppliedInLiveText(liveText, sourceText, suggestion)) {
+              continue;
+            }
+            const reverted = await revertAppliedSuggestionInParagraph(context, paragraph, suggestion);
+            if (reverted) {
+              summary.revertedAppliedSuggestions += 1;
+              touchedIndexes.add(paragraphIndex);
+            }
+          }
+          if (touchedIndexes.size > 0) {
+            await cleanupCommaSpacingForParagraphs(context, paras, touchedIndexes, {
+              force: wordOnlineAdapter.shouldForceSpacingCleanup(),
+            });
+          }
+        }
+      }
+
       await context.sync();
     });
 
@@ -5355,6 +5400,7 @@ export async function rejectAllSuggestionsOnline() {
     pendingBefore: 0,
     clearedMarkers: 0,
     failedClear: 0,
+    revertedAppliedSuggestions: 0,
     pendingAfter: 0,
     durationMs: 0,
   };
@@ -5402,6 +5448,45 @@ export async function rejectAllSuggestionsOnline() {
     summary.clearedMarkers =
       (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
     summary.failedClear = clearResult?.failedCount || 0;
+    const suggestionsByParagraph = new Map();
+    for (const suggestion of pendingSuggestionsOnline) {
+      const paragraphIndex = suggestion?.paragraphIndex;
+      if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) continue;
+      if (!suggestionsByParagraph.has(paragraphIndex)) {
+        suggestionsByParagraph.set(paragraphIndex, []);
+      }
+      suggestionsByParagraph.get(paragraphIndex).push(suggestion);
+    }
+    const touchedParagraphIndexes = new Set();
+    for (const [paragraphIndex, suggestionsInParagraph] of suggestionsByParagraph.entries()) {
+      const paragraph = paras.items[paragraphIndex] || null;
+      if (!paragraph) continue;
+      const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+      const sourceText = entry?.originalText ?? paragraph.text ?? "";
+      const revertCandidates = [...suggestionsInParagraph].sort((left, right) => {
+        const leftKind = left?.kind === "insert" ? 0 : left?.kind === "delete" ? 1 : 2;
+        const rightKind = right?.kind === "insert" ? 0 : right?.kind === "delete" ? 1 : 2;
+        return leftKind - rightKind;
+      });
+      for (const suggestion of revertCandidates) {
+        paragraph.load("text");
+        await context.sync();
+        const liveText = paragraph.text || "";
+        if (!isSuggestionAppliedInLiveText(liveText, sourceText, suggestion)) {
+          continue;
+        }
+        const reverted = await revertAppliedSuggestionInParagraph(context, paragraph, suggestion);
+        if (reverted) {
+          summary.revertedAppliedSuggestions += 1;
+          touchedParagraphIndexes.add(paragraphIndex);
+        }
+      }
+    }
+    if (touchedParagraphIndexes.size > 0) {
+      await cleanupCommaSpacingForParagraphs(context, paras, touchedParagraphIndexes, {
+        force: wordOnlineAdapter.shouldForceSpacingCleanup(),
+      });
+    }
     for (const suggestion of pendingSuggestionsOnline) {
       if (Number.isFinite(suggestion?.paragraphIndex)) {
         clearOnlineParagraphRenderState(suggestion.paragraphIndex);

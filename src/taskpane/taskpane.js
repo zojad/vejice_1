@@ -225,8 +225,13 @@ const runReject = async () => {
   try {
     const summary = await rejectAllSuggestionsOnline();
     const rejected = Number(summary?.clearedMarkers ?? 0);
+    const reverted = Number(summary?.revertedAppliedSuggestions ?? 0);
     const pending = Number(summary?.pendingAfter ?? 0);
-    setStatus(`Zavrnjeno: ${rejected}. Preostalo: ${pending}.`);
+    if (reverted > 0) {
+      setStatus(`Zavrnjeno: ${rejected}. Razveljavljeno: ${reverted}. Preostalo: ${pending}.`);
+    } else {
+      setStatus(`Zavrnjeno: ${rejected}. Preostalo: ${pending}.`);
+    }
     log("reject summary", summary);
   } catch (err) {
     errL("reject failed", err);
@@ -306,9 +311,16 @@ const runRejectOne = async () => {
     const summary = await rejectSuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);
     const rejected = Number(summary?.rejectedSuggestions ?? 0);
+    const reverted = Number(summary?.revertedAppliedSuggestions ?? 0);
     clampCurrentSuggestionIndex(pendingAfter);
     if (summary?.status === "rejected" || summary?.status === "partial") {
-      setStatus(`Zavrnjeno: ${rejected > 0 ? rejected : 1}. Preostalo: ${pendingAfter}.`);
+      if (reverted > 0) {
+        setStatus(
+          `Zavrnjeno: ${rejected > 0 ? rejected : 1}. Razveljavljeno: ${reverted}. Preostalo: ${pendingAfter}.`
+        );
+      } else {
+        setStatus(`Zavrnjeno: ${rejected > 0 ? rejected : 1}. Preostalo: ${pendingAfter}.`);
+      }
     } else {
       setStatus("Predloga ni bilo mogoče zavrniti.");
     }
