@@ -88,6 +88,7 @@ const ONLINE_RENDER_STATE_MAX_PARAGRAPHS = 1200;
 const DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE = true;
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
+let chunkNonCommaNotified = false;
 let paragraphTimeoutNotified = false;
 const pendingScanNotifications = [];
 const emittedScanNotificationKeys = new Set();
@@ -880,7 +881,7 @@ const ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
 const ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
 const ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const LOCAL_ONLINE_ANALYZE_CONCURRENCY_DEFAULT = 1;
-const DESKTOP_ANALYZE_CONCURRENCY_DEFAULT = 4;
+const DESKTOP_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const POST_APPLY_CHECK_COOLDOWN_MS_DEFAULT = 1200;
 const CHECK_ABORT_REASON_TIMEOUT = "check-timeout";
 const CHECK_ABORT_REASON_CANCELLED = "check-cancelled";
@@ -1287,9 +1288,9 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
 
 function notifyChunkNonCommaChanges(paragraphIndex, chunkIndex, original, corrected) {
   warn("Sentence skipped due to non-comma changes", { paragraphIndex, chunkIndex, original, corrected });
-  if (chunkApiFailureNotified) return;
-  chunkApiFailureNotified = true;
-  queueScanNotification(CHUNK_API_ERROR_MESSAGE, "warn");
+  if (chunkNonCommaNotified) return;
+  chunkNonCommaNotified = true;
+  queueScanNotification(PARAGRAPH_NON_COMMA_MESSAGE, "warn");
 }
 
 function notifyParagraphTimeout(paragraphIndex, timeoutMs) {
@@ -1396,6 +1397,7 @@ function resetNotificationFlags() {
   apiFailureNotified = false;
   longSentenceNotified = false;
   chunkApiFailureNotified = false;
+  chunkNonCommaNotified = false;
   paragraphTimeoutNotified = false;
   pendingScanNotifications.length = 0;
   emittedScanNotificationKeys.clear();
@@ -5474,14 +5476,14 @@ export async function checkDocumentText() {
       getCheckAbortController(actionToken, { create: true });
       return await checkDocumentTextOnline(actionToken);
     }
-    return await checkDocumentTextDesktop();
+    return await checkDocumentTextDesktop(actionToken);
   } finally {
     documentCheckInProgress = false;
     finishAction(actionToken);
   }
 }
 
-async function checkDocumentTextDesktop() {
+async function checkDocumentTextDesktop(checkToken) {
   log("START checkDocumentText()");
   let totalInserted = 0;
   let totalDeleted = 0;
@@ -5493,8 +5495,13 @@ async function checkDocumentTextDesktop() {
   let unchangedHardSkips = 0;
   let cacheHits = 0;
   let cacheMisses = 0;
+  let applyRangeMisses = 0;
+  let applyOpFailures = 0;
   const paragraphCacheDisabled = isParagraphCacheDisabled();
   const desktopAnalyzeConcurrency = resolveDesktopAnalyzeConcurrency();
+  const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
+  const checkAbortController = getCheckAbortController(checkToken, { create: true });
+  const checkAbortSignal = checkAbortController?.signal || null;
   const paragraphSnapshots = [];
   let desktopCheckBlocked = false;
 
@@ -5555,6 +5562,8 @@ async function checkDocumentTextDesktop() {
         apiErrors,
         nonCommaSkips,
         nonCommaSalvaged,
+        applyRangeMisses,
+        applyOpFailures,
       };
     }
 
@@ -5623,6 +5632,9 @@ async function checkDocumentTextDesktop() {
         normalizedSource,
         trimmed,
         paragraphHash: buildDesktopParagraphHash(snapshot.sourceText),
+        paragraphGuardTimeoutMs: paragraphTimeoutMs,
+        timeoutReason: CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT,
+        timeoutLabel: `Paragraph ${snapshot.paragraphIndex + 1} timed out`,
       });
     }
     logDesktopVerbose("Desktop phase: analyze jobs", {
@@ -5639,12 +5651,26 @@ async function checkDocumentTextDesktop() {
         const pStart = tnow();
         logDesktopVerbose(`P${job.paragraphIndex}: len=${job.sourceText.length} | "${SNIP(job.trimmed)}"`);
         try {
-          const result = await commaEngine.analyzeParagraph({
-            paragraphIndex: job.paragraphIndex,
-            originalText: job.sourceText,
-            normalizedOriginalText: job.normalizedSource,
-            paragraphDocOffset: job.paragraphDocOffset,
-          });
+          ensureCheckActionActive(checkToken);
+          if (checkAbortSignal?.aborted) {
+            throw new CheckAbortError(
+              "Check was cancelled",
+              checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
+            );
+          }
+          const result = await runWithTimeout(
+            () =>
+              commaEngine.analyzeParagraph({
+                paragraphIndex: job.paragraphIndex,
+                originalText: job.sourceText,
+                normalizedOriginalText: job.normalizedSource,
+                paragraphDocOffset: job.paragraphDocOffset,
+                abortSignal: checkAbortSignal,
+              }),
+            job.paragraphGuardTimeoutMs,
+            job.timeoutReason,
+            job.timeoutLabel
+          );
           return {
             paragraphIndex: job.paragraphIndex,
             sourceText: job.sourceText,
@@ -5669,6 +5695,27 @@ async function checkDocumentTextDesktop() {
     for (const analyzed of analysisResults) {
       if (!analyzed) continue;
       if (analyzed.error) {
+        if (
+          isAbortLikeError(analyzed.error) ||
+          checkAbortSignal?.aborted ||
+          checkToken?.cancelled
+        ) {
+          throw new CheckAbortError(
+            "Check was cancelled",
+            checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
+          );
+        }
+        if (
+          analyzed.error instanceof CheckAbortError &&
+          analyzed.error.reason === CHECK_ABORT_REASON_PARAGRAPH_TIMEOUT
+        ) {
+          apiErrors++;
+          notifyParagraphTimeout(analyzed.paragraphIndex, paragraphTimeoutMs);
+          if (!paragraphCacheDisabled) {
+            desktopParagraphAnalysisCache[analyzed.paragraphIndex] = null;
+          }
+          continue;
+        }
         apiErrors++;
         warn(`P${analyzed.paragraphIndex}: engine failed`, analyzed.error);
         notifyApiUnavailable();
@@ -5766,7 +5813,8 @@ async function checkDocumentTextDesktop() {
             const op = plan[opIndex];
             const range = plannedRanges[opIndex];
             if (!range) {
-              warnDesktopVerbose("Desktop batch op skipped: range not resolved", {
+              applyRangeMisses++;
+              warn("Desktop batch op skipped: range not resolved", {
                 paragraphIndex: job.paragraphIndex,
                 opIndex,
                 kind: op?.kind,
@@ -5786,7 +5834,13 @@ async function checkDocumentTextDesktop() {
                 }
               }
             } catch (err) {
-              warnDesktopVerbose("Desktop batch op failed", err);
+              applyOpFailures++;
+              warn("Desktop batch op failed", {
+                paragraphIndex: job.paragraphIndex,
+                opIndex,
+                kind: op?.kind,
+                err,
+              });
             }
           }
           if (appliedInParagraph) {
@@ -5829,7 +5883,11 @@ async function checkDocumentTextDesktop() {
       "| nonCommaSkips:",
       nonCommaSkips,
       "| nonCommaSalvaged:",
-      nonCommaSalvaged
+      nonCommaSalvaged,
+      "| applyRangeMisses:",
+      applyRangeMisses,
+      "| applyOpFailures:",
+      applyOpFailures
     );
     if (
       paragraphsProcessed > 0 &&
@@ -5850,13 +5908,23 @@ async function checkDocumentTextDesktop() {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      applyRangeMisses,
+      applyOpFailures,
       cacheDisabled: paragraphCacheDisabled,
       cacheHits,
       cacheMisses,
       unchangedHardSkips,
     };
   } catch (e) {
-    errL("ERROR in checkDocumentText:", e);
+    if (e instanceof CheckAbortError && e.reason === CHECK_ABORT_REASON_TIMEOUT) {
+      warn("checkDocumentTextDesktop stopped due to timeout");
+      queueScanNotification(CHECK_TIMEOUT_MESSAGE, "error");
+    } else if (e instanceof CheckAbortError) {
+      warn("checkDocumentTextDesktop cancelled", e.reason);
+      queueScanNotification(CHECK_CANCELLED_MESSAGE, "warn");
+    } else {
+      errL("ERROR in checkDocumentText:", e);
+    }
     return {
       status: "error",
       paragraphsProcessed,
@@ -5866,6 +5934,8 @@ async function checkDocumentTextDesktop() {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      applyRangeMisses,
+      applyOpFailures,
       unchangedHardSkips,
       error: String(e?.message || e || "unknown-error"),
     };
