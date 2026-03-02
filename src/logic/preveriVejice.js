@@ -3400,6 +3400,17 @@ async function applyInsertSuggestion(context, paragraph, suggestion) {
   return await tryApplyInsertUsingMetadata(context, paragraph, suggestion);
 }
 
+const COMMA_SPACE_BLOCKERS = new Set([")", "]", "}", ".", ",", ";", ":", "!", "?"]);
+
+function shouldInsertSpaceAfterComma(nextChar) {
+  if (!nextChar) return false;
+  if (/\s/.test(nextChar)) return false;
+  if (QUOTES.has(nextChar)) return false;
+  if (isDigit(nextChar)) return false;
+  if (COMMA_SPACE_BLOCKERS.has(nextChar)) return false;
+  return true;
+}
+
 async function normalizeCommaSpacingInParagraph(context, paragraph) {
   paragraph.load("text");
   await context.sync();
@@ -3424,8 +3435,7 @@ async function normalizeCommaSpacingInParagraph(context, paragraph) {
     }
 
     const nextChar = text[idx + 1] ?? "";
-    if (!nextChar) continue;
-    if (!/\s/.test(nextChar) && !QUOTES.has(nextChar) && !isDigit(nextChar)) {
+    if (shouldInsertSpaceAfterComma(nextChar)) {
       const afterRange = await getRangeForCharacterSpan(
         context,
         paragraph,
@@ -3452,8 +3462,7 @@ async function ensureCommaSpaceAfterInParagraph(context, paragraph) {
   for (let idx = text.length - 1; idx >= 0; idx--) {
     if (text[idx] !== ",") continue;
     const nextChar = text[idx + 1] ?? "";
-    if (!nextChar) continue;
-    if (/\s/.test(nextChar) || QUOTES.has(nextChar) || isDigit(nextChar)) continue;
+    if (!shouldInsertSpaceAfterComma(nextChar)) continue;
     spacingPlan.push({
       kind: "insert",
       start: idx + 1,
@@ -4590,6 +4599,38 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
     }
   }
 
+  // Hard dedupe for repeated insert ops landing on the same boundary.
+  // During unstable API/retry flows we can occasionally receive duplicate
+  // inserts for identical target gaps; keep only one planned op and merge
+  // backing suggestions for traceability.
+  if (rawPlan.length > 1) {
+    const dedupedRawPlan = [];
+    const insertKeyToIndex = new Map();
+    for (const entry of rawPlan) {
+      if (!entry || entry.kind !== "insert") {
+        dedupedRawPlan.push(entry);
+        continue;
+      }
+      const key = `${entry.start}:${entry.end}:${entry.replacement || ""}`;
+      const existingIndex = insertKeyToIndex.get(key);
+      if (typeof existingIndex === "number") {
+        const existing = dedupedRawPlan[existingIndex];
+        const existingSuggestions = Array.isArray(existing?.suggestions) ? existing.suggestions : [];
+        const incomingSuggestions = Array.isArray(entry?.suggestions) ? entry.suggestions : [];
+        dedupedRawPlan[existingIndex] = {
+          ...existing,
+          suggestions: [...existingSuggestions, ...incomingSuggestions],
+          sortPos: Math.max(existing?.sortPos ?? 0, entry?.sortPos ?? 0),
+        };
+        continue;
+      }
+      insertKeyToIndex.set(key, dedupedRawPlan.length);
+      dedupedRawPlan.push(entry);
+    }
+    rawPlan.length = 0;
+    rawPlan.push(...dedupedRawPlan);
+  }
+
   rawPlan.sort((a, b) => {
     if (a.start !== b.start) return b.start - a.start;
     if (a.kind !== b.kind) return a.kind === "delete" ? -1 : 1;
@@ -5691,6 +5732,9 @@ async function checkDocumentTextDesktop() {
             warn("Desktop apply skipped: paragraph missing", {
               paragraphIndex: job.paragraphIndex,
             });
+            if (!paragraphCacheDisabled) {
+              desktopParagraphAnalysisCache[job.paragraphIndex] = null;
+            }
             continue;
           }
           const anchorsEntry = anchorProvider.getAnchorsForParagraph(job.paragraphIndex);
@@ -5755,6 +5799,9 @@ async function checkDocumentTextDesktop() {
             logDesktopVerbose(
               `P${job.paragraphIndex}: applied (ins=${totalInserted}, del=${totalDeleted}) | analyze=${job.analysisDurationMs} ms | cache=${job.fromCache ? "hit" : "miss"}`
             );
+          }
+          if (!paragraphCacheDisabled) {
+            desktopParagraphAnalysisCache[job.paragraphIndex] = null;
           }
         }
       });
