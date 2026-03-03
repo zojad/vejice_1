@@ -845,6 +845,11 @@ function restorePendingSuggestionsOnline() {
   }
 }
 
+export function restorePendingSuggestionsOnlineIfNeeded() {
+  if (pendingSuggestionsOnline.length) return 0;
+  return restorePendingSuggestionsOnline();
+}
+
 if (typeof window !== "undefined") {
   if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
     window.__VEJICE_DEBUG_DUMPS__ = [];

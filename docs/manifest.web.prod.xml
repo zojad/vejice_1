@@ -100,11 +100,11 @@
 
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
-        <bt:String id="CheckVejice.Label"   DefaultValue="Vejice"/>
+        <bt:String id="CheckVejice.Label"   DefaultValue="CJVT Vejice"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
-        <bt:String id="CheckVejice.Tooltip" DefaultValue="Preverite rabo vejic v dokumentu."/>
+        <bt:String id="CheckVejice.Tooltip" DefaultValue="Preverite rabo vejic."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

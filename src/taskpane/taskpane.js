@@ -8,6 +8,7 @@ import {
   rejectSuggestionOnlineById,
   isDocumentCheckInProgress,
   getPendingSuggestionsOnline,
+  restorePendingSuggestionsOnlineIfNeeded,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
 import {
@@ -343,6 +344,12 @@ Office.onReady((info) => {
 
   const mode = resolveManifestMode();
   online = mode ? mode === "web" : isWordOnline();
+  if (online) {
+    const restored = restorePendingSuggestionsOnlineIfNeeded();
+    if (restored > 0) {
+      log("Restored pending suggestions after taskpane load:", restored);
+    }
+  }
 
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");

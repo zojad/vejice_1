@@ -100,7 +100,7 @@
 
       <bt:ShortStrings>
         <bt:String id="VejiceGroup.Label"   DefaultValue="Vejice"/>
-        <bt:String id="CheckVejice.Label"   DefaultValue="Vejice"/>
+        <bt:String id="CheckVejice.Label"   DefaultValue="CJVT Vejice"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
