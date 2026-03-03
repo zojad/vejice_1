@@ -58,6 +58,7 @@ const MAX_NORMALIZATION_PROBES = 20;
 
 const pendingSuggestionsOnline = [];
 const pendingSuggestionRenderKeys = new Set();
+let pendingSuggestionsRequireStaleValidation = false;
 const desktopParagraphAnalysisCache = [];
 const onlineParagraphAnalysisCache = [];
 const onlineParagraphRenderState = new Map();
@@ -212,6 +213,7 @@ function resetPendingSuggestionsOnline() {
   pendingSuggestionsOnline.length = 0;
   pendingSuggestionRenderKeys.clear();
   onlineMarkerBaselineByKey.clear();
+  pendingSuggestionsRequireStaleValidation = false;
   persistPendingSuggestionsOnline();
 }
 
@@ -353,6 +355,7 @@ function toSerializableSuggestion(suggestion) {
     markerChannel: suggestion.markerChannel,
     markerId: suggestion.markerId,
     markerTag: suggestion.markerTag,
+    sourceParagraphHash: suggestion.sourceParagraphHash,
   };
   return serializable;
 }
@@ -838,6 +841,9 @@ function restorePendingSuggestionsOnline() {
         restoredCount++;
       }
     }
+    if (restoredCount > 0) {
+      pendingSuggestionsRequireStaleValidation = true;
+    }
     return restoredCount;
   } catch (storageErr) {
     warn("restorePendingSuggestionsOnline failed", storageErr);
@@ -848,6 +854,96 @@ function restorePendingSuggestionsOnline() {
 export function restorePendingSuggestionsOnlineIfNeeded() {
   if (pendingSuggestionsOnline.length) return 0;
   return restorePendingSuggestionsOnline();
+}
+
+function getStoredSuggestionParagraphHash(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") return "";
+  if (typeof suggestion.sourceParagraphHash !== "string") return "";
+  return suggestion.sourceParagraphHash.trim();
+}
+
+async function pruneStalePendingSuggestionsAgainstLiveDocument(options = {}) {
+  const clearMarkers = options?.clearMarkers !== false;
+  const forceValidation = Boolean(options?.force);
+  const summary = {
+    checked: 0,
+    removed: 0,
+    clearedMarkers: 0,
+    failedClear: 0,
+  };
+  if (!isWordOnline() || !pendingSuggestionsOnline.length) {
+    return summary;
+  }
+  if (!forceValidation && !pendingSuggestionsRequireStaleValidation) {
+    return summary;
+  }
+  if (getActiveActionType() === ACTION_TYPE_CHECK) {
+    return summary;
+  }
+  try {
+    await Word.run(async (context) => {
+      const paras = await wordOnlineAdapter.getParagraphs(context);
+      const staleEntries = [];
+      const staleSuggestions = [];
+      for (const suggestion of pendingSuggestionsOnline) {
+        const paragraphIndex = suggestion?.paragraphIndex;
+        if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) continue;
+        const expectedHash = getStoredSuggestionParagraphHash(suggestion);
+        if (!expectedHash) continue;
+        const paragraph = paras.items[paragraphIndex] || null;
+        const liveHash = buildDesktopParagraphHash(paragraph?.text || "");
+        summary.checked += 1;
+        if (liveHash === expectedHash) continue;
+        staleEntries.push({ suggestion, paragraph });
+        staleSuggestions.push(suggestion);
+      }
+      if (!staleSuggestions.length) return;
+      if (clearMarkers) {
+        const clearResult = await clearOnlineSuggestionMarkers(context, staleEntries, paras);
+        summary.clearedMarkers =
+          (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
+        summary.failedClear = clearResult?.failedCount || 0;
+      }
+      const removed = removePendingSuggestionsByReference(staleSuggestions, { persist: false });
+      summary.removed = removed.length;
+      for (const removedSuggestion of removed) {
+        const paragraphIndex = removedSuggestion?.paragraphIndex;
+        if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) continue;
+        clearOnlineParagraphRenderState(paragraphIndex);
+        unstableOnlineParagraphBackoff.delete(paragraphIndex);
+      }
+      persistPendingSuggestionsOnline();
+      await context.sync();
+    });
+  } catch (err) {
+    warn("pruneStalePendingSuggestionsAgainstLiveDocument failed", err);
+  } finally {
+    pendingSuggestionsRequireStaleValidation = false;
+  }
+  return summary;
+}
+
+function recoverPendingSuggestionsAfterInterruptedOnlineScan(
+  previousSuggestions = [],
+  reconciledParagraphIndexes = new Set()
+) {
+  if (!Array.isArray(previousSuggestions) || !previousSuggestions.length) return 0;
+  let restored = 0;
+  for (const suggestion of previousSuggestions) {
+    const paragraphIndex = suggestion?.paragraphIndex;
+    if (
+      Number.isFinite(paragraphIndex) &&
+      paragraphIndex >= 0 &&
+      reconciledParagraphIndexes instanceof Set &&
+      reconciledParagraphIndexes.has(paragraphIndex)
+    ) {
+      continue;
+    }
+    if (addPendingSuggestionOnline(suggestion, { persist: false })) {
+      restored += 1;
+    }
+  }
+  return restored;
 }
 
 if (typeof window !== "undefined") {
@@ -3853,7 +3949,18 @@ async function clearSuggestionMarkersByTag(context, entries) {
   };
 }
 
-async function clearSuggestionMarkersByKnownTags(context, markerTags) {
+async function clearSuggestionMarkersByKnownTags(context, markerTags, options = {}) {
+  const restoreStateByTag = options?.restoreStateByTag || null;
+  const resolveRestoreState = (tag) => {
+    if (!tag || !restoreStateByTag) return null;
+    if (restoreStateByTag instanceof Map) {
+      return restoreStateByTag.get(tag) || null;
+    }
+    if (typeof restoreStateByTag === "object") {
+      return restoreStateByTag[tag] || null;
+    }
+    return null;
+  };
   const tags = Array.isArray(markerTags)
     ? [...new Set(markerTags.filter((tag) => typeof tag === "string" && tag.trim()))]
     : [];
@@ -3886,14 +3993,33 @@ async function clearSuggestionMarkersByKnownTags(context, markerTags) {
   for (const entry of controlsByTag) {
     const items = entry.controls?.items || [];
     if (!items.length) continue;
+    const restoreState = resolveRestoreState(entry.tag);
+    const restoreUnderline = toWordUnderline(restoreState?.previousUnderline);
+    const restoreUnderlineColor = normalizeHighlightColorValue(restoreState?.previousUnderlineColor);
+    const restoreChannel = restoreState?.markerChannel;
+    const restoreHighlight =
+      typeof restoreState?.previousHighlightColor === "string" || restoreState?.previousHighlightColor === null
+        ? restoreState.previousHighlightColor
+        : null;
     for (const control of items) {
       try {
         const controlRange = control.getRange("Content");
-        controlRange.font.highlightColor = null;
-        try {
-          controlRange.font.underline = toWordUnderline("None");
-        } catch (_err) {
-          // ignore: underline can be unavailable in some hosts
+        if (restoreChannel === "underline") {
+          controlRange.font.underline = restoreUnderline;
+          try {
+            controlRange.font.underlineColor = restoreUnderlineColor;
+          } catch (_err) {
+            // ignore: underline can be unavailable in some hosts
+          }
+        } else if (restoreChannel === "highlight") {
+          controlRange.font.highlightColor = restoreHighlight;
+        } else {
+          controlRange.font.highlightColor = null;
+          try {
+            controlRange.font.underline = toWordUnderline("None");
+          } catch (_err) {
+            // ignore: underline can be unavailable in some hosts
+          }
         }
         control.delete(true);
         changed = true;
@@ -4796,6 +4922,12 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       log(`applySuggestionOnlineById: restored ${restored} pending suggestions from storage`);
     }
   }
+  if (pendingSuggestionsOnline.length) {
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    if (staleSummary.removed > 0) {
+      log("applySuggestionOnlineById: pruned stale pending suggestions", staleSummary);
+    }
+  }
   summary.pendingBefore = pendingSuggestionsOnline.length;
   if (!pendingSuggestionsOnline.length) {
     return finalize("noop", "no-pending-suggestions");
@@ -5026,6 +5158,12 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
       log(`rejectSuggestionOnlineById: restored ${restored} pending suggestions from storage`);
     }
   }
+  if (pendingSuggestionsOnline.length) {
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    if (staleSummary.removed > 0) {
+      log("rejectSuggestionOnlineById: pruned stale pending suggestions", staleSummary);
+    }
+  }
   summary.pendingBefore = pendingSuggestionsOnline.length;
   if (!pendingSuggestionsOnline.length) {
     return finalize("noop", "no-pending-suggestions");
@@ -5164,6 +5302,12 @@ export async function applyAllSuggestionsOnline() {
     summary.restored = restored;
     if (restored > 0) {
       log(`applyAllSuggestionsOnline: restored ${restored} pending suggestions from storage`);
+    }
+  }
+  if (pendingSuggestionsOnline.length) {
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    if (staleSummary.removed > 0) {
+      log("applyAllSuggestionsOnline: pruned stale pending suggestions", staleSummary);
     }
   }
   summary.pendingBefore = pendingSuggestionsOnline.length;
@@ -5358,13 +5502,40 @@ export async function applyAllSuggestionsOnline() {
       clearOnlineParagraphRenderState(idx);
       unstableOnlineParagraphBackoff.delete(idx);
     }
+    const droppedRetainedFromTouchedParagraphs = [];
+    const canRetainSuggestion = (suggestion) => {
+      const paragraphIndex = suggestion?.paragraphIndex;
+      if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) return true;
+      if (!touchedIndexes.has(paragraphIndex)) return true;
+      droppedRetainedFromTouchedParagraphs.push(suggestion);
+      return false;
+    };
     pendingSuggestionsOnline.length = 0;
     pendingSuggestionRenderKeys.clear();
     for (const suggestion of retainedSuggestions) {
-      addPendingSuggestionOnline(suggestion, { persist: false });
+      if (canRetainSuggestion(suggestion)) {
+        addPendingSuggestionOnline(suggestion, { persist: false });
+      }
     }
     for (const suggestion of failedSuggestions) {
-      addPendingSuggestionOnline(suggestion, { persist: false });
+      if (canRetainSuggestion(suggestion)) {
+        addPendingSuggestionOnline(suggestion, { persist: false });
+      }
+    }
+    if (droppedRetainedFromTouchedParagraphs.length) {
+      const droppedEntries = droppedRetainedFromTouchedParagraphs.map((suggestion) => {
+        const paragraphIndex = suggestion?.paragraphIndex;
+        const paragraph =
+          Number.isFinite(paragraphIndex) && paragraphIndex >= 0 ? paras.items[paragraphIndex] || null : null;
+        return { suggestion, paragraph };
+      });
+      const droppedCleanupSummary = await clearOnlineSuggestionMarkers(context, droppedEntries, paras);
+      summary.clearedMarkers +=
+        (droppedCleanupSummary?.clearedByTagCount || 0) + (droppedCleanupSummary?.clearedFallbackCount || 0);
+      summary.failedSuggestions += droppedCleanupSummary?.failedCount || 0;
+      log("applyAll pruned retained suggestions from touched paragraphs", {
+        dropped: droppedRetainedFromTouchedParagraphs.length,
+      });
     }
     persistPendingSuggestionsOnline();
     if (pendingSuggestionsOnline.length) {
@@ -5422,6 +5593,12 @@ export async function rejectAllSuggestionsOnline() {
     summary.restored = restored;
     if (restored > 0) {
       log(`rejectAllSuggestionsOnline: restored ${restored} pending suggestions from storage`);
+    }
+  }
+  if (pendingSuggestionsOnline.length) {
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    if (staleSummary.removed > 0) {
+      log("rejectAllSuggestionsOnline: pruned stale pending suggestions", staleSummary);
     }
   }
   summary.pendingBefore = pendingSuggestionsOnline.length;
@@ -6056,6 +6233,8 @@ async function checkDocumentTextOnline(checkToken) {
   const paragraphCacheDisabled = isParagraphCacheDisabled();
   const checkAbortController = getCheckAbortController(checkToken, { create: true });
   const checkAbortSignal = checkAbortController?.signal || null;
+  const previousPendingSuggestionsSnapshot = [...pendingSuggestionsOnline];
+  const reconciledParagraphIndexes = new Set();
 
   try {
     await Word.run(async (context) => {
@@ -6065,6 +6244,49 @@ async function checkDocumentTextOnline(checkToken) {
         return;
       }
       const paras = await wordOnlineAdapter.getParagraphs(context);
+      const previousPendingMarkerStateByRenderKey = new Map();
+      const previousMarkerRestoreByTag = new Map();
+      for (const existingSuggestion of pendingSuggestionsOnline) {
+        const renderKey = buildSuggestionRenderDedupKey(existingSuggestion);
+        if (!renderKey || previousPendingMarkerStateByRenderKey.has(renderKey)) continue;
+        const markerTag =
+          typeof existingSuggestion?.markerTag === "string"
+            ? existingSuggestion.markerTag.trim()
+            : "";
+        const markerRestoreState = {
+          markerChannel:
+            existingSuggestion?.markerChannel === "highlight" ||
+            existingSuggestion?.markerChannel === "underline"
+              ? existingSuggestion.markerChannel
+              : null,
+          previousHighlightColor:
+            existingSuggestion?.previousHighlightColor === null ||
+            typeof existingSuggestion?.previousHighlightColor === "string"
+              ? existingSuggestion.previousHighlightColor
+              : null,
+          previousUnderline:
+            existingSuggestion?.previousUnderline === null ||
+            typeof existingSuggestion?.previousUnderline === "string"
+              ? existingSuggestion.previousUnderline
+              : null,
+          previousUnderlineColor:
+            existingSuggestion?.previousUnderlineColor === null ||
+            typeof existingSuggestion?.previousUnderlineColor === "string"
+              ? existingSuggestion.previousUnderlineColor
+              : null,
+        };
+        previousPendingMarkerStateByRenderKey.set(renderKey, {
+          markerChannel: markerRestoreState.markerChannel,
+          markerId: sanitizeMarkerIdPart(existingSuggestion?.markerId),
+          markerTag,
+          previousHighlightColor: markerRestoreState.previousHighlightColor,
+          previousUnderline: markerRestoreState.previousUnderline,
+          previousUnderlineColor: markerRestoreState.previousUnderlineColor,
+        });
+        if (markerTag && !previousMarkerRestoreByTag.has(markerTag)) {
+          previousMarkerRestoreByTag.set(markerTag, markerRestoreState);
+        }
+      }
       resetPendingSuggestionsOnline();
       anchorProvider.reset();
       pruneOnlineRuntimeState(paras.items.length);
@@ -6105,7 +6327,8 @@ async function checkDocumentTextOnline(checkToken) {
         if (Array.isArray(previousRender?.markerTags) && previousRender.markerTags.length) {
           const clearSummary = await clearSuggestionMarkersByKnownTags(
             context,
-            previousRender.markerTags
+            previousRender.markerTags,
+            { restoreStateByTag: previousMarkerRestoreByTag }
           );
           if (clearSummary.clearedCount > 0) {
             scopedMarkerClears += clearSummary.clearedCount;
@@ -6115,6 +6338,7 @@ async function checkDocumentTextOnline(checkToken) {
             });
           }
           clearOnlineParagraphRenderState(paragraphIndex);
+          reconciledParagraphIndexes.add(paragraphIndex);
           return;
         }
         if (paragraph && !markerParagraphCleanupDone.has(paragraphIndex)) {
@@ -6124,6 +6348,7 @@ async function checkDocumentTextOnline(checkToken) {
             scopedMarkerClears += removed;
             log("Scoped marker cleanup (stale paragraph scan)", { paragraphIndex, removed });
           }
+          reconciledParagraphIndexes.add(paragraphIndex);
         }
       };
       const renderSuggestionsForParagraph = async ({
@@ -6154,6 +6379,36 @@ async function checkDocumentTextOnline(checkToken) {
           previousRender.suggestionHash === suggestionHash
         ) {
           for (const suggestionObj of renderList) {
+            suggestionObj.sourceParagraphHash = sourceHash;
+            const renderKey = buildSuggestionRenderDedupKey(suggestionObj);
+            const previousMarkerState =
+              renderKey && previousPendingMarkerStateByRenderKey.has(renderKey)
+                ? previousPendingMarkerStateByRenderKey.get(renderKey)
+                : null;
+            if (previousMarkerState) {
+              if (previousMarkerState.markerChannel) {
+                suggestionObj.markerChannel = previousMarkerState.markerChannel;
+              }
+              if (previousMarkerState.markerId) {
+                suggestionObj.markerId = previousMarkerState.markerId;
+              }
+              if (previousMarkerState.markerTag) {
+                suggestionObj.markerTag = previousMarkerState.markerTag;
+              }
+              suggestionObj.previousHighlightColor = previousMarkerState.previousHighlightColor;
+              suggestionObj.previousUnderline = previousMarkerState.previousUnderline;
+              suggestionObj.previousUnderlineColor = previousMarkerState.previousUnderlineColor;
+            }
+            if (!suggestionObj.markerChannel) {
+              // Online markers are rendered as highlights; default so cleanup restores highlight formatting.
+              suggestionObj.markerChannel = "highlight";
+            }
+            if (
+              typeof suggestionObj.previousHighlightColor !== "string" &&
+              suggestionObj.previousHighlightColor !== null
+            ) {
+              suggestionObj.previousHighlightColor = null;
+            }
             getSuggestionMarkerTag(suggestionObj, { create: true });
             addPendingSuggestionOnline(suggestionObj, { persist: false });
           }
@@ -6169,6 +6424,7 @@ async function checkDocumentTextOnline(checkToken) {
 
         let highlightedInParagraph = 0;
         for (const suggestionObj of renderList) {
+          suggestionObj.sourceParagraphHash = sourceHash;
           ensureCheckActionActive(checkToken);
           if (checkAbortSignal?.aborted) {
             throw new CheckAbortError(
@@ -6588,7 +6844,18 @@ async function checkDocumentTextOnline(checkToken) {
     } else {
       errL("ERROR in checkDocumentTextOnline:", e);
     }
+    const restored = recoverPendingSuggestionsAfterInterruptedOnlineScan(
+      previousPendingSuggestionsSnapshot,
+      reconciledParagraphIndexes
+    );
+    if (restored > 0) {
+      log("Recovered pending suggestions after interrupted online scan", {
+        restored,
+      });
+    }
+    persistPendingSuggestionsOnline();
   } finally {
+    persistPendingSuggestionsOnline();
     flushScanNotifications();
   }
 }
