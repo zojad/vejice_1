@@ -7,7 +7,7 @@
   xsi:type="TaskPaneApp">
 
   <Id>8d54d3a0-2f41-4f9b-90c9-6010f5aa76b2</Id>
-  <Version>1.0.0.2</Version>
+  <Version>1.0.0.3</Version>
   <ProviderName>CJVT</ProviderName>
   <DefaultLocale>sl-SI</DefaultLocale>
   <DisplayName DefaultValue="CJVT Vejice"/>
