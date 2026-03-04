@@ -236,7 +236,7 @@ const runReject = async () => {
     log("reject summary", summary);
   } catch (err) {
     errL("reject failed", err);
-    setStatus("Napaka pri zavracanju.");
+    setStatus("Napaka pri zavračanju.");
   } finally {
     setBusy(false);
     syncActionButtons();

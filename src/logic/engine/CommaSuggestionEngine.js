@@ -1307,7 +1307,7 @@ function splitParagraphIntoChunks(
   );
   const sentences = [];
   let start = 0;
-  const sentenceLeadClosers = /[\])"'Â»â€â€™]/;
+  const sentenceLeadClosers = /[\])"'»”’]/;
   const lowerLetter = /\p{Ll}/u;
   const upperLetter = /\p{Lu}/u;
   const letterOrDigit = /[\p{L}\d]/u;
