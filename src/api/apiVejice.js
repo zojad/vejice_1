@@ -436,7 +436,8 @@ function resolveApiMaxAttempts() {
     ? LOCAL_API_MAX_ATTEMPTS
     : DEFAULT_API_MAX_ATTEMPTS;
   const resolved = winValue ?? envValue ?? defaultAttempts;
-  return Math.max(1, Math.min(5, Math.round(resolved)));
+  // Temporary cap while backend error analysis is in progress.
+  return Math.max(1, Math.min(2, Math.round(resolved)));
 }
 
 function resolveApiNumberSetting({
@@ -541,9 +542,84 @@ const apiCircuitBreakerState = {
   transientFailureCount: 0,
   openedUntilTs: 0,
 };
+const RECENT_SERVER_FAILURE_CACHE_MAX_ENTRIES = 300;
+const RECENT_SERVER_FAILURE_TTL_MS = 5 * 60 * 1000;
+const recentServerFailureByRequestKey = new Map();
 
 function nowTimestampMs() {
   return Date.now();
+}
+
+function hashStringForRequestKey(value = "") {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function buildRequestFailureKey(text = "") {
+  if (typeof text !== "string") return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return `${normalized.length}:${hashStringForRequestKey(normalized)}`;
+}
+
+function pruneRecentServerFailureCache(nowTs = nowTimestampMs()) {
+  for (const [key, entry] of recentServerFailureByRequestKey.entries()) {
+    if (!entry || !entry.expiresAt || entry.expiresAt <= nowTs) {
+      recentServerFailureByRequestKey.delete(key);
+    }
+  }
+  while (recentServerFailureByRequestKey.size > RECENT_SERVER_FAILURE_CACHE_MAX_ENTRIES) {
+    const oldestKey = recentServerFailureByRequestKey.keys().next().value;
+    if (typeof oldestKey === "undefined") break;
+    recentServerFailureByRequestKey.delete(oldestKey);
+  }
+}
+
+function getRecentServerFailureForRequest(key) {
+  if (!key) return null;
+  const nowTs = nowTimestampMs();
+  pruneRecentServerFailureCache(nowTs);
+  const entry = recentServerFailureByRequestKey.get(key);
+  if (!entry) return null;
+  return entry;
+}
+
+function rememberServerFailureForRequest(key, info = {}) {
+  if (!key) return;
+  const status = Number.isFinite(info?.status) ? Number(info.status) : null;
+  if (!(status >= 500 && status < 600)) return;
+  const nowTs = nowTimestampMs();
+  const existing = recentServerFailureByRequestKey.get(key);
+  const failCount = (existing?.failCount || 0) + 1;
+  const expiresAt = nowTs + RECENT_SERVER_FAILURE_TTL_MS;
+  recentServerFailureByRequestKey.set(key, {
+    status,
+    code: info?.code || existing?.code || null,
+    msg: info?.msg || existing?.msg || null,
+    failCount,
+    firstSeenAt: existing?.firstSeenAt || nowTs,
+    lastSeenAt: nowTs,
+    expiresAt,
+  });
+  log("Failure cache remember", {
+    requestKey: key,
+    status,
+    failCount,
+    ttlMs: RECENT_SERVER_FAILURE_TTL_MS,
+    expiresInMs: Math.max(0, expiresAt - nowTs),
+    snippet: snip(info?.requestSentence || ""),
+  });
+  pruneRecentServerFailureCache(nowTs);
+}
+
+function clearServerFailureForRequest(key) {
+  if (!key) return;
+  if (recentServerFailureByRequestKey.has(key)) {
+    recentServerFailureByRequestKey.delete(key);
+  }
 }
 
 function getCircuitRetryAfterMs(ts = nowTimestampMs()) {
@@ -792,6 +868,26 @@ async function requestPopravek(poved, options = {}) {
 
   const primaryPayload = buildPrimaryRequestPayload(poved);
   const primaryRequestSentence = primaryPayload.requestSentence;
+  const requestFailureKey = buildRequestFailureKey(primaryRequestSentence || poved);
+  const recentServerFailure = getRecentServerFailureForRequest(requestFailureKey);
+  if (recentServerFailure && recentServerFailure.failCount >= 1) {
+    const nowTs = nowTimestampMs();
+    log("FAST-FAIL repeated failing payload", {
+      requestKey: requestFailureKey,
+      status: recentServerFailure.status,
+      failCount: recentServerFailure.failCount,
+      ageMs: Math.max(0, nowTs - (recentServerFailure.lastSeenAt || nowTs)),
+      ttlLeftMs: Math.max(0, (recentServerFailure.expiresAt || nowTs) - nowTs),
+      len: primaryRequestSentence?.length ?? 0,
+      snippet: snip(primaryRequestSentence),
+    });
+    throw new VejiceApiError("Vejice API fast-fail for repeated failing payload", {
+      fastFail: true,
+      status: recentServerFailure.status,
+      failCount: recentServerFailure.failCount,
+      requestKey: requestFailureKey,
+    });
+  }
   const data = buildRequestData(primaryRequestSentence);
 
   const config = {
@@ -890,6 +986,7 @@ async function requestPopravek(poved, options = {}) {
       );
 
       resetApiCircuitBreakerOnSuccess();
+      clearServerFailureForRequest(requestFailureKey);
       return { correctedText, raw };
     } catch (err) {
       if (isAbortLikeError(err, requestSignal)) {
@@ -925,6 +1022,7 @@ async function requestPopravek(poved, options = {}) {
               correctedText !== poved
             );
             resetApiCircuitBreakerOnSuccess();
+            clearServerFailureForRequest(requestFailureKey);
             return { correctedText, raw };
           }
         } catch (protectedErr) {
@@ -961,6 +1059,7 @@ async function requestPopravek(poved, options = {}) {
               changed: correctedText !== poved,
             });
             resetApiCircuitBreakerOnSuccess();
+            clearServerFailureForRequest(requestFailureKey);
             return { correctedText, raw };
           } catch (compatErr) {
             if (isAbortLikeError(compatErr, requestSignal)) {
@@ -1017,6 +1116,7 @@ async function requestPopravek(poved, options = {}) {
               restoredChars: restored.restoredChars,
             });
             resetApiCircuitBreakerOnSuccess();
+            clearServerFailureForRequest(requestFailureKey);
             return { correctedText: restored.text, raw };
           }
         } catch (normalizedErr) {
@@ -1048,6 +1148,10 @@ async function requestPopravek(poved, options = {}) {
         await delayMs(delay, requestSignal);
         continue;
       }
+      rememberServerFailureForRequest(requestFailureKey, {
+        ...info,
+        requestSentence: primaryRequestSentence,
+      });
       throw new VejiceApiError("Vejice API call failed", {
         durationMs,
         info,
@@ -1087,7 +1191,3 @@ export async function popraviPovedDetailed(poved, options = {}) {
     commaOps,
   };
 }
-
-
-
-

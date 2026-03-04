@@ -4,6 +4,10 @@ import { SyntheticAnchorProvider } from "./SyntheticAnchorProvider.js";
 
 const MAX_LOG_LENGTH = 120;
 const LOG_PREFIX = "[LemmatizerAnchorProvider]";
+const LEMMA_AUTHORITATIVE_MIN_TOKENS = 6;
+const LEMMA_AUTHORITATIVE_MIN_COVERAGE = 0.9;
+const LEMMA_INDEX_WINDOW = 14;
+const LEMMA_CHAR_WINDOW = 140;
 const snip = (value) =>
   typeof value === "string" && value.length > MAX_LOG_LENGTH
     ? `${value.slice(0, MAX_LOG_LENGTH)}…`
@@ -123,21 +127,34 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     const timerLabel = `${LOG_PREFIX} anchor-${paragraphIndex}-${Date.now()}`;
     console.time?.(timerLabel);
     const fallbackEntry = await this.fallbackProvider.getAnchors(params);
+    fallbackEntry.lemmaOffsetsAuthoritative = false;
+    fallbackEntry.lemmaQuality = {
+      authoritative: false,
+      source: null,
+      target: null,
+    };
     try {
       const [sourceLemmaTokens, targetLemmaTokens] = await Promise.all([
         this.fetchLemmaTokens(originalText),
         this.fetchLemmaTokens(correctedText),
       ]);
-      this.applyLemmaOffsets({
+      const sourceQuality = this.applyLemmaOffsets({
         collection: fallbackEntry.sourceAnchors,
         lemmas: sourceLemmaTokens,
         documentOffset,
       });
-      this.applyLemmaOffsets({
+      const targetQuality = this.applyLemmaOffsets({
         collection: fallbackEntry.targetAnchors,
         lemmas: targetLemmaTokens,
         documentOffset,
       });
+      const authoritative = Boolean(sourceQuality.authoritative && targetQuality.authoritative);
+      fallbackEntry.lemmaOffsetsAuthoritative = authoritative;
+      fallbackEntry.lemmaQuality = {
+        authoritative,
+        source: sourceQuality,
+        target: targetQuality,
+      };
       logInfo(
         "Lemma offsets applied",
         "| paragraph:",
@@ -145,7 +162,13 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
         "| source tokens:",
         sourceLemmaTokens.length,
         "| target tokens:",
-        targetLemmaTokens.length
+        targetLemmaTokens.length,
+        "| source coverage:",
+        sourceQuality.coverage,
+        "| target coverage:",
+        targetQuality.coverage,
+        "| authoritative:",
+        authoritative
       );
     } catch (error) {
       logWarn("Falling back to synthetic anchors for paragraph", paragraphIndex, error);
@@ -187,13 +210,37 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
   }
 
   applyLemmaOffsets({ collection, lemmas, documentOffset = 0 }) {
-    if (!collection?.ordered?.length || !Array.isArray(lemmas) || !lemmas.length) return;
+    const quality = {
+      totalAnchors: 0,
+      matchedAnchors: 0,
+      unmatchedAnchors: 0,
+      coverage: 0,
+      avgCharDrift: null,
+      avgIndexDrift: null,
+      authoritative: false,
+    };
+    if (!collection?.ordered?.length || !Array.isArray(lemmas) || !lemmas.length) {
+      applyLemmaReliabilityFlags(collection, false);
+      return quality;
+    }
     let lemmaIndex = 0;
-    for (const anchor of collection.ordered) {
+    const charDrifts = [];
+    const indexDrifts = [];
+    for (let orderedIndex = 0; orderedIndex < collection.ordered.length; orderedIndex++) {
+      const anchor = collection.ordered[orderedIndex];
       if (!anchor) continue;
       const tokenText = anchor.tokenText ?? "";
       if (!tokenText.trim()) continue;
-      const match = findLemmaMatch(tokenText, lemmas, lemmaIndex);
+      quality.totalAnchors++;
+      const expectedStart = Number.isFinite(anchor.charStart) ? anchor.charStart : undefined;
+      const expectedIndex = resolveAnchorExpectedLemmaIndex(anchor, orderedIndex, lemmaIndex);
+      const match = findLemmaMatch({
+        tokenText,
+        lemmas,
+        startIndex: lemmaIndex,
+        expectedIndex,
+        expectedStart,
+      });
       if (match) {
         const charStart = match.start;
         const charEnd =
@@ -205,9 +252,41 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
         anchor.documentCharEnd =
           typeof charEnd === "number" && charEnd >= 0 ? documentOffset + charEnd : anchor.documentCharEnd;
         anchor.matched = typeof charStart === "number" && charStart >= 0;
+        anchor.lemmaMatched = Boolean(anchor.matched);
+        anchor.lemmaMatchType = match.matchType;
+        anchor.lemmaMatchScore = match.score;
+        if (Number.isFinite(match.charDistance)) {
+          anchor.lemmaCharDrift = match.charDistance;
+          charDrifts.push(match.charDistance);
+        } else {
+          anchor.lemmaCharDrift = undefined;
+        }
+        if (Number.isFinite(match.indexDistance)) {
+          anchor.lemmaIndexDrift = match.indexDistance;
+          indexDrifts.push(match.indexDistance);
+        } else {
+          anchor.lemmaIndexDrift = undefined;
+        }
+        quality.matchedAnchors++;
         lemmaIndex = match.index + 1;
+      } else {
+        anchor.lemmaMatched = false;
+        anchor.lemmaMatchType = undefined;
+        anchor.lemmaMatchScore = undefined;
+        anchor.lemmaCharDrift = undefined;
+        anchor.lemmaIndexDrift = undefined;
       }
     }
+    quality.unmatchedAnchors = Math.max(0, quality.totalAnchors - quality.matchedAnchors);
+    quality.coverage =
+      quality.totalAnchors > 0 ? Number((quality.matchedAnchors / quality.totalAnchors).toFixed(3)) : 0;
+    quality.avgCharDrift = summarizeAverage(charDrifts);
+    quality.avgIndexDrift = summarizeAverage(indexDrifts);
+    quality.authoritative =
+      quality.totalAnchors >= LEMMA_AUTHORITATIVE_MIN_TOKENS &&
+      quality.coverage >= LEMMA_AUTHORITATIVE_MIN_COVERAGE;
+    applyLemmaReliabilityFlags(collection, quality.authoritative);
+    return quality;
   }
 }
 
@@ -367,15 +446,113 @@ function normalizeForMatch(value) {
     : "";
 }
 
-function findLemmaMatch(tokenText, lemmas, startIndex = 0) {
+function findLemmaMatch({
+  tokenText,
+  lemmas,
+  startIndex = 0,
+  expectedIndex = null,
+  expectedStart = undefined,
+}) {
+  if (!Array.isArray(lemmas) || !lemmas.length) return null;
   const normalizedToken = normalizeForMatch(tokenText);
-  for (let i = startIndex; i < lemmas.length; i++) {
+  if (!normalizedToken) return null;
+  const safeStart = Math.max(0, Math.min(Math.floor(startIndex || 0), lemmas.length - 1));
+  const safeExpectedIndex = Number.isFinite(expectedIndex)
+    ? Math.max(0, Math.min(Math.floor(expectedIndex), lemmas.length - 1))
+    : safeStart;
+  const lowerWindow = Math.max(0, safeExpectedIndex - LEMMA_INDEX_WINDOW);
+  const upperWindow = Math.min(lemmas.length - 1, safeExpectedIndex + LEMMA_INDEX_WINDOW);
+  let best = null;
+  for (let i = 0; i < lemmas.length; i++) {
     const lemma = lemmas[i];
     if (!lemma?.text) continue;
     const lemmaNorm = lemma.normalized || normalizeForMatch(lemma.text);
-    if (lemma.text === tokenText || (lemmaNorm && lemmaNorm === normalizedToken)) {
-      return { ...lemma, index: i };
+    const exactTextMatch = lemma.text === tokenText;
+    const normalizedMatch = Boolean(lemmaNorm && lemmaNorm === normalizedToken);
+    if (!exactTextMatch && !normalizedMatch) continue;
+
+    const indexDistance = Math.abs(i - safeExpectedIndex);
+    const hasStart = Number.isFinite(lemma.start);
+    const charDistance =
+      hasStart && Number.isFinite(expectedStart) ? Math.abs(lemma.start - expectedStart) : undefined;
+
+    let score = 0;
+    if (!exactTextMatch) score += 1.5;
+    score += indexDistance * 0.9;
+    if (i < safeStart) {
+      // Strongly discourage regressions to earlier lemmas.
+      score += (safeStart - i) * 2.5;
+    }
+    if (i < lowerWindow || i > upperWindow) {
+      score += 6 + Math.abs(i - safeExpectedIndex);
+    }
+    if (Number.isFinite(charDistance)) {
+      score += Math.min(12, charDistance / 24);
+      if (charDistance > LEMMA_CHAR_WINDOW) {
+        score += 8;
+      }
+    } else {
+      score += 2;
+    }
+
+    if (
+      !best ||
+      score < best.score ||
+      (score === best.score && indexDistance < best.indexDistance)
+    ) {
+      best = {
+        ...lemma,
+        index: i,
+        score: Number(score.toFixed(3)),
+        indexDistance,
+        charDistance,
+        matchType: exactTextMatch ? "exact" : "normalized",
+      };
     }
   }
-  return null;
+  if (!best) return null;
+  const extremeCharDrift = Number.isFinite(best.charDistance) && best.charDistance > LEMMA_CHAR_WINDOW * 2;
+  const extremeIndexDrift = best.indexDistance > LEMMA_INDEX_WINDOW * 2;
+  if (extremeCharDrift && extremeIndexDrift) {
+    return null;
+  }
+  if (best.index < safeStart - 4) {
+    return null;
+  }
+  return best;
+}
+
+function parseTokenIdToIndex(tokenId) {
+  if (typeof tokenId !== "string" || !tokenId.trim()) return null;
+  const match = tokenId.match(/(\d+)(?!.*\d)/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed - 1);
+}
+
+function resolveAnchorExpectedLemmaIndex(anchor, fallbackIndex = 0, floorIndex = 0) {
+  const tokenIndex = Number.isFinite(anchor?.tokenIndex) ? Math.max(0, Math.floor(anchor.tokenIndex)) : null;
+  const tokenIdIndex = parseTokenIdToIndex(anchor?.tokenId);
+  if (Number.isFinite(tokenIndex)) {
+    return Math.max(floorIndex, tokenIndex);
+  }
+  if (Number.isFinite(tokenIdIndex)) {
+    return Math.max(floorIndex, tokenIdIndex);
+  }
+  return Math.max(floorIndex, Number.isFinite(fallbackIndex) ? Math.floor(fallbackIndex) : 0);
+}
+
+function summarizeAverage(values = []) {
+  if (!Array.isArray(values) || !values.length) return null;
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  return Number((sum / values.length).toFixed(3));
+}
+
+function applyLemmaReliabilityFlags(collection, authoritative) {
+  if (!collection?.ordered?.length) return;
+  for (const anchor of collection.ordered) {
+    if (!anchor || typeof anchor !== "object") continue;
+    anchor.lemmaAuthoritative = Boolean(authoritative && anchor.lemmaMatched);
+  }
 }

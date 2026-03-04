@@ -739,6 +739,8 @@ function getSuggestionOpPositions(suggestion) {
   return { originalPos, correctedPos };
 }
 
+const RELOCATION_PAIR_POSITION_TOLERANCE = 2;
+
 function isSameCommaRelocationPair(first, second) {
   if (!first || !second) return false;
   if (first === second) return false;
@@ -749,11 +751,13 @@ function isSameCommaRelocationPair(first, second) {
   const secondPos = getSuggestionOpPositions(second);
   if (!Number.isFinite(firstPos.originalPos) || !Number.isFinite(firstPos.correctedPos)) return false;
   if (!Number.isFinite(secondPos.originalPos) || !Number.isFinite(secondPos.correctedPos)) return false;
-  if (firstPos.originalPos === firstPos.correctedPos) return false;
-
+  const firstDelta = firstPos.correctedPos - firstPos.originalPos;
+  const secondDelta = secondPos.correctedPos - secondPos.originalPos;
+  if (firstDelta === 0 || secondDelta === 0) return false;
+  if (Math.sign(firstDelta) !== Math.sign(secondDelta)) return false;
   return (
-    firstPos.originalPos === secondPos.originalPos &&
-    firstPos.correctedPos === secondPos.correctedPos
+    Math.abs(firstPos.originalPos - secondPos.originalPos) <= RELOCATION_PAIR_POSITION_TOLERANCE &&
+    Math.abs(firstPos.correctedPos - secondPos.correctedPos) <= RELOCATION_PAIR_POSITION_TOLERANCE
   );
 }
 
@@ -4258,13 +4262,17 @@ function getSuggestionSortPos(suggestion) {
   );
 }
 
-function findWordTokenStartByHintInText(text, rawToken, hintIndex, occurrence) {
+function findWordTokenStartByHintInText(text, rawToken, hintIndex, occurrence, options = {}) {
   const tokenRaw = typeof rawToken === "string" ? rawToken.trim() : "";
   if (!tokenRaw || !text) return -1;
   const token = tokenRaw.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
   if (!token || /[^\p{L}\d]/u.test(token)) return -1;
   const safeOccurrence = Number.isFinite(occurrence) ? Math.max(0, Math.floor(occurrence)) : 0;
   const safeHint = Number.isFinite(hintIndex) ? Math.max(0, Math.floor(hintIndex)) : null;
+  const maxDistance = Number.isFinite(options?.maxDistance)
+    ? Math.max(1, Math.floor(options.maxDistance))
+    : 24;
+  const preferOccurrence = Boolean(options?.preferOccurrence);
   const tokenRegex = new RegExp(
     `(^|[^\\p{L}\\d])(${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\d])`,
     "gu"
@@ -4279,6 +4287,7 @@ function findWordTokenStartByHintInText(text, rawToken, hintIndex, occurrence) {
   if (safeHint === null) {
     return positions[Math.min(safeOccurrence, positions.length - 1)];
   }
+  const ordinalPos = positions[Math.min(safeOccurrence, positions.length - 1)];
 
   let best = positions[0];
   let bestDist = Math.abs(positions[0] - safeHint);
@@ -4290,16 +4299,47 @@ function findWordTokenStartByHintInText(text, rawToken, hintIndex, occurrence) {
     }
   }
   // Reject far matches; these are the main source of in-word corruption.
-  if (bestDist > 24) return -1;
+  if (bestDist > maxDistance) {
+    if (preferOccurrence && Math.abs(ordinalPos - safeHint) <= maxDistance * 2) {
+      return ordinalPos;
+    }
+    return -1;
+  }
   return best;
 }
 
 const COMPANY_ABBREV_PATTERN = /\b(?:d\.\s*o\.\s*o\.|s\.\s*p\.|d\.\s*d\.|k\.\s*d\.|d\.\s*n\.\s*o\.)\b/iu;
 
+function resolveLemmaAwareTokenLookupOptions(suggestion, anchor) {
+  const suggestionAuthoritative = Boolean(suggestion?.meta?.lemmaAnchorAuthoritative);
+  const anchorAuthoritative = Boolean(anchor?.lemmaAuthoritative);
+  const anchorLemmaMatched = Boolean(anchor?.lemmaMatched);
+  if (suggestionAuthoritative || anchorAuthoritative) {
+    return {
+      maxDistance: 72,
+      preferOccurrence: true,
+    };
+  }
+  if (anchorLemmaMatched) {
+    return {
+      maxDistance: 48,
+      preferOccurrence: true,
+    };
+  }
+  return {
+    maxDistance: 24,
+    preferOccurrence: false,
+  };
+}
+
 function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion) {
   const meta = suggestion?.meta?.anchor;
   if (!meta) return { op: null, skipReason: "insert_missing_anchor_meta" };
   let skipReason = "insert_unresolved";
+  const useDirectHintMapping =
+    Boolean(suggestion?.meta?.lemmaAnchorAuthoritative) &&
+    typeof sourceText === "string" &&
+    sourceText === snapshotText;
 
   const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
   const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
@@ -4311,14 +4351,16 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     const sourceHint = preferEnd
       ? (Number.isFinite(anchor.charEnd) ? anchor.charEnd : anchor.charStart + token.length)
       : anchor.charStart;
+    const lookupOptions = resolveLemmaAwareTokenLookupOptions(suggestion, anchor);
     const mappedHint = Number.isFinite(sourceHint)
-      ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+      ? (useDirectHintMapping ? sourceHint : mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint))
       : null;
     const start = findWordTokenStartByHintInText(
       snapshotText,
       token,
       mappedHint,
-      anchor.textOccurrence ?? anchor.tokenIndex ?? 0
+      anchor.textOccurrence ?? anchor.tokenIndex ?? 0,
+      lookupOptions
     );
     if (start < 0) {
       skipReason = reasonOnMissing;
@@ -4535,6 +4577,10 @@ function isSafeGapBetweenTokenAndComma(gap = "", direction = "before") {
 function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex) {
   const meta = suggestion?.meta?.anchor;
   if (!meta || typeof snapshotText !== "string" || !snapshotText) return false;
+  const useDirectHintMapping =
+    Boolean(suggestion?.meta?.lemmaAnchorAuthoritative) &&
+    typeof sourceText === "string" &&
+    sourceText === snapshotText;
   const beforeAnchor = meta.sourceTokenBefore ?? meta.sourceTokenAt ?? meta.highlightAnchorTarget ?? null;
   const afterAnchor = meta.sourceTokenAfter ?? meta.sourceTokenAt ?? meta.highlightAnchorTarget ?? null;
   let checked = 0;
@@ -4547,15 +4593,17 @@ function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex
         : Number.isFinite(beforeAnchor.charEnd)
           ? beforeAnchor.charEnd - token.length
           : null;
+      const lookupOptions = resolveLemmaAwareTokenLookupOptions(suggestion, beforeAnchor);
       const mappedHint =
         Number.isFinite(sourceHint) && typeof sourceText === "string"
-          ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+          ? (useDirectHintMapping ? sourceHint : mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint))
           : null;
       const start = findWordTokenStartByHintInText(
         snapshotText,
         token,
         mappedHint,
-        beforeAnchor.textOccurrence ?? beforeAnchor.tokenIndex ?? 0
+        beforeAnchor.textOccurrence ?? beforeAnchor.tokenIndex ?? 0,
+        lookupOptions
       );
       checked++;
       if (start < 0) return false;
@@ -4573,15 +4621,17 @@ function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex
         : Number.isFinite(afterAnchor.charEnd)
           ? afterAnchor.charEnd - token.length
           : null;
+      const lookupOptions = resolveLemmaAwareTokenLookupOptions(suggestion, afterAnchor);
       const mappedHint =
         Number.isFinite(sourceHint) && typeof sourceText === "string"
-          ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+          ? (useDirectHintMapping ? sourceHint : mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint))
           : null;
       const start = findWordTokenStartByHintInText(
         snapshotText,
         token,
         mappedHint,
-        afterAnchor.textOccurrence ?? afterAnchor.tokenIndex ?? 0
+        afterAnchor.textOccurrence ?? afterAnchor.tokenIndex ?? 0,
+        lookupOptions
       );
       checked++;
       if (start < 0) return false;
@@ -4623,9 +4673,15 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
     -1;
   if (!Number.isFinite(charStart) || charStart < 0) return { op: null, skipReason: "delete_missing_char_hint" };
 
-  const mappedStart = mapIndexAcrossCanonical(sourceText, snapshotText, charStart);
+  const useDirectHintMapping =
+    Boolean(suggestion?.meta?.lemmaAnchorAuthoritative) &&
+    typeof sourceText === "string" &&
+    sourceText === snapshotText;
+  const mappedStart = useDirectHintMapping
+    ? charStart
+    : mapIndexAcrossCanonical(sourceText, snapshotText, charStart);
   let commaIndex = -1;
-  const maxDelta = 1;
+  const maxDelta = suggestion?.meta?.lemmaAnchorAuthoritative ? 2 : 1;
   for (let delta = 0; delta <= maxDelta; delta++) {
     const left = mappedStart - delta;
     const right = mappedStart + delta;
@@ -4641,7 +4697,7 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
   if (commaIndex < 0) return { op: null, skipReason: "delete_comma_not_found_near_hint" };
   if (isProtectedAbbreviationComma(snapshotText, commaIndex)) return { op: null, skipReason: "delete_protected_abbreviation" };
   if (!hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex)) {
-    const charAligned = Math.abs(commaIndex - mappedStart) <= 1;
+    const charAligned = Math.abs(commaIndex - mappedStart) <= maxDelta;
     const safeBoundary = hasWordBoundaryAroundComma(snapshotText, commaIndex);
     if (!(charAligned && safeBoundary)) {
       return { op: null, skipReason: "delete_context_mismatch" };
@@ -4919,6 +4975,9 @@ export async function applySuggestionOnlineById(suggestionId = null) {
     }
   }
   if (pendingSuggestionsOnline.length) {
+    // Do not force global stale pruning in one-by-one flow.
+    // A single accepted/rejected comma changes the paragraph hash and can
+    // incorrectly invalidate other still-actionable suggestions in that paragraph.
     const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
     if (staleSummary.removed > 0) {
       log("applySuggestionOnlineById: pruned stale pending suggestions", staleSummary);
@@ -5155,6 +5214,9 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
     }
   }
   if (pendingSuggestionsOnline.length) {
+    // Do not force global stale pruning in one-by-one flow.
+    // A single accepted/rejected comma changes the paragraph hash and can
+    // incorrectly invalidate other still-actionable suggestions in that paragraph.
     const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
     if (staleSummary.removed > 0) {
       log("rejectSuggestionOnlineById: pruned stale pending suggestions", staleSummary);
@@ -5301,7 +5363,7 @@ export async function applyAllSuggestionsOnline() {
     }
   }
   if (pendingSuggestionsOnline.length) {
-    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument({ force: true });
     if (staleSummary.removed > 0) {
       log("applyAllSuggestionsOnline: pruned stale pending suggestions", staleSummary);
     }
@@ -5592,7 +5654,7 @@ export async function rejectAllSuggestionsOnline() {
     }
   }
   if (pendingSuggestionsOnline.length) {
-    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument();
+    const staleSummary = await pruneStalePendingSuggestionsAgainstLiveDocument({ force: true });
     if (staleSummary.removed > 0) {
       log("rejectAllSuggestionsOnline: pruned stale pending suggestions", staleSummary);
     }
