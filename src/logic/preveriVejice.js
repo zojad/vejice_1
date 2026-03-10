@@ -2016,6 +2016,150 @@ async function getRangeForAnchorSpan(
   return null;
 }
 
+function getAnchorResolvedEnd(anchor) {
+  if (!Number.isFinite(anchor?.charStart) || anchor.charStart < 0) return -1;
+  if (Number.isFinite(anchor?.charEnd) && anchor.charEnd > anchor.charStart) {
+    return anchor.charEnd;
+  }
+  if (typeof anchor?.tokenText === "string" && anchor.tokenText.length > 0) {
+    return anchor.charStart + anchor.tokenText.length;
+  }
+  return anchor.charStart + 1;
+}
+
+function isLemmaAuthoritativeSuggestion(suggestion) {
+  return Boolean(suggestion?.meta?.lemmaAnchorAuthoritative);
+}
+
+function hasDesktopDirectInsertBoundary(suggestion) {
+  const meta = suggestion?.meta?.anchor;
+  if (!meta) return false;
+  const beforeEnd = getAnchorResolvedEnd(meta.sourceTokenBefore);
+  const atEnd = getAnchorResolvedEnd(meta.sourceTokenAt);
+  const afterStart = Number.isFinite(meta.sourceTokenAfter?.charStart) ? meta.sourceTokenAfter.charStart : -1;
+  const charHintStart = Number.isFinite(suggestion?.charHint?.start) ? suggestion.charHint.start : -1;
+  return beforeEnd >= 0 || atEnd >= 0 || afterStart >= 0 || charHintStart >= 0;
+}
+
+function isDesktopDirectInsertOp(op) {
+  if (op?.kind !== "insert") return false;
+  const suggestions = Array.isArray(op?.suggestions) ? op.suggestions : [];
+  return suggestions.length > 0 && suggestions.every(hasDesktopDirectInsertBoundary);
+}
+
+async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIndex, sourceText, op) {
+  const suggestion = Array.isArray(op?.suggestions) ? op.suggestions[0] : null;
+  const meta = suggestion?.meta?.anchor;
+  if (!meta) return "failed";
+
+  paragraph.load("text");
+  await context.sync();
+  const liveText = paragraph.text || "";
+  const anchorsEntry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+
+  const tryBoundaryInsert = async (sourceBoundary, traceLabel, fallbackSnippet) => {
+    if (!Number.isFinite(sourceBoundary) || sourceBoundary < 0) return false;
+    const mappedBoundary = mapIndexAcrossCanonical(sourceText, liveText, sourceBoundary);
+    if (!Number.isFinite(mappedBoundary) || mappedBoundary < 0 || mappedBoundary > liveText.length) {
+      return false;
+    }
+    if (hasCommaNearMappedHint(liveText, mappedBoundary, 0)) {
+      return "noop";
+    }
+    if (mappedBoundary < liveText.length) {
+      const range = await getRangeForAnchorSpan(
+        context,
+        paragraph,
+        anchorsEntry,
+        mappedBoundary,
+        Math.min(mappedBoundary + 1, liveText.length),
+        traceLabel,
+        fallbackSnippet
+      );
+      if (!range) return false;
+      range.insertText(",", Word.InsertLocation.before);
+      return true;
+    }
+    if (!liveText.length) return false;
+    const range = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      anchorsEntry,
+      Math.max(0, liveText.length - 1),
+      liveText.length,
+      `${traceLabel}-append`,
+      fallbackSnippet || liveText.slice(Math.max(0, liveText.length - 1))
+    );
+    if (!range) return false;
+    range.insertText(",", Word.InsertLocation.after);
+    return true;
+  };
+
+  const tryAnchorInsert = async (anchor, insertLocation, traceLabel) => {
+    if (!Number.isFinite(anchor?.charStart) || anchor.charStart < 0) return false;
+    const anchorEnd = getAnchorResolvedEnd(anchor);
+    if (!Number.isFinite(anchorEnd) || anchorEnd <= anchor.charStart) return false;
+    const sourceBoundary = insertLocation === Word.InsertLocation.after ? anchorEnd : anchor.charStart;
+    const mappedBoundary = mapIndexAcrossCanonical(sourceText, liveText, sourceBoundary);
+    if (Number.isFinite(mappedBoundary) && hasCommaNearMappedHint(liveText, mappedBoundary, 0)) {
+      return "noop";
+    }
+    const range = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      anchorsEntry,
+      anchor.charStart,
+      anchorEnd,
+      traceLabel,
+      anchor.tokenText || op?.snippet || ","
+    );
+    if (!range) return false;
+    range.insertText(",", insertLocation);
+    return true;
+  };
+
+  const beforeAnchor = meta.sourceTokenBefore ?? null;
+  const atAnchor = meta.sourceTokenAt ?? null;
+  const afterAnchor = meta.sourceTokenAfter ?? null;
+  const anchorCandidates = [
+    { anchor: beforeAnchor, location: Word.InsertLocation.after, label: "before" },
+    { anchor: atAnchor, location: Word.InsertLocation.after, label: "at" },
+    { anchor: afterAnchor, location: Word.InsertLocation.before, label: "after" },
+  ];
+
+  for (const candidate of anchorCandidates) {
+    if (!candidate.anchor) continue;
+    const status = await tryAnchorInsert(
+      candidate.anchor,
+      candidate.location,
+      `desktop-authoritative-${candidate.label}`
+    );
+    if (status === "noop") return "noop";
+    if (status) return "applied";
+  }
+
+  const fallbackBoundaryHints = [
+    getAnchorResolvedEnd(beforeAnchor),
+    getAnchorResolvedEnd(atAnchor),
+    Number.isFinite(afterAnchor?.charStart) ? afterAnchor.charStart : -1,
+    suggestion?.charHint?.start,
+    meta?.charStart,
+    suggestion?.meta?.op?.originalPos,
+  ].filter((value, index, arr) => Number.isFinite(value) && value >= 0 && arr.indexOf(value) === index);
+
+  for (const sourceBoundary of fallbackBoundaryHints) {
+    const status = await tryBoundaryInsert(
+      sourceBoundary,
+      "desktop-authoritative-boundary",
+      op?.snippet || meta?.highlightText || ","
+    );
+    if (status === "noop") return "noop";
+    if (status) return "applied";
+  }
+
+  return "failed";
+}
+
 async function searchParagraphForSnippet(context, paragraph, snippet) {
   const range = paragraph.getRange();
   const matches = range.search(snippet, {
@@ -3343,27 +3487,19 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   if (!meta) return false;
   const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
   const lowReliability = Boolean(suggestion?.meta?.lowAnchorReliability);
-  const insertCommaAtChar = async (charIndex, traceLabel) => {
-    paragraph.load("text");
-    await context.sync();
-    const text = paragraph.text || "";
-    if (!Number.isFinite(charIndex) || charIndex < 0 || charIndex > text.length) {
+  const insertCommaAtBoundary = async (text, rawPos, traceLabel, fallbackSnippet, options = {}) => {
+    if (typeof text !== "string") return false;
+    if (!Number.isFinite(rawPos) || rawPos < 0 || rawPos > text.length) {
       return false;
     }
-
-    // Move insertion point to first non-space char to avoid creating "word ,next".
-    let insertionPos = charIndex;
-    while (insertionPos < text.length && /\s/.test(text[insertionPos])) {
-      insertionPos++;
+    let insertionPos = Math.max(0, Math.min(text.length, Math.floor(rawPos)));
+    if (options.rewindWhitespaceRun !== false) {
+      while (insertionPos > 0 && /\s/.test(text[insertionPos - 1])) {
+        insertionPos--;
+      }
     }
-    // Expand backwards over spaces so we can replace "   " with ", ".
-    let trimStart = insertionPos;
-    while (trimStart > 0 && /\s/.test(text[trimStart - 1])) {
-      trimStart--;
-    }
-
-    const nextChar = insertionPos < text.length ? text[insertionPos] : "";
     const prevChar = insertionPos > 0 ? text[insertionPos - 1] : "";
+    const nextChar = insertionPos < text.length ? text[insertionPos] : "";
     if (
       insertionPos > 0 &&
       insertionPos < text.length &&
@@ -3373,36 +3509,45 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       warn(`${traceLabel}: refusing in-word comma insertion`, { insertionPos, prevChar, nextChar });
       return false;
     }
-    const withFollowingSpace = nextChar && !/\s/.test(nextChar) && !QUOTES.has(nextChar) && !isDigit(nextChar);
-    const commaText = withFollowingSpace ? ", " : ",";
 
-    if (trimStart < insertionPos) {
-      const replaceWhitespaceRange = await getRangeForAnchorSpan(
+    let targetRange = null;
+    if (insertionPos < text.length) {
+      targetRange = await getRangeForAnchorSpan(
         context,
         paragraph,
         entry,
-        trimStart,
         insertionPos,
-        `${traceLabel}-replace-whitespace`,
-        text.slice(trimStart, insertionPos)
+        Math.min(insertionPos + 1, text.length),
+        `${traceLabel}-insert`,
+        fallbackSnippet
       );
-      if (!replaceWhitespaceRange) return false;
-      replaceWhitespaceRange.insertText(commaText, Word.InsertLocation.replace);
+      if (!targetRange) return false;
+      targetRange.insertText(",", Word.InsertLocation.before);
       return true;
     }
 
-    const insertRange = await getRangeForAnchorSpan(
+    if (!text.length) return false;
+    targetRange = await getRangeForAnchorSpan(
       context,
       paragraph,
       entry,
-      insertionPos,
-      Math.min(insertionPos + 1, text.length),
-      `${traceLabel}-insert`,
-      meta.highlightText
+      Math.max(0, text.length - 1),
+      text.length,
+      `${traceLabel}-append`,
+      fallbackSnippet || text.slice(Math.max(0, text.length - 1))
     );
-    if (!insertRange) return false;
-    insertRange.insertText(commaText, Word.InsertLocation.before);
+    if (!targetRange) return false;
+    targetRange.insertText(",", Word.InsertLocation.after);
     return true;
+  };
+  const insertCommaAtChar = async (charIndex, traceLabel) => {
+    paragraph.load("text");
+    await context.sync();
+    const text = paragraph.text || "";
+    if (!Number.isFinite(charIndex) || charIndex < 0 || charIndex > text.length) {
+      return false;
+    }
+    return insertCommaAtBoundary(text, charIndex, traceLabel, meta.highlightText);
   };
 
   const findTokenStartByHint = (text, rawToken, hintIndex, occurrence) => {
@@ -3474,32 +3619,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     if (/[^\s]/.test(gapText)) return false;
 
     if (beforeEnd === afterStart) {
-      const insertRange = await getRangeForAnchorSpan(
-        context,
-        paragraph,
-        entry,
-        afterStart,
-        Math.min(afterStart + 1, liveText.length),
-        `${traceLabel}-insert-at-gap`,
-        afterToken
-      );
-      if (!insertRange) return false;
-      insertRange.insertText(", ", Word.InsertLocation.before);
-      return true;
+      return insertCommaAtBoundary(liveText, afterStart, `${traceLabel}-insert-at-gap`, afterToken, {
+        rewindWhitespaceRun: false,
+      });
     }
-
-    const gapRange = await getRangeForAnchorSpan(
-      context,
-      paragraph,
-      entry,
-      beforeEnd,
-      afterStart,
-      `${traceLabel}-replace-gap`,
-      gapText || " "
-    );
-    if (!gapRange) return false;
-    gapRange.insertText(", ", Word.InsertLocation.replace);
-    return true;
+    return insertCommaAtBoundary(liveText, beforeEnd, `${traceLabel}-insert-gap-start`, gapText || afterToken, {
+      rewindWhitespaceRun: false,
+    });
   };
 
   const insertCommaAfterToken = async (tokenAnchor, traceLabel) => {
@@ -3529,24 +3655,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
         while (wsStart > 0 && /\s/.test(liveText[wsStart - 1])) {
           wsStart--;
         }
-        const firstTokenChar = liveText[tokenStart] ?? "";
-        const commaText =
-          firstTokenChar && !/\s/.test(firstTokenChar) && !QUOTES.has(firstTokenChar) && !isDigit(firstTokenChar)
-            ? ", "
-            : ",";
-        const beforeTokenWsRange = await getRangeForAnchorSpan(
-          context,
-          paragraph,
-          entry,
+        return insertCommaAtBoundary(
+          liveText,
           wsStart,
-          tokenStart,
           `${traceLabel}-normalize-before-token`,
-          liveText.slice(wsStart, tokenStart)
+          liveText.slice(wsStart, tokenStart),
+          { rewindWhitespaceRun: false }
         );
-        if (beforeTokenWsRange) {
-          beforeTokenWsRange.insertText(commaText, Word.InsertLocation.replace);
-          return true;
-        }
       }
     }
     const liveIndex = hintIndex;
@@ -3560,23 +3675,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       while (wsEnd < liveText.length && /\s/.test(liveText[wsEnd])) {
         wsEnd++;
       }
-      const afterWsChar = liveText[wsEnd] ?? "";
-      const withSpace =
-        afterWsChar && !/\s/.test(afterWsChar) && !QUOTES.has(afterWsChar) && !isDigit(afterWsChar);
-      const commaText = withSpace ? ", " : ",";
-      const replaceRange = await getRangeForAnchorSpan(
-        context,
-        paragraph,
-        entry,
+      return insertCommaAtBoundary(
+        liveText,
         liveIndex,
-        wsEnd,
         `${traceLabel}-replace-ws`,
-        liveText.slice(liveIndex, wsEnd)
+        liveText.slice(liveIndex, wsEnd),
+        { rewindWhitespaceRun: false }
       );
-      if (replaceRange) {
-        replaceRange.insertText(commaText, Word.InsertLocation.replace);
-        return true;
-      }
     }
     return false;
   };
@@ -3606,24 +3711,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
           wsStart--;
         }
         if (wsStart < tokenStart) {
-          const firstTokenChar = liveText[tokenStart] ?? "";
-          const commaText =
-            firstTokenChar && !/\s/.test(firstTokenChar) && !QUOTES.has(firstTokenChar) && !isDigit(firstTokenChar)
-              ? ", "
-              : ",";
-          const beforeTokenWsRange = await getRangeForAnchorSpan(
-            context,
-            paragraph,
-            entry,
+          return insertCommaAtBoundary(
+            liveText,
             wsStart,
-            tokenStart,
             `${traceLabel}-normalize-before-token`,
-            liveText.slice(wsStart, tokenStart)
+            liveText.slice(wsStart, tokenStart),
+            { rewindWhitespaceRun: false }
           );
-          if (beforeTokenWsRange) {
-            beforeTokenWsRange.insertText(commaText, Word.InsertLocation.replace);
-            return true;
-          }
         }
       }
     }
@@ -3736,6 +3830,14 @@ function shouldInsertSpaceAfterComma(nextChar) {
   if (isDigit(nextChar)) return false;
   if (COMMA_SPACE_BLOCKERS.has(nextChar)) return false;
   return true;
+}
+
+function areAllSuggestionsLemmaAuthoritative(suggestions = []) {
+  return (
+    Array.isArray(suggestions) &&
+    suggestions.length > 0 &&
+    suggestions.every((suggestion) => Boolean(suggestion?.meta?.lemmaAnchorAuthoritative))
+  );
 }
 
 async function normalizeCommaSpacingInParagraph(context, paragraph) {
@@ -4745,13 +4847,15 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
       return { kind: "noop" };
     }
+    const contextSnippet = snapshotText.slice(Math.max(0, pos - 6), Math.min(snapshotText.length, pos + 6));
+    const explicitSnippet =
+      typeof snippet === "string" && /[^\s]/.test(snippet) ? snippet : "";
     return {
       kind: "insert",
       start: pos,
       end: pos,
       replacement: ",",
-      snippet:
-        snippet || snapshotText.slice(Math.max(0, pos - 6), Math.min(snapshotText.length, pos + 6)),
+      snippet: explicitSnippet || contextSnippet,
     };
   };
   const resolveCompanyInsertFallback = () => {
@@ -4783,7 +4887,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     return buildInsertOp(pos);
   };
 
-  // Best path: replace exact whitespace gap between before/after anchors.
+  // Best path: insert at exact whitespace gap between before/after anchors.
   if (beforeAnchor && afterAnchor) {
     const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
     const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
@@ -4797,7 +4901,10 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         }
         // Normal adjacency gap: whitespace-only.
         if (!/[^\s]/.test(gap)) {
-          return { op: buildInsertOp(beforeEnd, gap || before.token), skipReason: null };
+          return {
+            op: buildInsertOp(beforeEnd, gap || before.token),
+            skipReason: null,
+          };
         }
         // Quote boundary adjacency (e.g. "'foo' 'bar'"): insert after closing quote.
         if (isQuoteOrSpaceBoundary(gap)) {
@@ -4812,7 +4919,10 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
           if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
             return { op: { kind: "noop" }, skipReason: null };
           }
-          return { op: buildInsertOp(insertPos, gap || before.token), skipReason: null };
+          return {
+            op: buildInsertOp(insertPos, gap || before.token),
+            skipReason: null,
+          };
         }
         skipReason = "insert_gap_contains_nonspace_content";
       }
@@ -4821,6 +4931,213 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   }
 
   // Secondary path: normalize whitespace right before "after" token.
+  if (afterAnchor) {
+    const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
+    if (after.start > 0) {
+      let wsStart = after.start;
+      while (wsStart > 0 && /\s/.test(snapshotText[wsStart - 1])) wsStart--;
+      if (wsStart < after.start) {
+        return {
+          op: buildInsertOp(wsStart, snapshotText.slice(wsStart, after.start)),
+          skipReason: null,
+        };
+      }
+      const safePos = normalizeInsertPosForQuoteBoundary(after.start);
+      return {
+        op: buildInsertOp(
+          safePos,
+          snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1))
+        ),
+        skipReason: null,
+      };
+    }
+  }
+
+  // Secondary path: normalize whitespace right after "before" token.
+  if (beforeAnchor) {
+    const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
+    if (before.start >= 0) {
+      const beforeEnd = before.start + before.token.length;
+      let wsEnd = beforeEnd;
+      while (wsEnd < snapshotText.length && /\s/.test(snapshotText[wsEnd])) wsEnd++;
+      if (wsEnd > beforeEnd) {
+        return {
+          op: buildInsertOp(beforeEnd, snapshotText.slice(beforeEnd, wsEnd)),
+          skipReason: null,
+        };
+      }
+      const safePos = normalizeInsertPosForQuoteBoundary(beforeEnd);
+      return {
+        op: buildInsertOp(
+          safePos,
+          snapshotText.slice(Math.max(0, safePos - 1), Math.min(snapshotText.length, safePos + 1))
+        ),
+        skipReason: null,
+      };
+    }
+  }
+
+  const fallbackOp = resolveCompanyInsertFallback();
+  if (fallbackOp) return { op: fallbackOp, skipReason: null };
+  return { op: null, skipReason };
+}
+
+function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceText, suggestion) {
+  const meta = suggestion?.meta?.anchor;
+  if (!meta) return { op: null, skipReason: "insert_missing_anchor_meta" };
+  let skipReason = "insert_unresolved";
+
+  const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
+  const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
+
+  const findStartForAnchor = (anchor, preferEnd = false, reasonOnMissing = "insert_anchor_token_unresolved") => {
+    if (!anchor?.tokenText) return { start: -1, token: null };
+    const token = (anchor.tokenText || "").trim().replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
+    if (!token || /[^\p{L}\d]/u.test(token)) return { start: -1, token: null };
+    const sourceHint = preferEnd
+      ? (Number.isFinite(anchor.charEnd) ? anchor.charEnd : anchor.charStart + token.length)
+      : anchor.charStart;
+    const mappedHint = Number.isFinite(sourceHint)
+      ? mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint)
+      : null;
+    const start = findWordTokenStartByHintInText(
+      snapshotText,
+      token,
+      mappedHint,
+      anchor.textOccurrence ?? anchor.tokenIndex ?? 0
+    );
+    if (start < 0) {
+      skipReason = reasonOnMissing;
+    }
+    return { start, token };
+  };
+
+  const isQuoteOrSpaceBoundary = (value) =>
+    typeof value === "string" && /^[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D]+$/u.test(value);
+  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00BB\u2019)\]]/u.test(char || "");
+  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00AB\u2018(\[]/u.test(char || "");
+  const normalizeInsertPosForQuoteBoundary = (pos) => {
+    if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
+    let left = pos - 1;
+    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    let right = pos;
+    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    if (
+      left >= 0 &&
+      right < snapshotText.length &&
+      isClosingQuoteOrCloser(snapshotText[left]) &&
+      isOpeningQuoteOrOpener(snapshotText[right])
+    ) {
+      return left + 1;
+    }
+    if (left >= 0 && isOpeningQuoteOrOpener(snapshotText[left])) {
+      let prev = left - 1;
+      while (prev >= 0 && /\s/.test(snapshotText[prev])) prev--;
+      if (prev >= 0 && isClosingQuoteOrCloser(snapshotText[prev])) {
+        return prev + 1;
+      }
+    }
+    return pos;
+  };
+
+  const hasCompanyAbbreviationNear = (center, radius = 72) => {
+    if (!Number.isFinite(center) || center < 0 || center > snapshotText.length) return false;
+    const start = Math.max(0, center - radius);
+    const end = Math.min(snapshotText.length, center + radius);
+    return COMPANY_ABBREV_PATTERN.test(snapshotText.slice(start, end));
+  };
+
+  const hasCommaAcrossQuoteBoundary = (pos) => {
+    if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return false;
+    let left = pos - 1;
+    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    while (left >= 0 && isClosingQuoteOrCloser(snapshotText[left])) left--;
+    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    if (left >= 0 && snapshotText[left] === ",") return true;
+
+    let right = pos;
+    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    while (right < snapshotText.length && isOpeningQuoteOrOpener(snapshotText[right])) right++;
+    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    if (right < snapshotText.length && snapshotText[right] === ",") return true;
+    return false;
+  };
+
+  const buildInsertOp = (rawPos, snippet) => {
+    const pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)));
+    const left = snapshotText.slice(Math.max(0, pos - 3), pos);
+    const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
+    if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
+      return { kind: "noop" };
+    }
+    return {
+      kind: "insert",
+      start: pos,
+      end: pos,
+      replacement: ",",
+      snippet: snippet || snapshotText.slice(Math.max(0, pos - 6), Math.min(snapshotText.length, pos + 6)),
+    };
+  };
+
+  const resolveCompanyInsertFallback = () => {
+    const sourceAnchor =
+      meta.sourceTokenAt ?? meta.sourceTokenBefore ?? meta.sourceTokenAfter ?? meta.highlightAnchorTarget;
+    const charStart =
+      suggestion?.charHint?.start ??
+      meta.charStart ??
+      sourceAnchor?.charStart ??
+      suggestion?.meta?.op?.originalPos ??
+      -1;
+    if (!Number.isFinite(charStart) || charStart < 0) {
+      skipReason = "insert_fallback_no_char_hint";
+      return null;
+    }
+    const mapped = mapIndexAcrossCanonical(sourceText, snapshotText, charStart);
+    if (!Number.isFinite(mapped) || mapped < 0 || mapped > snapshotText.length) {
+      skipReason = "insert_fallback_mapped_pos_invalid";
+      return null;
+    }
+    if (!hasCompanyAbbreviationNear(mapped)) {
+      skipReason = "insert_fallback_company_form_not_detected";
+      return null;
+    }
+    let pos = mapped;
+    if (pos > 0 && pos < snapshotText.length && /[\p{L}\d]/u.test(snapshotText[pos - 1]) && /[\p{L}\d]/u.test(snapshotText[pos])) {
+      while (pos < snapshotText.length && /[\p{L}\d.]/u.test(snapshotText[pos])) pos++;
+    }
+    return buildInsertOp(pos);
+  };
+
+  if (beforeAnchor && afterAnchor) {
+    const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
+    const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
+    if (before.start >= 0 && after.start >= 0) {
+      const beforeEnd = before.start + before.token.length;
+      if (beforeEnd <= after.start) {
+        const gap = snapshotText.slice(beforeEnd, after.start);
+        if (/^\s*,\s*$/.test(gap)) {
+          return { op: { kind: "noop" }, skipReason: null };
+        }
+        if (!/[^\s]/.test(gap)) {
+          return { op: buildInsertOp(beforeEnd, gap || before.token), skipReason: null };
+        }
+        if (isQuoteOrSpaceBoundary(gap)) {
+          let insertPos = beforeEnd;
+          while (insertPos < after.start && isClosingQuoteOrCloser(snapshotText[insertPos])) {
+            insertPos++;
+          }
+          const boundarySegment = snapshotText.slice(insertPos, after.start);
+          if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
+            return { op: { kind: "noop" }, skipReason: null };
+          }
+          return { op: buildInsertOp(insertPos, gap || before.token), skipReason: null };
+        }
+        skipReason = "insert_gap_contains_nonspace_content";
+      }
+      skipReason = "insert_before_after_order_invalid";
+    }
+  }
+
   if (afterAnchor) {
     const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
     if (after.start > 0) {
@@ -4840,7 +5157,6 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     }
   }
 
-  // Secondary path: normalize whitespace right after "before" token.
   if (beforeAnchor) {
     const before = findStartForAnchor(beforeAnchor, true, "insert_before_anchor_lookup_failed");
     if (before.start >= 0) {
@@ -5105,7 +5421,9 @@ function hasCommaNearMappedHint(snapshotText, mappedHint, radius = 4) {
   return false;
 }
 
-function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
+function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, options = {}) {
+  const resolveInsertOperation = options?.resolveInsertOperation || resolveInsertOperationFromSnapshot;
+  const resolveDeleteOperation = options?.resolveDeleteOperation || resolveDeleteOperationFromSnapshot;
   const rawPlan = [];
   const skipped = [];
   const noop = [];
@@ -5113,9 +5431,9 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   for (const suggestion of suggestions) {
     let opResult = { op: null, skipReason: "planner_unknown" };
     if (suggestion?.kind === "delete") {
-      opResult = resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion);
+      opResult = resolveDeleteOperation(snapshotText, sourceText, suggestion);
     } else {
-      opResult = resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion);
+      opResult = resolveInsertOperation(snapshotText, sourceText, suggestion);
     }
     const op = opResult?.op ?? null;
 
@@ -6572,7 +6890,10 @@ async function checkDocumentTextDesktop(checkToken) {
           const { plan, skipped, noop } = buildParagraphOperationsPlan(
             snapshotText,
             sourceForPlan,
-            job.suggestions
+            job.suggestions,
+            {
+              resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
+            }
           );
           logDesktopVerbose("Desktop apply plan", {
             paragraphIndex: job.paragraphIndex,
@@ -6584,29 +6905,57 @@ async function checkDocumentTextDesktop(checkToken) {
           });
 
           let appliedInParagraph = 0;
-          const plannedRanges = await getRangesForPlannedOperations(
-            context,
-            paragraph,
-            snapshotText,
-            plan,
-            "desktop-batch"
-          );
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
-            const range = plannedRanges[opIndex];
-            if (!range) {
-              applyRangeMisses++;
-              warn("Desktop batch op skipped: range not resolved", {
-                paragraphIndex: job.paragraphIndex,
-                opIndex,
-                kind: op?.kind,
-              });
-              continue;
-            }
             try {
+              if (isDesktopDirectInsertOp(op)) {
+                const directStatus = await applyDesktopAuthoritativeInsertOp(
+                  context,
+                  paragraph,
+                  job.paragraphIndex,
+                  sourceForPlan,
+                  op
+                );
+                if (directStatus === "noop") {
+                  continue;
+                }
+                if (directStatus === "applied") {
+                  appliedInParagraph += op.suggestions?.length || 1;
+                  for (const suggestion of op.suggestions || []) {
+                    if (suggestion.kind === "insert") {
+                      totalInserted++;
+                    } else if (suggestion.kind === "delete") {
+                      totalDeleted++;
+                    }
+                  }
+                  continue;
+                }
+              }
+
+              paragraph.load("text");
+              await context.sync();
+              const currentSnapshotText = paragraph.text || "";
+              const currentRange = (
+                await getRangesForPlannedOperations(
+                  context,
+                  paragraph,
+                  currentSnapshotText,
+                  [op],
+                  "desktop-batch"
+                )
+              )[0];
+              if (!currentRange) {
+                applyRangeMisses++;
+                warn("Desktop batch op skipped: range not resolved", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex,
+                  kind: op?.kind,
+                });
+                continue;
+              }
               const insertLocation =
                 op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
-              range.insertText(op.replacement, insertLocation);
+              currentRange.insertText(op.replacement, insertLocation);
               appliedInParagraph += op.suggestions?.length || 1;
               for (const suggestion of op.suggestions || []) {
                 if (suggestion.kind === "insert") {
@@ -6626,12 +6975,6 @@ async function checkDocumentTextDesktop(checkToken) {
             }
           }
           if (appliedInParagraph) {
-            if (anchorProviderSupportsCharHints) {
-              await ensureCommaSpaceAfterInParagraph(context, paragraph);
-              logDesktopVerbose("Desktop post-pass: ensured missing spaces after commas.");
-            } else {
-              await normalizeCommaSpacingInParagraph(context, paragraph);
-            }
             logDesktopVerbose(
               `P${job.paragraphIndex}: applied (ins=${totalInserted}, del=${totalDeleted}) | analyze=${job.analysisDurationMs} ms | cache=${job.fromCache ? "hit" : "miss"}`
             );
