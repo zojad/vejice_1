@@ -6930,6 +6930,19 @@ async function checkDocumentTextDesktop(checkToken) {
           });
 
           let appliedInParagraph = 0;
+          const countAppliedSuggestions = (op) => {
+            const suggestions = Array.isArray(op?.suggestions) && op.suggestions.length ? op.suggestions : [null];
+            appliedInParagraph += suggestions.length;
+            for (const suggestion of suggestions) {
+              if (suggestion?.kind === "insert") {
+                totalInserted++;
+              } else if (suggestion?.kind === "delete") {
+                totalDeleted++;
+              }
+            }
+          };
+
+          const deferredSuggestions = [];
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
             try {
@@ -6945,49 +6958,12 @@ async function checkDocumentTextDesktop(checkToken) {
                   continue;
                 }
                 if (directStatus === "applied") {
-                  appliedInParagraph += op.suggestions?.length || 1;
-                  for (const suggestion of op.suggestions || []) {
-                    if (suggestion.kind === "insert") {
-                      totalInserted++;
-                    } else if (suggestion.kind === "delete") {
-                      totalDeleted++;
-                    }
-                  }
+                  countAppliedSuggestions(op);
                   continue;
                 }
               }
-
-              paragraph.load("text");
-              await context.sync();
-              const currentSnapshotText = paragraph.text || "";
-              const currentRange = (
-                await getRangesForPlannedOperations(
-                  context,
-                  paragraph,
-                  currentSnapshotText,
-                  [op],
-                  "desktop-batch"
-                )
-              )[0];
-              if (!currentRange) {
-                applyRangeMisses++;
-                warn("Desktop batch op skipped: range not resolved", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex,
-                  kind: op?.kind,
-                });
-                continue;
-              }
-              const insertLocation =
-                op.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
-              currentRange.insertText(op.replacement, insertLocation);
-              appliedInParagraph += op.suggestions?.length || 1;
-              for (const suggestion of op.suggestions || []) {
-                if (suggestion.kind === "insert") {
-                  totalInserted++;
-                } else if (suggestion.kind === "delete") {
-                  totalDeleted++;
-                }
+              if (Array.isArray(op?.suggestions) && op.suggestions.length) {
+                deferredSuggestions.push(...op.suggestions);
               }
             } catch (err) {
               applyOpFailures++;
@@ -6999,6 +6975,67 @@ async function checkDocumentTextDesktop(checkToken) {
               });
             }
           }
+
+          if (deferredSuggestions.length) {
+            paragraph.load("text");
+            await context.sync();
+            const currentSnapshotText = paragraph.text || "";
+            const {
+              plan: deferredPlan,
+              skipped: deferredSkipped,
+              noop: deferredNoop,
+            } = buildParagraphOperationsPlan(
+              currentSnapshotText,
+              sourceForPlan,
+              deferredSuggestions,
+              {
+                resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
+              }
+            );
+            logDesktopVerbose("Desktop deferred apply plan", {
+              paragraphIndex: job.paragraphIndex,
+              total: deferredSuggestions.length,
+              planned: deferredPlan.length,
+              skipped: deferredSkipped.length,
+              noop: deferredNoop.length,
+              skippedByReason: summarizeSkippedReasons(deferredSkipped),
+            });
+            const deferredRanges = await getRangesForPlannedOperations(
+              context,
+              paragraph,
+              currentSnapshotText,
+              deferredPlan,
+              "desktop-batch"
+            );
+            for (let deferredIndex = 0; deferredIndex < deferredPlan.length; deferredIndex++) {
+              const deferredOp = deferredPlan[deferredIndex];
+              const deferredRange = deferredRanges[deferredIndex];
+              if (!deferredRange) {
+                applyRangeMisses++;
+                warn("Desktop batch op skipped: range not resolved", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  kind: deferredOp?.kind,
+                });
+                continue;
+              }
+              try {
+                const insertLocation =
+                  deferredOp.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace;
+                deferredRange.insertText(deferredOp.replacement, insertLocation);
+                countAppliedSuggestions(deferredOp);
+              } catch (err) {
+                applyOpFailures++;
+                warn("Desktop batch op failed", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  kind: deferredOp?.kind,
+                  err,
+                });
+              }
+            }
+          }
+
           if (appliedInParagraph) {
             logDesktopVerbose(
               `P${job.paragraphIndex}: applied (ins=${totalInserted}, del=${totalDeleted}) | analyze=${job.analysisDurationMs} ms | cache=${job.fromCache ? "hit" : "miss"}`

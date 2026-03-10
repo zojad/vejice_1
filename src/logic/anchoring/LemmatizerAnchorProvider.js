@@ -8,6 +8,8 @@ const LEMMA_AUTHORITATIVE_MIN_TOKENS = 6;
 const LEMMA_AUTHORITATIVE_MIN_COVERAGE = 0.9;
 const LEMMA_INDEX_WINDOW = 14;
 const LEMMA_CHAR_WINDOW = 140;
+const LEMMA_CACHE_MAX_ENTRIES = 1200;
+const LEMMA_CACHE_TTL_MS = 10 * 60 * 1000;
 const snip = (value) =>
   typeof value === "string" && value.length > MAX_LOG_LENGTH
     ? `${value.slice(0, MAX_LOG_LENGTH)}…`
@@ -50,6 +52,22 @@ function resolveDefaultEndpoint() {
   return "https://lemmas-vejice.com/lemmas";
 }
 
+function isWordOnlineHost() {
+  if (typeof Office === "undefined" || !Office?.context) return false;
+  const platform = Office.context.platform;
+  const onlineConst = Office?.PlatformType?.OfficeOnline;
+  return platform === onlineConst || platform === "OfficeOnline";
+}
+
+function hashLemmaCacheText(text = "") {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /**
  * Anchor provider that prefers real offsets from a lemmatizer service.
  * Falls back to SyntheticAnchorProvider when the service is unavailable.
@@ -80,6 +98,7 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     this.paragraphAnchors = [];
     this.fallbackProvider = new SyntheticAnchorProvider();
     this._didLogLemmaShapeThisRun = false;
+    this.lemmaTokenCache = new Map();
   }
 
   supportsCharHints() {
@@ -89,6 +108,44 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
   reset() {
     this.paragraphAnchors.length = 0;
     this._didLogLemmaShapeThisRun = false;
+  }
+
+  isLemmaTokenCacheEnabled() {
+    if (isWordOnlineHost()) return false;
+    return LEMMA_CACHE_MAX_ENTRIES > 0 && LEMMA_CACHE_TTL_MS > 0;
+  }
+
+  buildLemmaCacheKey(text = "") {
+    return `${text.length}:${hashLemmaCacheText(text)}`;
+  }
+
+  getCachedLemmaTokens(text = "") {
+    if (!this.isLemmaTokenCacheEnabled()) return null;
+    const key = this.buildLemmaCacheKey(text);
+    const entry = this.lemmaTokenCache.get(key);
+    if (!entry) return null;
+    if (entry.text !== text || Date.now() - entry.cachedAt > LEMMA_CACHE_TTL_MS) {
+      this.lemmaTokenCache.delete(key);
+      return null;
+    }
+    this.lemmaTokenCache.delete(key);
+    this.lemmaTokenCache.set(key, entry);
+    return entry.tokens;
+  }
+
+  setCachedLemmaTokens(text = "", tokens = []) {
+    if (!this.isLemmaTokenCacheEnabled()) return;
+    const key = this.buildLemmaCacheKey(text);
+    this.lemmaTokenCache.set(key, {
+      text,
+      tokens,
+      cachedAt: Date.now(),
+    });
+    while (this.lemmaTokenCache.size > LEMMA_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.lemmaTokenCache.keys().next().value;
+      if (typeof oldestKey === "undefined") break;
+      this.lemmaTokenCache.delete(oldestKey);
+    }
   }
 
   setAnchors(paragraphIndex, anchors) {
@@ -182,6 +239,11 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     const safeText = typeof text === "string" ? text : "";
     if (!safeText.trim()) return [];
     if (!this.endpoint) throw new Error("Lemmatizer endpoint URL is not configured");
+    const cachedTokens = this.getCachedLemmaTokens(safeText);
+    if (cachedTokens) {
+      logInfo("Lemma cache hit", "| tokens:", cachedTokens.length);
+      return cachedTokens;
+    }
     const timerLabel = `${LOG_PREFIX} fetch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     logInfo("Fetching lemmas", "| url:", this.endpoint, "| snippet:", snip(safeText));
     console.time?.(timerLabel);
@@ -198,6 +260,7 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     console.timeEnd?.(timerLabel);
     const lemmaTokens = normalizeLemmaPayload(response?.data);
     logInfo("Lemma response", "| tokens:", lemmaTokens.length);
+    this.setCachedLemmaTokens(safeText, lemmaTokens);
     this.logLemmaPayloadShapeOnce(response?.data, lemmaTokens);
     return lemmaTokens;
   }
