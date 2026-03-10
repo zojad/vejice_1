@@ -4774,6 +4774,14 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
     return false;
   };
+  const rewindInsertPosBeforeWhitespace = (candidatePos) => {
+    if (!Number.isFinite(candidatePos) || candidatePos <= 0) return candidatePos;
+    let pos = Math.floor(candidatePos);
+    while (pos > 0 && /\s/.test(snapshotText[pos - 1])) {
+      pos--;
+    }
+    return pos;
+  };
   const isWordCharForInsertBoundary = (char) => /[\p{L}\p{N}]/u.test(char || "");
   const isInsideWordBoundary = (pos) => {
     if (!Number.isFinite(pos) || pos <= 0 || pos >= snapshotText.length) return false;
@@ -4823,9 +4831,14 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
   const buildInsertOp = (rawPos, snippet) => {
     let pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)));
+    pos = rewindInsertPosBeforeWhitespace(pos);
     const hintedPos =
       preferredInsertHint >= 0
-        ? normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, preferredInsertHint)))
+        ? rewindInsertPosBeforeWhitespace(
+            normalizeInsertPosForQuoteBoundary(
+              Math.max(0, Math.min(snapshotText.length, preferredInsertHint))
+            )
+          )
         : -1;
     if (hintedPos >= 0) {
       if (
@@ -4839,6 +4852,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (isInsideWordBoundary(pos)) {
       pos = resolveSafeBoundaryNearWord(pos, hintedPos);
     }
+    pos = rewindInsertPosBeforeWhitespace(pos);
     if (isInsideWordBoundary(pos)) {
       return { kind: "noop" };
     }
@@ -5063,8 +5077,19 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
     return false;
   };
 
+  const rewindInsertPosBeforeWhitespace = (candidatePos) => {
+    if (!Number.isFinite(candidatePos) || candidatePos <= 0) return candidatePos;
+    let pos = Math.floor(candidatePos);
+    while (pos > 0 && /\s/.test(snapshotText[pos - 1])) {
+      pos--;
+    }
+    return pos;
+  };
+
   const buildInsertOp = (rawPos, snippet) => {
-    const pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)));
+    const pos = rewindInsertPosBeforeWhitespace(
+      normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)))
+    );
     const left = snapshotText.slice(Math.max(0, pos - 3), pos);
     const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
     if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
