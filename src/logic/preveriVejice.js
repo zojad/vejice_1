@@ -389,6 +389,189 @@ function buildDesktopParagraphHash(text = "") {
   return `${rawText.length}:${hashForStorageKey(rawText)}`;
 }
 
+function remapParagraphIndex(sourceText, targetText, index, { allowEnd = false } = {}) {
+  if (!Number.isFinite(index)) return index;
+  const safeSource = typeof sourceText === "string" ? sourceText : "";
+  const safeTarget = typeof targetText === "string" ? targetText : "";
+  if (!safeTarget.length) {
+    return 0;
+  }
+  const raw = mapIndexAcrossCanonical(safeSource, safeTarget, Math.max(0, Math.floor(index)));
+  const upperBound = allowEnd ? safeTarget.length : Math.max(0, safeTarget.length - 1);
+  return Math.max(0, Math.min(Math.floor(raw), upperBound));
+}
+
+function remapAnchorCharFields(anchor, sourceText, targetText, documentOffset = 0) {
+  if (!anchor || typeof anchor !== "object") return;
+  if (Number.isFinite(anchor.charStart)) {
+    anchor.charStart = remapParagraphIndex(sourceText, targetText, anchor.charStart);
+    anchor.documentCharStart = documentOffset + anchor.charStart;
+  }
+  if (Number.isFinite(anchor.charEnd)) {
+    anchor.charEnd = remapParagraphIndex(sourceText, targetText, anchor.charEnd, { allowEnd: true });
+    if (Number.isFinite(anchor.charStart) && anchor.charEnd <= anchor.charStart) {
+      anchor.charEnd = Math.min(targetText.length, anchor.charStart + 1);
+    }
+    anchor.documentCharEnd = documentOffset + anchor.charEnd;
+  }
+}
+
+function remapPendingSuggestionToParagraphBaseline(
+  suggestion,
+  sourceText,
+  targetText,
+  documentOffset = 0
+) {
+  if (!suggestion || typeof suggestion !== "object") return false;
+  const safeSource = typeof sourceText === "string" ? sourceText : "";
+  const safeTarget = typeof targetText === "string" ? targetText : "";
+  if (!safeTarget) return false;
+
+  if (suggestion.charHint && typeof suggestion.charHint === "object") {
+    if (Number.isFinite(suggestion.charHint.start)) {
+      suggestion.charHint.start = remapParagraphIndex(safeSource, safeTarget, suggestion.charHint.start);
+      suggestion.charHint.documentStart = documentOffset + suggestion.charHint.start;
+    }
+    if (Number.isFinite(suggestion.charHint.end)) {
+      suggestion.charHint.end = remapParagraphIndex(safeSource, safeTarget, suggestion.charHint.end, {
+        allowEnd: true,
+      });
+      if (
+        Number.isFinite(suggestion.charHint.start) &&
+        suggestion.charHint.end <= suggestion.charHint.start
+      ) {
+        suggestion.charHint.end = Math.min(safeTarget.length, suggestion.charHint.start + 1);
+      }
+      suggestion.charHint.documentEnd = documentOffset + suggestion.charHint.end;
+    }
+  }
+
+  if (suggestion.meta && typeof suggestion.meta === "object") {
+    const op = suggestion.meta.op;
+    if (op && typeof op === "object") {
+      if (Number.isFinite(op.originalPos)) {
+        op.originalPos = remapParagraphIndex(safeSource, safeTarget, op.originalPos);
+      }
+      if (Number.isFinite(op.correctedPos)) {
+        op.correctedPos = remapParagraphIndex(safeSource, safeTarget, op.correctedPos);
+      }
+      if (Number.isFinite(op.pos)) {
+        op.pos = remapParagraphIndex(safeSource, safeTarget, op.pos);
+      }
+    }
+
+    const anchor = suggestion.meta.anchor;
+    if (anchor && typeof anchor === "object") {
+      remapAnchorCharFields(anchor, safeSource, safeTarget, documentOffset);
+      const relatedAnchors = [
+        anchor.highlightAnchorTarget,
+        anchor.sourceTokenBefore,
+        anchor.sourceTokenAt,
+        anchor.sourceTokenAfter,
+        anchor.targetTokenBefore,
+        anchor.targetTokenAt,
+        anchor.targetTokenAfter,
+      ];
+      for (const related of relatedAnchors) {
+        remapAnchorCharFields(related, safeSource, safeTarget, documentOffset);
+      }
+
+      if (Number.isFinite(anchor.targetCharStart)) {
+        anchor.targetCharStart = remapParagraphIndex(safeSource, safeTarget, anchor.targetCharStart);
+        anchor.targetDocumentCharStart = documentOffset + anchor.targetCharStart;
+      }
+      if (Number.isFinite(anchor.targetCharEnd)) {
+        anchor.targetCharEnd = remapParagraphIndex(safeSource, safeTarget, anchor.targetCharEnd, {
+          allowEnd: true,
+        });
+        if (Number.isFinite(anchor.targetCharStart) && anchor.targetCharEnd <= anchor.targetCharStart) {
+          anchor.targetCharEnd = Math.min(safeTarget.length, anchor.targetCharStart + 1);
+        }
+        anchor.targetDocumentCharEnd = documentOffset + anchor.targetCharEnd;
+      }
+
+      if (Number.isFinite(anchor.highlightCharStart)) {
+        anchor.highlightCharStart = remapParagraphIndex(
+          safeSource,
+          safeTarget,
+          anchor.highlightCharStart
+        );
+      }
+      if (Number.isFinite(anchor.highlightCharEnd)) {
+        anchor.highlightCharEnd = remapParagraphIndex(safeSource, safeTarget, anchor.highlightCharEnd, {
+          allowEnd: true,
+        });
+      }
+      if (
+        Number.isFinite(anchor.highlightCharStart) &&
+        Number.isFinite(anchor.highlightCharEnd) &&
+        anchor.highlightCharEnd <= anchor.highlightCharStart
+      ) {
+        anchor.highlightCharEnd = Math.min(safeTarget.length, anchor.highlightCharStart + 1);
+      }
+      if (typeof anchor.highlightText === "string") {
+        const hs = Number.isFinite(anchor.highlightCharStart) ? anchor.highlightCharStart : -1;
+        const he = Number.isFinite(anchor.highlightCharEnd) ? anchor.highlightCharEnd : -1;
+        if (hs >= 0 && he > hs) {
+          anchor.highlightText = safeTarget.slice(hs, he) || anchor.highlightText;
+        } else if (hs >= 0) {
+          anchor.highlightText = safeTarget.slice(hs, Math.min(safeTarget.length, hs + 1)) || anchor.highlightText;
+        }
+      }
+    }
+    suggestion.meta.originalText = safeTarget;
+  }
+
+  suggestion.sourceParagraphHash = buildDesktopParagraphHash(safeTarget);
+  return true;
+}
+
+function refreshPendingSuggestionsForEditedParagraphBaseline({
+  paragraphIndex,
+  sourceText,
+  targetText,
+  documentOffset = 0,
+}) {
+  if (!Number.isFinite(paragraphIndex) || paragraphIndex < 0) {
+    return { paragraphIndex: -1, updatedSuggestions: 0, changedBaseline: false };
+  }
+  const safeTarget = typeof targetText === "string" ? targetText : "";
+  if (!safeTarget) {
+    return { paragraphIndex, updatedSuggestions: 0, changedBaseline: false };
+  }
+  const safeSource = typeof sourceText === "string" ? sourceText : safeTarget;
+  let updatedSuggestions = 0;
+  for (const suggestion of pendingSuggestionsOnline) {
+    if (!suggestion || suggestion.paragraphIndex !== paragraphIndex) continue;
+    if (
+      remapPendingSuggestionToParagraphBaseline(
+        suggestion,
+        safeSource,
+        safeTarget,
+        Number.isFinite(documentOffset) ? documentOffset : 0
+      )
+    ) {
+      updatedSuggestions++;
+    }
+  }
+
+  const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+  let changedBaseline = false;
+  if (entry && typeof entry === "object") {
+    entry.originalText = safeTarget;
+    if (Number.isFinite(documentOffset)) {
+      entry.documentOffset = documentOffset;
+    }
+    changedBaseline = true;
+  }
+
+  if (updatedSuggestions > 1) {
+    sortPendingSuggestionsOnlineInPlace();
+  }
+
+  return { paragraphIndex, updatedSuggestions, changedBaseline };
+}
+
 function resolveOnlineUnstableBackoffThreshold() {
   let override = null;
   if (typeof window !== "undefined") {
@@ -739,7 +922,39 @@ function getSuggestionOpPositions(suggestion) {
   return { originalPos, correctedPos };
 }
 
-const RELOCATION_PAIR_POSITION_TOLERANCE = 2;
+const RELOCATION_PAIR_POSITION_TOLERANCE = 4;
+
+function normalizeRelocationSignaturePart(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
+function pickRelocationAnchorId(anchor) {
+  if (!anchor || typeof anchor !== "object") return "";
+  const candidates = [
+    anchor.tokenId,
+    anchor.tokenText,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeRelocationSignaturePart(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function buildRelocationAnchorSignature(suggestion) {
+  const anchor = suggestion?.meta?.anchor;
+  if (!anchor || typeof anchor !== "object") return "";
+  const before =
+    pickRelocationAnchorId(anchor.sourceTokenBefore) || pickRelocationAnchorId(anchor.targetTokenBefore);
+  const at = pickRelocationAnchorId(anchor.sourceTokenAt) || pickRelocationAnchorId(anchor.targetTokenAt);
+  const after =
+    pickRelocationAnchorId(anchor.sourceTokenAfter) || pickRelocationAnchorId(anchor.targetTokenAfter);
+  const highlight = pickRelocationAnchorId(anchor.highlightAnchorTarget);
+  const parts = [before, at, after, highlight].filter(Boolean);
+  if (!parts.length) return "";
+  return parts.join("|");
+}
 
 function isSameCommaRelocationPair(first, second) {
   if (!first || !second) return false;
@@ -755,6 +970,11 @@ function isSameCommaRelocationPair(first, second) {
   const secondDelta = secondPos.correctedPos - secondPos.originalPos;
   if (firstDelta === 0 || secondDelta === 0) return false;
   if (Math.sign(firstDelta) !== Math.sign(secondDelta)) return false;
+  const firstSignature = buildRelocationAnchorSignature(first);
+  const secondSignature = buildRelocationAnchorSignature(second);
+  if (firstSignature && secondSignature && firstSignature === secondSignature) {
+    return true;
+  }
   return (
     Math.abs(firstPos.originalPos - secondPos.originalPos) <= RELOCATION_PAIR_POSITION_TOLERANCE &&
     Math.abs(firstPos.correctedPos - secondPos.correctedPos) <= RELOCATION_PAIR_POSITION_TOLERANCE
@@ -4336,6 +4556,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   const meta = suggestion?.meta?.anchor;
   if (!meta) return { op: null, skipReason: "insert_missing_anchor_meta" };
   let skipReason = "insert_unresolved";
+  const opMeta = suggestion?.meta?.op || {};
   const useDirectHintMapping =
     Boolean(suggestion?.meta?.lemmaAnchorAuthoritative) &&
     typeof sourceText === "string" &&
@@ -4343,6 +4564,36 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
 
   const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
   const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
+
+  const mapSourceHintToSnapshot = (hint) => {
+    if (!Number.isFinite(hint) || hint < 0) return -1;
+    const mapped = useDirectHintMapping ? hint : mapIndexAcrossCanonical(sourceText, snapshotText, hint);
+    if (!Number.isFinite(mapped) || mapped < 0 || mapped > snapshotText.length) return -1;
+    return mapped;
+  };
+
+  const resolvePreferredInsertHint = () => {
+    const candidates = [
+      opMeta.correctedPos,
+      suggestion?.kind === "insert" ? opMeta.pos : null,
+      suggestion?.charHint?.start,
+      meta?.targetCharStart,
+      meta?.charStart,
+      meta?.sourceTokenAt?.charStart,
+      meta?.sourceTokenBefore?.charStart,
+      meta?.sourceTokenAfter?.charStart,
+      opMeta.originalPos,
+    ]
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .filter((value, idx, arr) => arr.indexOf(value) === idx);
+    for (const candidate of candidates) {
+      const mapped = mapSourceHintToSnapshot(candidate);
+      if (mapped >= 0) return mapped;
+    }
+    return -1;
+  };
+  const preferredInsertHint = resolvePreferredInsertHint();
+  const maxHintDrift = suggestion?.meta?.lemmaAnchorAuthoritative ? 20 : 12;
 
   const findStartForAnchor = (anchor, preferEnd = false, reasonOnMissing = "insert_anchor_token_unresolved") => {
     if (!anchor?.tokenText) return { start: -1, token: null };
@@ -4421,8 +4672,74 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
     return false;
   };
+  const isWordCharForInsertBoundary = (char) => /[\p{L}\p{N}]/u.test(char || "");
+  const isInsideWordBoundary = (pos) => {
+    if (!Number.isFinite(pos) || pos <= 0 || pos >= snapshotText.length) return false;
+    return (
+      isWordCharForInsertBoundary(snapshotText[pos - 1]) &&
+      isWordCharForInsertBoundary(snapshotText[pos])
+    );
+  };
+  const resolveSafeBoundaryNearWord = (pos, preferredPos = -1) => {
+    if (!isInsideWordBoundary(pos)) return pos;
+    let wordStart = pos;
+    while (wordStart > 0 && isWordCharForInsertBoundary(snapshotText[wordStart - 1])) wordStart--;
+    let wordEnd = pos;
+    while (wordEnd < snapshotText.length && isWordCharForInsertBoundary(snapshotText[wordEnd])) wordEnd++;
+
+    const candidateSet = new Set([wordStart, wordEnd]);
+    if (wordStart > 0 && /\s/.test(snapshotText[wordStart - 1])) {
+      let wsStart = wordStart;
+      while (wsStart > 0 && /\s/.test(snapshotText[wsStart - 1])) wsStart--;
+      candidateSet.add(wsStart);
+    }
+    if (wordEnd < snapshotText.length && /\s/.test(snapshotText[wordEnd])) {
+      let wsEnd = wordEnd;
+      while (wsEnd < snapshotText.length && /\s/.test(snapshotText[wsEnd])) wsEnd++;
+      candidateSet.add(wsEnd);
+    }
+    if (Number.isFinite(preferredPos) && preferredPos >= 0 && preferredPos <= snapshotText.length) {
+      candidateSet.add(preferredPos);
+    }
+
+    const target = Number.isFinite(preferredPos) && preferredPos >= 0 ? preferredPos : pos;
+    let bestPos = pos;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const candidateRaw of candidateSet) {
+      const candidate = normalizeInsertPosForQuoteBoundary(
+        Math.max(0, Math.min(snapshotText.length, Math.floor(candidateRaw)))
+      );
+      const wordPenalty = isInsideWordBoundary(candidate) ? 10_000 : 0;
+      const distanceScore = Math.abs(candidate - target);
+      const score = wordPenalty + distanceScore;
+      if (score < bestScore) {
+        bestScore = score;
+        bestPos = candidate;
+      }
+    }
+    return bestPos;
+  };
   const buildInsertOp = (rawPos, snippet) => {
-    const pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)));
+    let pos = normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, rawPos)));
+    const hintedPos =
+      preferredInsertHint >= 0
+        ? normalizeInsertPosForQuoteBoundary(Math.max(0, Math.min(snapshotText.length, preferredInsertHint)))
+        : -1;
+    if (hintedPos >= 0) {
+      if (
+        suggestion?.meta?.lemmaAnchorAuthoritative ||
+        Math.abs(pos - hintedPos) > maxHintDrift ||
+        (isInsideWordBoundary(pos) && !isInsideWordBoundary(hintedPos))
+      ) {
+        pos = hintedPos;
+      }
+    }
+    if (isInsideWordBoundary(pos)) {
+      pos = resolveSafeBoundaryNearWord(pos, hintedPos);
+    }
+    if (isInsideWordBoundary(pos)) {
+      return { kind: "noop" };
+    }
     const left = snapshotText.slice(Math.max(0, pos - 3), pos);
     const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
     if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
@@ -4712,6 +5029,82 @@ function resolveDeleteOperationFromSnapshot(snapshotText, sourceText, suggestion
   }, skipReason: null };
 }
 
+function resolveSuggestionMappedCharHint(snapshotText, sourceText, suggestion) {
+  if (typeof snapshotText !== "string") return -1;
+  const meta = suggestion?.meta?.anchor;
+  const op = suggestion?.meta?.op;
+  const sourceAnchor =
+    meta?.sourceTokenAt ?? meta?.sourceTokenBefore ?? meta?.sourceTokenAfter ?? meta?.highlightAnchorTarget;
+  const opHintPrimary =
+    suggestion?.kind === "insert"
+      ? Number.isFinite(op?.correctedPos)
+        ? op.correctedPos
+        : Number.isFinite(op?.pos)
+          ? op.pos
+          : Number.isFinite(op?.originalPos)
+            ? op.originalPos
+            : -1
+      : Number.isFinite(op?.originalPos)
+        ? op.originalPos
+        : Number.isFinite(op?.pos)
+          ? op.pos
+          : Number.isFinite(op?.correctedPos)
+            ? op.correctedPos
+            : -1;
+  const candidateHints = [
+    suggestion?.charHint?.start,
+    meta?.charStart,
+    sourceAnchor?.charStart,
+    opHintPrimary,
+    op?.originalPos,
+    op?.correctedPos,
+    op?.pos,
+  ]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .filter((value, index, arr) => arr.indexOf(value) === index);
+  if (!candidateHints.length) return -1;
+  const useDirectHintMapping =
+    Boolean(suggestion?.meta?.lemmaAnchorAuthoritative) &&
+    typeof sourceText === "string" &&
+    sourceText === snapshotText;
+  for (const sourceHint of candidateHints) {
+    const mapped = useDirectHintMapping
+      ? sourceHint
+      : mapIndexAcrossCanonical(sourceText, snapshotText, sourceHint);
+    if (Number.isFinite(mapped) && mapped >= 0 && mapped <= snapshotText.length) {
+      return mapped;
+    }
+  }
+  return -1;
+}
+
+function hasCommaNearMappedHint(snapshotText, mappedHint, radius = 4) {
+  if (
+    typeof snapshotText !== "string" ||
+    !snapshotText.length ||
+    !Number.isFinite(mappedHint) ||
+    mappedHint < 0 ||
+    mappedHint > snapshotText.length
+  ) {
+    return false;
+  }
+  const safeRadius = Number.isFinite(radius) ? Math.max(0, Math.floor(radius)) : 4;
+  for (let delta = 0; delta <= safeRadius; delta++) {
+    const left = mappedHint - delta;
+    const right = mappedHint + delta;
+    if (left >= 0 && snapshotText[left] === ",") return true;
+    if (right < snapshotText.length && snapshotText[right] === ",") return true;
+  }
+  const isBoundary = (char) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D]/u.test(char || "");
+  let left = mappedHint - 1;
+  while (left >= 0 && isBoundary(snapshotText[left])) left--;
+  if (left >= 0 && snapshotText[left] === ",") return true;
+  let right = mappedHint;
+  while (right < snapshotText.length && isBoundary(snapshotText[right])) right++;
+  if (right < snapshotText.length && snapshotText[right] === ",") return true;
+  return false;
+}
+
 function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions) {
   const rawPlan = [];
   const skipped = [];
@@ -4922,10 +5315,26 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
 function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion) {
   const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [suggestion]);
   if (verifyResult.noop.length > 0) return true;
+  const mappedHint = resolveSuggestionMappedCharHint(liveText, sourceText, suggestion);
+  const hintRadius = suggestion?.meta?.lemmaAnchorAuthoritative ? 5 : 4;
   if (suggestion?.kind === "delete") {
     const resolved = resolveDeleteOperationFromSnapshot(liveText, sourceText, suggestion);
     if (!resolved?.op && resolved?.skipReason === "delete_comma_not_found_near_hint") {
-      return true;
+      if (!Number.isFinite(mappedHint) || mappedHint < 0) return false;
+      return !hasCommaNearMappedHint(liveText, mappedHint, hintRadius);
+    }
+    return false;
+  }
+  if (suggestion?.kind === "insert") {
+    const resolved = resolveInsertOperationFromSnapshot(liveText, sourceText, suggestion);
+    const allowFallbackForReason =
+      resolved?.skipReason === "insert_before_anchor_lookup_failed" ||
+      resolved?.skipReason === "insert_after_anchor_lookup_failed" ||
+      resolved?.skipReason === "insert_before_after_order_invalid" ||
+      resolved?.skipReason === "insert_gap_contains_nonspace_content";
+    if (!resolved?.op && allowFallbackForReason) {
+      if (!Number.isFinite(mappedHint) || mappedHint < 0) return false;
+      return hasCommaNearMappedHint(liveText, mappedHint, hintRadius);
     }
   }
   return false;
@@ -5016,6 +5425,9 @@ export async function applySuggestionOnlineById(suggestionId = null) {
     return finalize("deferred", "action-in-progress");
   }
   let suggestionResolvedAsNoop = false;
+  let paragraphBaselineSourceText = "";
+  let paragraphLiveTextAfterApply = "";
+  let paragraphBaselineDocumentOffset = 0;
   try {
     await Word.run(async (context) => {
       const paragraphIndex = targetSuggestion?.paragraphIndex;
@@ -5042,6 +5454,10 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
       const snapshotText = paragraph.text || "";
       const sourceText = entry?.originalText ?? snapshotText;
+      paragraphBaselineSourceText = sourceText;
+      paragraphBaselineDocumentOffset = Number.isFinite(entry?.documentOffset)
+        ? entry.documentOffset
+        : 0;
       const { plan, skipped, noop } = buildParagraphOperationsPlan(
         snapshotText,
         sourceText,
@@ -5127,6 +5543,10 @@ export async function applySuggestionOnlineById(suggestionId = null) {
           });
           summary.failedSuggestions += selectedSuggestions.length;
         }
+
+        paragraph.load("text");
+        await context.sync();
+        paragraphLiveTextAfterApply = paragraph.text || snapshotText;
       }
     });
 
@@ -5144,6 +5564,18 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       for (const paragraphIndex of removedParagraphIndexes) {
         clearOnlineParagraphRenderState(paragraphIndex);
         unstableOnlineParagraphBackoff.delete(paragraphIndex);
+      }
+      if (summary.appliedSuggestions > 0) {
+        const paragraphIndex = targetSuggestion?.paragraphIndex;
+        const reanchorSummary = refreshPendingSuggestionsForEditedParagraphBaseline({
+          paragraphIndex,
+          sourceText: paragraphBaselineSourceText,
+          targetText: paragraphLiveTextAfterApply,
+          documentOffset: paragraphBaselineDocumentOffset,
+        });
+        if (reanchorSummary.updatedSuggestions > 0) {
+          log("applySuggestionOnlineById: refreshed paragraph baselines", reanchorSummary);
+        }
       }
       persistPendingSuggestionsOnline();
       if (summary.appliedSuggestions > 0) {
@@ -5254,6 +5686,9 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
   if (!actionToken) {
     return finalize("deferred", "action-in-progress");
   }
+  let paragraphBaselineSourceText = "";
+  let paragraphLiveTextAfterReject = "";
+  let paragraphBaselineDocumentOffset = 0;
   try {
     await Word.run(async (context) => {
       const paragraphIndex = targetSuggestion?.paragraphIndex;
@@ -5262,6 +5697,10 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
       const paragraph = hasParagraphIndex ? paras.items[paragraphIndex] || null : null;
       const entry = hasParagraphIndex ? anchorProvider.getAnchorsForParagraph(paragraphIndex) : null;
       const sourceText = entry?.originalText ?? paragraph?.text ?? "";
+      paragraphBaselineSourceText = sourceText;
+      paragraphBaselineDocumentOffset = Number.isFinite(entry?.documentOffset)
+        ? entry.documentOffset
+        : 0;
       const clearResult = await wordOnlineAdapter.clearHighlights(
         context,
         selectedSuggestions.map((suggestion) => ({ suggestion, paragraph })),
@@ -5300,7 +5739,13 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
         }
       }
 
+      if (paragraph && summary.revertedAppliedSuggestions > 0) {
+        paragraph.load("text");
+      }
       await context.sync();
+      if (paragraph && summary.revertedAppliedSuggestions > 0) {
+        paragraphLiveTextAfterReject = paragraph.text || sourceText;
+      }
     });
 
     const removedSuggestions = removePendingSuggestionsByReference(selectedSuggestions, {
@@ -5318,6 +5763,18 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
       const paragraphIndex = targetSuggestion?.paragraphIndex;
       if (Number.isFinite(paragraphIndex) && paragraphIndex >= 0) {
         clearOnlineParagraphRenderState(paragraphIndex);
+      }
+    }
+    if (summary.revertedAppliedSuggestions > 0) {
+      const paragraphIndex = targetSuggestion?.paragraphIndex;
+      const reanchorSummary = refreshPendingSuggestionsForEditedParagraphBaseline({
+        paragraphIndex,
+        sourceText: paragraphBaselineSourceText,
+        targetText: paragraphLiveTextAfterReject,
+        documentOffset: paragraphBaselineDocumentOffset,
+      });
+      if (reanchorSummary.updatedSuggestions > 0) {
+        log("rejectSuggestionOnlineById: refreshed paragraph baselines", reanchorSummary);
       }
     }
     persistPendingSuggestionsOnline();
