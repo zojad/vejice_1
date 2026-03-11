@@ -6915,10 +6915,7 @@ async function checkDocumentTextDesktop(checkToken) {
           const { plan, skipped, noop } = buildParagraphOperationsPlan(
             snapshotText,
             sourceForPlan,
-            job.suggestions,
-            {
-              resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
-            }
+            job.suggestions
           );
           logDesktopVerbose("Desktop apply plan", {
             paragraphIndex: job.paragraphIndex,
@@ -6946,22 +6943,6 @@ async function checkDocumentTextDesktop(checkToken) {
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
             try {
-              if (isDesktopDirectInsertOp(op)) {
-                const directStatus = await applyDesktopAuthoritativeInsertOp(
-                  context,
-                  paragraph,
-                  job.paragraphIndex,
-                  sourceForPlan,
-                  op
-                );
-                if (directStatus === "noop") {
-                  continue;
-                }
-                if (directStatus === "applied") {
-                  countAppliedSuggestions(op);
-                  continue;
-                }
-              }
               if (Array.isArray(op?.suggestions) && op.suggestions.length) {
                 deferredSuggestions.push(...op.suggestions);
               }
@@ -6987,10 +6968,7 @@ async function checkDocumentTextDesktop(checkToken) {
             } = buildParagraphOperationsPlan(
               currentSnapshotText,
               sourceForPlan,
-              deferredSuggestions,
-              {
-                resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
-              }
+              deferredSuggestions
             );
             logDesktopVerbose("Desktop deferred apply plan", {
               paragraphIndex: job.paragraphIndex,
