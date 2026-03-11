@@ -35,6 +35,8 @@ const TRAILING_COMMA_REGEX = /[,\s]+$/;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
+const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
+const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -92,6 +94,28 @@ function isDeepDebugEnabled() {
     }
   } catch (_err) {
     // Ignore storage access failures.
+  }
+  return false;
+}
+
+function parseBooleanFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (BOOLEAN_TRUE.has(normalized)) return true;
+  if (BOOLEAN_FALSE.has(normalized)) return false;
+  return undefined;
+}
+
+function isDeterministicMappingV2Enabled() {
+  if (typeof window !== "undefined") {
+    const windowOverride = parseBooleanFlag(window.__VEJICE_DETERMINISTIC_MAPPING_V2);
+    if (typeof windowOverride === "boolean") return windowOverride;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_DETERMINISTIC_MAPPING_V2);
+    if (typeof envOverride === "boolean") return envOverride;
   }
   return false;
 }
@@ -801,6 +825,7 @@ export class CommaSuggestionEngine {
           paragraphIndex: s.paragraphIndex,
           charHint: s.charHint,
           op: s?.meta?.op,
+          deterministicConfidence: s?.meta?.deterministicConfidence,
           sourceTokenBefore: s?.meta?.anchor?.sourceTokenBefore?.tokenText,
           sourceTokenAfter: s?.meta?.anchor?.sourceTokenAfter?.tokenText,
           targetTokenBefore: s?.meta?.anchor?.targetTokenBefore?.tokenText,
@@ -911,6 +936,14 @@ function buildSuggestionFromOp({
       op,
       metadata,
     });
+    const deterministicConfidence = computeDeterministicSuggestionConfidence({
+      kind: "delete",
+      op,
+      metadata,
+      confidence,
+      lowAnchorReliability,
+      anchorsEntry,
+    });
     return createSuggestion({
       id: `delete-${paragraphIndex}-${op.pos}`,
       paragraphIndex,
@@ -926,6 +959,7 @@ function buildSuggestionFromOp({
       meta: {
         op,
         confidence,
+        deterministicConfidence,
         lowAnchorReliability: Boolean(lowAnchorReliability),
         lemmaAnchorAuthoritative: Boolean(anchorsEntry?.lemmaOffsetsAuthoritative),
         highlightText: metadata.highlightText,
@@ -945,6 +979,14 @@ function buildSuggestionFromOp({
     op,
     metadata,
   });
+  const deterministicConfidence = computeDeterministicSuggestionConfidence({
+    kind: "insert",
+    op,
+    metadata,
+    confidence,
+    lowAnchorReliability,
+    anchorsEntry,
+  });
   return createSuggestion({
     id: `insert-${paragraphIndex}-${op.pos}`,
     paragraphIndex,
@@ -960,6 +1002,7 @@ function buildSuggestionFromOp({
     meta: {
       op,
       confidence,
+      deterministicConfidence,
       lowAnchorReliability: Boolean(lowAnchorReliability),
       lemmaAnchorAuthoritative: Boolean(anchorsEntry?.lemmaOffsetsAuthoritative),
       highlightText: metadata.highlightText,
@@ -1141,6 +1184,85 @@ function computeSuggestionConfidence({ kind, op, metadata }) {
     score: Number(clamped.toFixed(3)),
     level,
     reasons,
+  };
+}
+
+function computeDeterministicSuggestionConfidence({
+  kind,
+  op,
+  metadata,
+  confidence,
+  lowAnchorReliability = false,
+  anchorsEntry,
+}) {
+  let score = 0;
+  const reasons = [];
+
+  if (op?.fromApiCommaOps) {
+    score += 3;
+    reasons.push("api_comma_ops");
+  } else if (op?.fromCorrections) {
+    score += 1;
+    reasons.push("corrections_derived");
+  } else {
+    score -= 2;
+    reasons.push("non_api_fallback");
+  }
+
+  if (op?.viaDiffFallback) {
+    score -= 3;
+    reasons.push("diff_fallback");
+  }
+
+  if (lowAnchorReliability) {
+    score -= 2;
+    reasons.push("low_anchor_reliability");
+  }
+
+  const hasTokenBefore = Boolean(metadata?.sourceTokenBefore || metadata?.targetTokenBefore);
+  const hasTokenAfter = Boolean(metadata?.sourceTokenAfter || metadata?.targetTokenAfter);
+  if (hasTokenBefore && hasTokenAfter) {
+    score += 2;
+    reasons.push("token_context_both_sides");
+  } else if (hasTokenBefore || hasTokenAfter) {
+    score += 1;
+    reasons.push("token_context_one_side");
+  } else {
+    score -= 2;
+    reasons.push("token_context_missing");
+  }
+
+  const hasPrimaryCharHint =
+    kind === "insert"
+      ? Number.isFinite(metadata?.targetCharStart) && metadata.targetCharStart >= 0
+      : Number.isFinite(metadata?.charStart) && metadata.charStart >= 0;
+  if (hasPrimaryCharHint) {
+    score += 1;
+    reasons.push("char_hint_present");
+  } else {
+    score -= 2;
+    reasons.push("char_hint_missing");
+  }
+
+  if (anchorsEntry?.lemmaOffsetsAuthoritative) {
+    score += 1;
+    reasons.push("lemma_offsets_authoritative");
+  }
+
+  if (confidence?.level === "high") {
+    score += 1;
+    reasons.push("base_confidence_high");
+  } else if (confidence?.level === "low") {
+    score -= 1;
+    reasons.push("base_confidence_low");
+  }
+
+  const level = score >= 2 ? "high" : "low";
+  return {
+    level,
+    score,
+    reasons,
+    deterministicModeActive: isDeterministicMappingV2Enabled(),
   };
 }
 

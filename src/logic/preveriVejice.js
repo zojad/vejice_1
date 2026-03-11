@@ -129,6 +129,18 @@ function isLocalSpeedProfileEnabled() {
   return isLocalhostRuntime();
 }
 
+function isDeterministicMappingV2Enabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_DETERMINISTIC_MAPPING_V2);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_DETERMINISTIC_MAPPING_V2);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return false;
+}
+
 function isDesktopVerboseLoggingEnabled() {
   if (typeof window !== "undefined") {
     const override =
@@ -2793,12 +2805,21 @@ function pruneSuggestionsForRenderByPlan(snapshotText, sourceText, suggestions) 
       planCount: 0,
       noopCount: 0,
       skippedCount: 0,
+      skippedByReason: {},
+      deterministicSkipped: 0,
       mergedGroupCount: 0,
       dropped: 0,
     };
   }
 
   const { plan, skipped, noop } = buildParagraphOperationsPlan(snapshotText, sourceText, input);
+  const skippedByReason = summarizeSkippedReasons(skipped);
+  const deterministicSkipped = Object.entries(skippedByReason).reduce((total, [reason, count]) => {
+    if (typeof reason === "string" && reason.startsWith("deterministic_")) {
+      return total + (Number.isFinite(count) ? count : 0);
+    }
+    return total;
+  }, 0);
   const output = [];
   const seenRenderKeys = new Set();
   let mergedGroupCount = 0;
@@ -2834,6 +2855,8 @@ function pruneSuggestionsForRenderByPlan(snapshotText, sourceText, suggestions) 
     planCount: plan.length,
     noopCount: noop.length,
     skippedCount: skipped.length,
+    skippedByReason,
+    deterministicSkipped,
     mergedGroupCount,
     dropped: Math.max(0, input.length - output.length),
   };
@@ -2855,6 +2878,8 @@ function prepareSuggestionsForRender({
       planCount: 0,
       noopCount: 0,
       skippedCount: 0,
+      skippedByReason: {},
+      deterministicSkipped: 0,
       mergedGroupCount: 0,
     };
   }
@@ -2867,6 +2892,8 @@ function prepareSuggestionsForRender({
       planCount: 0,
       noopCount: 0,
       skippedCount: 0,
+      skippedByReason: {},
+      deterministicSkipped: 0,
       mergedGroupCount: 0,
     };
   }
@@ -2883,6 +2910,8 @@ function prepareSuggestionsForRender({
     planCount: planPruned.planCount,
     noopCount: planPruned.noopCount,
     skippedCount: planPruned.skippedCount,
+    skippedByReason: planPruned.skippedByReason,
+    deterministicSkipped: planPruned.deterministicSkipped,
     mergedGroupCount: planPruned.mergedGroupCount,
   };
 }
@@ -5446,7 +5475,61 @@ function hasCommaNearMappedHint(snapshotText, mappedHint, radius = 4) {
   return false;
 }
 
+function resolveDeterministicConfidenceLevel(suggestion) {
+  const explicit = suggestion?.meta?.deterministicConfidence?.level;
+  if (explicit === "high" || explicit === "low") return explicit;
+  if (suggestion?.meta?.lowAnchorReliability) return "low";
+  const base = suggestion?.meta?.confidence?.level;
+  return base === "high" ? "high" : "low";
+}
+
+function isDeterministicOpStable(snapshotText, sourceText, suggestion, op) {
+  if (!op || typeof op !== "object") return false;
+  const mappedHint = resolveSuggestionMappedCharHint(snapshotText, sourceText, suggestion);
+  if (!Number.isFinite(mappedHint) || mappedHint < 0 || mappedHint > snapshotText.length) {
+    return false;
+  }
+  const driftTolerance = suggestion?.meta?.lemmaAnchorAuthoritative ? 8 : 5;
+  const opStart =
+    Number.isFinite(op?.start) && op.start >= 0
+      ? Math.floor(op.start)
+      : Number.isFinite(op?.pos) && op.pos >= 0
+        ? Math.floor(op.pos)
+        : -1;
+  if (opStart < 0) return false;
+  if (op.kind === "insert") {
+    return Math.abs(opStart - mappedHint) <= driftTolerance;
+  }
+  if (op.kind === "delete") {
+    if (Math.abs(opStart - mappedHint) <= driftTolerance) return true;
+    return hasCommaNearMappedHint(snapshotText, mappedHint, 1);
+  }
+  return true;
+}
+
 function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, options = {}) {
+  const deterministicMode =
+    typeof options?.deterministicMode === "boolean"
+      ? options.deterministicMode
+      : isDeterministicMappingV2Enabled();
+  const setDeterministicSkipReason = (suggestion, reason) => {
+    if (!deterministicMode) return;
+    if (!suggestion || typeof suggestion !== "object") return;
+    const meta =
+      suggestion.meta && typeof suggestion.meta === "object"
+        ? suggestion.meta
+        : (suggestion.meta = {});
+    meta.deterministicSkipReason = reason;
+  };
+  const clearDeterministicSkipReason = (suggestion) => {
+    if (!deterministicMode) return;
+    if (!suggestion || typeof suggestion !== "object") return;
+    const meta = suggestion.meta;
+    if (!meta || typeof meta !== "object") return;
+    if (Object.prototype.hasOwnProperty.call(meta, "deterministicSkipReason")) {
+      delete meta.deterministicSkipReason;
+    }
+  };
   const resolveInsertOperation = options?.resolveInsertOperation || resolveInsertOperationFromSnapshot;
   const resolveDeleteOperation = options?.resolveDeleteOperation || resolveDeleteOperationFromSnapshot;
   const rawPlan = [];
@@ -5454,6 +5537,17 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
   const noop = [];
 
   for (const suggestion of suggestions) {
+    if (deterministicMode) {
+      const deterministicConfidence = resolveDeterministicConfidenceLevel(suggestion);
+      if (deterministicConfidence !== "high") {
+        setDeterministicSkipReason(suggestion, "deterministic_low_confidence");
+        skipped.push({
+          suggestion,
+          reason: "deterministic_low_confidence",
+        });
+        continue;
+      }
+    }
     let opResult = { op: null, skipReason: "planner_unknown" };
     if (suggestion?.kind === "delete") {
       opResult = resolveDeleteOperation(snapshotText, sourceText, suggestion);
@@ -5463,14 +5557,26 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
     const op = opResult?.op ?? null;
 
     if (!op) {
+      if (deterministicMode) {
+        setDeterministicSkipReason(suggestion, opResult?.skipReason || "planner_unresolved");
+      }
       skipped.push({
         suggestion,
         reason: opResult?.skipReason || "planner_unresolved",
       });
       continue;
     }
+    clearDeterministicSkipReason(suggestion);
     if (op.kind === "noop") {
       noop.push(suggestion);
+      continue;
+    }
+    if (deterministicMode && !isDeterministicOpStable(snapshotText, sourceText, suggestion, op)) {
+      setDeterministicSkipReason(suggestion, "deterministic_mapping_drift");
+      skipped.push({
+        suggestion,
+        reason: "deterministic_mapping_drift",
+      });
       continue;
     }
     rawPlan.push({
@@ -5631,6 +5737,16 @@ function summarizeSkippedReasons(skipped = []) {
     summary[reason] = (summary[reason] || 0) + 1;
   }
   return summary;
+}
+
+function countDeterministicSkippedReasons(skipped = []) {
+  return skipped.reduce((total, item) => {
+    const reason = item?.reason;
+    if (typeof reason === "string" && reason.startsWith("deterministic_")) {
+      return total + 1;
+    }
+    return total;
+  }, 0);
 }
 
 function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
@@ -6622,6 +6738,7 @@ async function checkDocumentTextDesktop(checkToken) {
   let cacheMisses = 0;
   let applyRangeMisses = 0;
   let applyOpFailures = 0;
+  let deterministicPlannerSkips = 0;
   const paragraphCacheDisabled = isParagraphCacheDisabled();
   const desktopAnalyzeConcurrency = resolveDesktopAnalyzeConcurrency();
   const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
@@ -6898,6 +7015,7 @@ async function checkDocumentTextDesktop(checkToken) {
           return;
         }
         const paras = await wordDesktopAdapter.getParagraphs(context);
+        const deterministicMappingV2 = isDeterministicMappingV2Enabled();
         for (const job of applyJobs) {
           const paragraph = paras.items[job.paragraphIndex];
           if (!paragraph) {
@@ -6912,10 +7030,17 @@ async function checkDocumentTextDesktop(checkToken) {
           const anchorsEntry = anchorProvider.getAnchorsForParagraph(job.paragraphIndex);
           const snapshotText = paragraph.text || "";
           const sourceForPlan = anchorsEntry?.originalText ?? job.sourceText ?? snapshotText;
+          const planOptions = deterministicMappingV2
+            ? { deterministicMode: true }
+            : {
+                deterministicMode: false,
+                resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
+              };
           const { plan, skipped, noop } = buildParagraphOperationsPlan(
             snapshotText,
             sourceForPlan,
-            job.suggestions
+            job.suggestions,
+            planOptions
           );
           logDesktopVerbose("Desktop apply plan", {
             paragraphIndex: job.paragraphIndex,
@@ -6925,6 +7050,7 @@ async function checkDocumentTextDesktop(checkToken) {
             noop: noop.length,
             skippedByReason: summarizeSkippedReasons(skipped),
           });
+          deterministicPlannerSkips += countDeterministicSkippedReasons(skipped);
 
           let appliedInParagraph = 0;
           const countAppliedSuggestions = (op) => {
@@ -6943,6 +7069,22 @@ async function checkDocumentTextDesktop(checkToken) {
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
             try {
+              if (!deterministicMappingV2 && isDesktopDirectInsertOp(op)) {
+                const directStatus = await applyDesktopAuthoritativeInsertOp(
+                  context,
+                  paragraph,
+                  job.paragraphIndex,
+                  sourceForPlan,
+                  op
+                );
+                if (directStatus === "noop") {
+                  continue;
+                }
+                if (directStatus === "applied") {
+                  countAppliedSuggestions(op);
+                  continue;
+                }
+              }
               if (Array.isArray(op?.suggestions) && op.suggestions.length) {
                 deferredSuggestions.push(...op.suggestions);
               }
@@ -6968,7 +7110,8 @@ async function checkDocumentTextDesktop(checkToken) {
             } = buildParagraphOperationsPlan(
               currentSnapshotText,
               sourceForPlan,
-              deferredSuggestions
+              deferredSuggestions,
+              planOptions
             );
             logDesktopVerbose("Desktop deferred apply plan", {
               paragraphIndex: job.paragraphIndex,
@@ -6978,6 +7121,7 @@ async function checkDocumentTextDesktop(checkToken) {
               noop: deferredNoop.length,
               skippedByReason: summarizeSkippedReasons(deferredSkipped),
             });
+            deterministicPlannerSkips += countDeterministicSkippedReasons(deferredSkipped);
             const deferredRanges = await getRangesForPlannedOperations(
               context,
               paragraph,
@@ -7049,6 +7193,8 @@ async function checkDocumentTextDesktop(checkToken) {
       nonCommaSkips,
       "| nonCommaSalvaged:",
       nonCommaSalvaged,
+      "| deterministicPlannerSkips:",
+      deterministicPlannerSkips,
       "| applyRangeMisses:",
       applyRangeMisses,
       "| applyOpFailures:",
@@ -7073,6 +7219,7 @@ async function checkDocumentTextDesktop(checkToken) {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      deterministicPlannerSkips,
       applyRangeMisses,
       applyOpFailures,
       cacheDisabled: paragraphCacheDisabled,
@@ -7099,6 +7246,7 @@ async function checkDocumentTextDesktop(checkToken) {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      deterministicPlannerSkips,
       applyRangeMisses,
       applyOpFailures,
       unchangedHardSkips,
@@ -7122,6 +7270,7 @@ async function checkDocumentTextOnline(checkToken) {
   let unstableBackoffSkips = 0;
   let rerenderSkipped = 0;
   let scopedMarkerClears = 0;
+  let deterministicPlannerSkips = 0;
   let cacheHits = 0;
   let cacheMisses = 0;
   let paragraphTimingCount = 0;
@@ -7472,6 +7621,17 @@ async function checkDocumentTextOnline(checkToken) {
               after: renderReadyCached.suggestions.length,
             });
           }
+          if (renderReadyCached.deterministicSkipped > 0) {
+            deterministicPlannerSkips += renderReadyCached.deterministicSkipped;
+            if (!paragraphCacheDisabled) {
+              onlineParagraphAnalysisCache[idx] = null;
+            }
+            log("Deterministic planner skipped cached suggestions; forcing reanalysis next run", {
+              paragraphIndex: idx,
+              deterministicSkipped: renderReadyCached.deterministicSkipped,
+              skippedByReason: renderReadyCached.skippedByReason,
+            });
+          }
           suggestionsDetected += renderReadyCached.suggestions.length;
           const renderOutcome = await renderSuggestionsForParagraph({
             paragraphIndex: idx,
@@ -7622,6 +7782,17 @@ async function checkDocumentTextOnline(checkToken) {
               after: renderReadyResult.suggestions.length,
             });
           }
+          if (renderReadyResult.deterministicSkipped > 0) {
+            deterministicPlannerSkips += renderReadyResult.deterministicSkipped;
+            if (!paragraphCacheDisabled) {
+              onlineParagraphAnalysisCache[job.paragraphIndex] = null;
+            }
+            log("Deterministic planner skipped fresh suggestions; forcing reanalysis next run", {
+              paragraphIndex: job.paragraphIndex,
+              deterministicSkipped: renderReadyResult.deterministicSkipped,
+              skippedByReason: renderReadyResult.skippedByReason,
+            });
+          }
           suggestionsDetected += renderReadyResult.suggestions.length;
           const renderOutcome = await renderSuggestionsForParagraph({
             paragraphIndex: job.paragraphIndex,
@@ -7718,7 +7889,9 @@ async function checkDocumentTextOnline(checkToken) {
       "| nonCommaSkips:",
       nonCommaSkips,
       "| nonCommaSalvaged:",
-      nonCommaSalvaged
+      nonCommaSalvaged,
+      "| deterministicPlannerSkips:",
+      deterministicPlannerSkips
     );
     if (
       paragraphsProcessed > 0 &&
