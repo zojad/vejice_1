@@ -175,8 +175,13 @@ const runCheck = async () => {
     } else {
       const inserted = Number(summary?.inserted ?? 0);
       const deleted = Number(summary?.deleted ?? 0);
+      const detected = Number(summary?.detected ?? 0);
+      const apiErrors = Number(summary?.apiErrors ?? 0);
+      const nonCommaSkips = Number(summary?.nonCommaSkips ?? 0);
       const totalFixed = inserted + deleted;
-      if (totalFixed > 0) {
+      if (totalFixed === 0 && detected === 0 && apiErrors === 0 && nonCommaSkips === 0) {
+        setStatus("Kon\u010dano. Ni bilo najdenih manjkajo\u010dih ali napa\u010dnih vejic.");
+      } else if (totalFixed > 0) {
         setStatus(`Kon\u010dano. Popravki: ${totalFixed} (dodane: ${inserted}, odstranjene: ${deleted}).`);
       } else {
         setStatus("Kon\u010dano.");
