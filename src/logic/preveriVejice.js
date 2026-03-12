@@ -5771,13 +5771,19 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
   };
 }
 
-function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion) {
-  const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [suggestion]);
+function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion, options = {}) {
+  const verifyResult = buildParagraphOperationsPlan(liveText, sourceText, [suggestion], options);
   if (verifyResult.noop.length > 0) return true;
   const mappedHint = resolveSuggestionMappedCharHint(liveText, sourceText, suggestion);
   const hintRadius = suggestion?.meta?.lemmaAnchorAuthoritative ? 5 : 4;
+  const resolveDeleteOperation = options?.resolveDeleteOperation || resolveDeleteOperationFromSnapshot;
+  const resolveInsertOperation = options?.resolveInsertOperation || resolveInsertOperationFromSnapshot;
   if (suggestion?.kind === "delete") {
-    const resolved = resolveDeleteOperationFromSnapshot(liveText, sourceText, suggestion);
+    const resolved = resolveDeleteOperation(
+      liveText,
+      sourceText,
+      suggestion
+    );
     if (!resolved?.op && resolved?.skipReason === "delete_comma_not_found_near_hint") {
       if (!Number.isFinite(mappedHint) || mappedHint < 0) return false;
       return !hasCommaNearMappedHint(liveText, mappedHint, hintRadius);
@@ -5785,7 +5791,11 @@ function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion) {
     return false;
   }
   if (suggestion?.kind === "insert") {
-    const resolved = resolveInsertOperationFromSnapshot(liveText, sourceText, suggestion);
+    const resolved = resolveInsertOperation(
+      liveText,
+      sourceText,
+      suggestion
+    );
     const allowFallbackForReason =
       resolved?.skipReason === "insert_before_anchor_lookup_failed" ||
       resolved?.skipReason === "insert_after_anchor_lookup_failed" ||
@@ -5913,6 +5923,10 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       const entry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
       const snapshotText = paragraph.text || "";
       const sourceText = entry?.originalText ?? snapshotText;
+      const oneByOnePlanOptions = {
+        deterministicMode: false,
+        resolveInsertOperation: resolveInsertOperationFromSnapshotDesktopLegacy,
+      };
       paragraphBaselineSourceText = sourceText;
       paragraphBaselineDocumentOffset = Number.isFinite(entry?.documentOffset)
         ? entry.documentOffset
@@ -5920,7 +5934,8 @@ export async function applySuggestionOnlineById(suggestionId = null) {
       const { plan, skipped, noop } = buildParagraphOperationsPlan(
         snapshotText,
         sourceText,
-        selectedSuggestions
+        selectedSuggestions,
+        oneByOnePlanOptions
       );
 
       summary.skippedSuggestions += skipped.length + noop.length;
@@ -5974,7 +5989,12 @@ export async function applySuggestionOnlineById(suggestionId = null) {
         await context.sync();
         const liveText = paragraph.text || "";
         return selectedSuggestions.every((suggestion) =>
-          isSuggestionAppliedInLiveText(liveText, sourceText, suggestion)
+          isSuggestionAppliedInLiveText(
+            liveText,
+            sourceText,
+            suggestion,
+            oneByOnePlanOptions
+          )
         );
       };
 
