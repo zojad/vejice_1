@@ -160,11 +160,66 @@ function createServer() {
   return http.createServer(handler);
 }
 
+function probeExistingProxyHealth() {
+  const keyPath = process.env.VEJICE_PROXY_SSL_KEY_PATH;
+  const certPath = process.env.VEJICE_PROXY_SSL_CERT_PATH;
+  const transports = keyPath && certPath ? [https, http] : [http, https];
+  return new Promise((resolve) => {
+    let index = 0;
+    const tryNext = () => {
+      if (index >= transports.length) {
+        resolve(false);
+        return;
+      }
+      const client = transports[index++];
+      const req = client.request(
+        {
+          host: "127.0.0.1",
+          port: PORT,
+          path: "/health",
+          method: "GET",
+          timeout: 1500,
+          rejectUnauthorized: false,
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode === 200);
+        }
+      );
+      req.on("timeout", () => {
+        req.destroy(new Error("health probe timeout"));
+      });
+      req.on("error", () => {
+        tryNext();
+      });
+      req.end();
+    };
+    tryNext();
+  });
+}
+
 const server = createServer();
 server.on("error", (err) => {
   if (err && err.code === "EADDRINUSE") {
-    console.log(`[vejice-api-proxy] Port ${PORT} already in use. Reusing existing proxy.`);
-    process.exit(0);
+    probeExistingProxyHealth()
+      .then((healthy) => {
+        if (healthy) {
+          console.log(`[vejice-api-proxy] Port ${PORT} already in use. Reusing healthy existing proxy.`);
+          process.exit(0);
+          return;
+        }
+        console.error(
+          `[vejice-api-proxy] Port ${PORT} already in use, but the existing proxy does not answer /health. Stop the stale process and restart.`
+        );
+        process.exit(1);
+      })
+      .catch(() => {
+        console.error(
+          `[vejice-api-proxy] Port ${PORT} already in use, but the existing proxy health could not be verified. Stop the stale process and restart.`
+        );
+        process.exit(1);
+      });
+    return;
   }
   console.error("[vejice-api-proxy] Server error:", err.message);
   process.exit(1);
