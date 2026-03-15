@@ -32,6 +32,7 @@ const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
+const TRAILING_BOUNDARY_CLOSER_REGEX = /["'\u201d\u00bb\u2019)\]]/u;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
@@ -2422,13 +2423,34 @@ function stripTrailingCommaAndSpace(text) {
   };
 }
 
+function findTrailingCommaBoundaryIndex(text) {
+  const safe = typeof text === "string" ? text : "";
+  let end = safe.length;
+  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && TRAILING_BOUNDARY_CLOSER_REGEX.test(safe[end - 1])) end--;
+  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  const commaIndex = end - 1;
+  return commaIndex >= 0 && safe[commaIndex] === "," ? commaIndex : -1;
+}
+
+function resolveCommaInsertBoundaryInSegment(text) {
+  const safe = typeof text === "string" ? text : "";
+  let end = safe.length;
+  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && TRAILING_BOUNDARY_CLOSER_REGEX.test(safe[end - 1])) end--;
+  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  return Math.max(0, end);
+}
+
 function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegment = "") {
   const orig = stripTrailingCommaAndSpace(originalSegment);
   const corr = stripTrailingCommaAndSpace(correctedSegment);
-  if (orig.hasComma === corr.hasComma) return null;
+  const origHasBoundaryComma = findTrailingCommaBoundaryIndex(originalSegment) >= 0;
+  const corrHasBoundaryComma = findTrailingCommaBoundaryIndex(correctedSegment) >= 0;
+  if (orig.hasComma === corr.hasComma && origHasBoundaryComma === corrHasBoundaryComma) return null;
   return {
-    removeComma: orig.hasComma && !corr.hasComma,
-    addComma: !orig.hasComma && corr.hasComma,
+    removeComma: (orig.hasComma || origHasBoundaryComma) && !(corr.hasComma || corrHasBoundaryComma),
+    addComma: !(orig.hasComma || origHasBoundaryComma) && (corr.hasComma || corrHasBoundaryComma),
     originalSegment,
     correctedSegment,
     baseText: orig.base || corr.base,
@@ -2540,8 +2562,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
             ? analysis.baseText
             : null;
         const effectiveBase = analysisBase ?? baseText;
-        const insertBase = effectiveBase.replace(TRAILING_COMMA_REGEX, "");
-        const relative = insertBase.length;
+        const relative = resolveCommaInsertBoundaryInSegment(effectiveBase);
         const absolutePos = placementAnchor.charStart + relative;
         const key = `ins-${absolutePos}`;
         if (seen.has(key)) continue;
@@ -2726,6 +2747,85 @@ function buildDeleteSuggestionMetadata(entry, charIndex) {
   };
 }
 
+const EXACT_APPLY_WINDOW_RADIUS_CHARS = 32;
+
+function buildExactApplyWindowMeta(sourceText, correctedText, sourceBoundaryPos, targetBoundaryPos) {
+  const safeSource = typeof sourceText === "string" ? sourceText : "";
+  const safeCorrected = typeof correctedText === "string" ? correctedText : "";
+  if (
+    !safeSource ||
+    !safeCorrected ||
+    !Number.isFinite(sourceBoundaryPos) ||
+    sourceBoundaryPos < 0 ||
+    !Number.isFinite(targetBoundaryPos) ||
+    targetBoundaryPos < 0
+  ) {
+    return null;
+  }
+
+  const safeSourceBoundary = Math.max(0, Math.min(Math.floor(sourceBoundaryPos), safeSource.length));
+  const safeTargetBoundary = Math.max(0, Math.min(Math.floor(targetBoundaryPos), safeCorrected.length));
+  const leftSpan = Math.min(EXACT_APPLY_WINDOW_RADIUS_CHARS, safeSourceBoundary, safeTargetBoundary);
+  const rightSpan = Math.min(
+    EXACT_APPLY_WINDOW_RADIUS_CHARS,
+    safeSource.length - safeSourceBoundary,
+    safeCorrected.length - safeTargetBoundary
+  );
+  const sourceWindowStart = safeSourceBoundary - leftSpan;
+  const sourceWindowEnd = safeSourceBoundary + rightSpan;
+  const correctedWindowStart = safeTargetBoundary - leftSpan;
+  const correctedWindowEnd = safeTargetBoundary + rightSpan;
+  const sourceWindow = safeSource.slice(sourceWindowStart, sourceWindowEnd);
+  const correctedWindow = safeCorrected.slice(correctedWindowStart, correctedWindowEnd);
+  if (!sourceWindow || !correctedWindow || sourceWindow === correctedWindow) {
+    return null;
+  }
+
+  const maxSharedPrefix = Math.min(sourceWindow.length, correctedWindow.length);
+  let replaceStartOffset = 0;
+  while (
+    replaceStartOffset < maxSharedPrefix &&
+    sourceWindow[replaceStartOffset] === correctedWindow[replaceStartOffset]
+  ) {
+    replaceStartOffset++;
+  }
+
+  const maxSharedSuffix = Math.min(sourceWindow.length, correctedWindow.length) - replaceStartOffset;
+  let sharedSuffixLen = 0;
+  while (
+    sharedSuffixLen < maxSharedSuffix &&
+    sourceWindow[sourceWindow.length - 1 - sharedSuffixLen] ===
+      correctedWindow[correctedWindow.length - 1 - sharedSuffixLen]
+  ) {
+    sharedSuffixLen++;
+  }
+
+  let sourceReplaceEndOffset = sourceWindow.length - sharedSuffixLen;
+  let correctedReplaceEndOffset = correctedWindow.length - sharedSuffixLen;
+  if (sourceReplaceEndOffset <= replaceStartOffset) {
+    if (sourceReplaceEndOffset < sourceWindow.length) {
+      sourceReplaceEndOffset++;
+      correctedReplaceEndOffset = Math.min(correctedWindow.length, correctedReplaceEndOffset + 1);
+    } else if (replaceStartOffset > 0) {
+      replaceStartOffset--;
+    } else {
+      return null;
+    }
+  }
+
+  return {
+    sourceWindow,
+    correctedWindow,
+    sourceWindowStart,
+    correctedWindowStart,
+    sourceBoundaryOffset: safeSourceBoundary - sourceWindowStart,
+    targetBoundaryOffset: safeTargetBoundary - correctedWindowStart,
+    replaceStartOffset,
+    sourceReplaceEndOffset,
+    correctedReplaceEndOffset,
+  };
+}
+
 function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharIndex }) {
   if (!entry) return null;
   const srcIndex = typeof originalCharIndex === "number" ? originalCharIndex : -1;
@@ -2733,6 +2833,46 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const sourceAround = findAnchorsNearChar(entry, "source", srcIndex);
   const targetAround = findAnchorsNearChar(entry, "target", targetIndex);
   const documentOffset = entry?.documentOffset ?? 0;
+  const originalText = typeof entry?.originalText === "string" ? entry.originalText : "";
+  const correctedText = typeof entry?.correctedText === "string" ? entry.correctedText : "";
+  const buildBoundaryMeta = () => {
+    const quoteCharsClosing = /["'\u201d\u00bb\u2019)\]]/u;
+    const quoteCharsOpening = /["'\u201c\u00ab\u2018(\[]/u;
+    const resolveCommaIndex = () => {
+      if (!correctedText || !Number.isFinite(targetIndex) || targetIndex < 0) return -1;
+      return findCommaIndexAtBoundary(correctedText, targetIndex);
+    };
+    const classifyIntent = () => {
+      const commaIndex = resolveCommaIndex();
+      if (commaIndex < 0 || commaIndex >= correctedText.length) return "unknown";
+      const leftChar = correctedText[commaIndex - 1] || "";
+      const rightChar = correctedText[commaIndex + 1] || "";
+      if (quoteCharsClosing.test(rightChar)) return "before_closing_quote";
+      if (quoteCharsClosing.test(leftChar)) return "after_closing_quote";
+      if (quoteCharsOpening.test(rightChar)) return "before_opening_quote";
+      if (quoteCharsOpening.test(leftChar)) return "after_opening_quote";
+      return "none";
+    };
+    const commaIndex = resolveCommaIndex();
+    const beforeAnchor = targetAround.before ?? sourceAround.before ?? null;
+    const afterAnchor = targetAround.after ?? sourceAround.after ?? null;
+    const preferredSide =
+      Number.isFinite(afterAnchor?.charStart) && Number.isFinite(targetIndex) && targetIndex >= afterAnchor.charStart
+        ? "before_after_token"
+        : "after_before_token";
+    return {
+      sourceBoundaryPos: Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : null,
+      targetBoundaryPos: Number.isFinite(targetIndex) && targetIndex >= 0 ? targetIndex : null,
+      targetCommaPos: commaIndex >= 0 ? commaIndex : null,
+      beforeToken: snapshotAnchor(beforeAnchor),
+      afterToken: snapshotAnchor(afterAnchor),
+      preferredSide,
+      explicitQuoteIntent: classifyIntent(),
+      leftContext: correctedText.slice(Math.max(0, targetIndex - 12), Math.max(0, targetIndex)),
+      rightContext: correctedText.slice(targetIndex + 1, Math.min(correctedText.length, targetIndex + 13)),
+      exactApplyWindow: buildExactApplyWindowMeta(originalText, correctedText, srcIndex, targetIndex),
+    };
+  };
   const highlightAnchor =
     sourceAround.at ??
     sourceAround.before ??
@@ -2754,7 +2894,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart)) {
     highlightCharEnd = highlightCharStart;
   }
-  const paragraphText = entry?.originalText ?? "";
+  const paragraphText = originalText;
   let highlightText = "";
   if (highlightCharStart >= 0 && highlightCharEnd > highlightCharStart) {
     highlightText = paragraphText.slice(highlightCharStart, highlightCharEnd);
@@ -2780,6 +2920,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetTokenAt: snapshotAnchor(targetAround.at),
     targetTokenAfter: snapshotAnchor(targetAround.after),
     highlightAnchorTarget: snapshotAnchor(highlightAnchor),
+    boundaryMeta: buildBoundaryMeta(),
   };
 }
 
