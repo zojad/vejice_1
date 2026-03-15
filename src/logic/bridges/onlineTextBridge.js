@@ -5,7 +5,7 @@ export class OnlineTextBridge extends TextBridge {
     super({
       applyInsertSuggestion,
       applyDeleteSuggestion,
-      forceSpacingCleanup: false,
+      forceSpacingCleanup: true,
       normalizationProfile: {
         collapseWhitespace: true,
         normalizeQuotes: true,

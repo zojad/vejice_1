@@ -3595,6 +3595,20 @@ async function applyDeleteSuggestion(context, paragraph, suggestion) {
   return await tryApplyDeleteUsingMetadata(context, paragraph, suggestion);
 }
 
+function isResolvedTokenWithinHintWindow(
+  resolvedStart,
+  tokenText,
+  mappedHint,
+  { preferEnd = false, maxDrift = null } = {}
+) {
+  if (!Number.isFinite(resolvedStart) || resolvedStart < 0) return false;
+  if (!Number.isFinite(mappedHint) || mappedHint < 0) return true;
+  if (!Number.isFinite(maxDrift) || maxDrift < 0) return true;
+  const tokenLength = typeof tokenText === "string" ? tokenText.length : 0;
+  const resolvedBoundary = preferEnd ? resolvedStart + tokenLength : resolvedStart;
+  return Math.abs(resolvedBoundary - mappedHint) <= maxDrift;
+}
+
 async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot, options = {}) {
   if (!anchorSnapshot?.tokenText) return null;
   if (typeof paragraph.text !== "string") {
@@ -3671,6 +3685,15 @@ async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot, optio
       }
       if (targetIndex >= 0 && targetIndex < positions.length) {
         resolvedStart = positions[targetIndex];
+      }
+      if (
+        resolvedStart >= 0 &&
+        !isResolvedTokenWithinHintWindow(resolvedStart, text, mappedHint, {
+          preferEnd: Boolean(variantOptions.preferEnd),
+          maxDrift: variantOptions.maxResolvedHintDrift,
+        })
+      ) {
+        return null;
       }
     }
     return {
@@ -3752,6 +3775,7 @@ async function resolveStrictInsertRangeForSuggestion(
         suggestion,
         preferEnd: true,
         hintIndex: boundary?.sourceBoundaryStart,
+        maxResolvedHintDrift: suggestion?.meta?.lemmaAnchorAuthoritative ? 24 : 16,
       })
     : null;
   const afterResolved = afterAnchor
@@ -3760,6 +3784,7 @@ async function resolveStrictInsertRangeForSuggestion(
         liveText,
         suggestion,
         hintIndex: boundary?.sourceBoundaryEnd,
+        maxResolvedHintDrift: suggestion?.meta?.lemmaAnchorAuthoritative ? 24 : 16,
       })
     : null;
 
@@ -3800,6 +3825,35 @@ async function resolveStrictInsertRangeForSuggestion(
   const quotePolicy = boundary?.quotePolicy ?? "none";
   const isClosingQuoteChar = (char) => /["'\u201d\u00bb\u2019)\]]/u.test(char || "");
   const isOpeningQuoteChar = (char) => /["'\u201c\u00ab\u2018(\[]/u.test(char || "");
+  const explicitGapPosCandidates = [boundary?.resolvedPos, boundary?.requestedPos, preferredLiveHint].filter(
+    (value, index, array) => Number.isFinite(value) && value >= 0 && array.indexOf(value) === index
+  );
+  const explicitGapPos = explicitGapPosCandidates.length ? explicitGapPosCandidates[0] : null;
+  const resolveGapIntent = (beforeEnd, afterStart, gapText) => {
+    if (!Number.isFinite(beforeEnd) || !Number.isFinite(afterStart) || afterStart < beforeEnd) {
+      return "unknown";
+    }
+    if (!Number.isFinite(explicitGapPos)) return "unknown";
+    const safePos = Math.max(beforeEnd, Math.min(afterStart, explicitGapPos));
+    const offset = safePos - beforeEnd;
+    const leadingWhitespaceLen = ((gapText || "").match(/^\s+/u) || [""])[0].length;
+    const leadingClosingRun = ((gapText || "").slice(leadingWhitespaceLen).match(/^["'\u201d\u00bb\u2019)\]]+/u) || [
+      "",
+    ])[0];
+    if (leadingClosingRun) {
+      if (offset <= leadingWhitespaceLen) return "before_closing_quote";
+      if (offset >= leadingWhitespaceLen + leadingClosingRun.length) return "after_closing_quote";
+    }
+    const trailingWhitespaceLen = ((gapText || "").match(/\s+$/u) || [""])[0].length;
+    const coreGap = (gapText || "").slice(0, Math.max(0, (gapText || "").length - trailingWhitespaceLen));
+    const trailingOpeningRun = (coreGap.match(/["'\u201c\u00ab\u2018(\[]+$/u) || [""])[0];
+    if (trailingOpeningRun) {
+      const openingRunStart = coreGap.length - trailingOpeningRun.length;
+      if (offset <= openingRunStart) return "before_opening_quote";
+      if (offset >= openingRunStart + trailingOpeningRun.length) return "after_opening_quote";
+    }
+    return "inside_quote_gap";
+  };
 
   if (
     beforeRange &&
@@ -3816,6 +3870,7 @@ async function resolveStrictInsertRangeForSuggestion(
         const whitespaceOnly = /^\s+$/u.test(gapText);
         const gapNoLeadingWs = gapText.replace(/^\s+/u, "");
         const gapNoTrailingWs = gapText.replace(/\s+$/u, "");
+        const gapIntent = resolveGapIntent(beforeEnd, afterStart, gapText);
         const openingQuoteGap =
           Boolean(gapText) &&
           gapNoLeadingWs.length > 0 &&
@@ -3828,6 +3883,14 @@ async function resolveStrictInsertRangeForSuggestion(
         let gapReplacement = null;
         if (whitespaceOnly) {
           gapReplacement = ", ";
+        } else if (gapIntent === "before_closing_quote") {
+          gapReplacement = `,${gapText.replace(/^\s+/u, "")}`;
+        } else if (gapIntent === "after_closing_quote") {
+          const closingRun = (gapText.match(/^[\s]*["'\u201d\u00bb\u2019)\]]+/u) || [""])[0].trimStart();
+          const trailingGap = gapText.slice(gapText.indexOf(closingRun) + closingRun.length);
+          gapReplacement = `${closingRun},${trailingGap || (afterRange ? " " : "")}`;
+        } else if (gapIntent === "before_opening_quote") {
+          gapReplacement = `,${gapText.replace(/^\s+/u, "")}`;
         } else if (
           (quotePolicy === "before_opening_quote" || preferredSide !== "before_after_token") &&
           openingQuoteGap
@@ -3911,6 +3974,7 @@ async function resolveStrictInsertRangeForSuggestion(
 
     const shouldPreferQuoteBoundary =
       Boolean(closingQuoteRun) &&
+      resolveGapIntent(beforeEnd, gapEnd, gapText) !== "before_closing_quote" &&
       (quotePolicy === "after_closing_quote" ||
         (preferredSide !== "before_after_token" &&
           preferredLiveHint >= beforeEnd + closingQuoteRun.length));
@@ -4412,11 +4476,99 @@ function areAllSuggestionsLemmaAuthoritative(suggestions = []) {
   );
 }
 
+function collectOnlineCommaCleanupFixes(text = "") {
+  if (typeof text !== "string" || !text.length) return [];
+  const fixes = [];
+  const addFix = (start, end, replacement, priority) => {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    fixes.push({
+      start,
+      end,
+      replacement,
+      priority: Number.isFinite(priority) ? priority : 0,
+    });
+  };
+
+  for (const match of text.matchAll(/,(?:\s*,)+/gu)) {
+    addFix(match.index, match.index + match[0].length, ",", 4);
+  }
+
+  for (const match of text.matchAll(/\s+,/gu)) {
+    addFix(match.index, match.index + match[0].length, ",", 3);
+  }
+
+  for (let idx = 0; idx < text.length - 1; idx++) {
+    if (text[idx] !== ",") continue;
+    const nextChar = text[idx + 1] ?? "";
+    if (!shouldInsertSpaceAfterComma(nextChar)) continue;
+    addFix(idx, idx + 2, `, ${nextChar}`, 2);
+  }
+
+  fixes.sort((left, right) => {
+    if (left.start !== right.start) return right.start - left.start;
+    if (left.priority !== right.priority) return right.priority - left.priority;
+    return (right.end - right.start) - (left.end - left.start);
+  });
+
+  const accepted = [];
+  const overlaps = (first, second) => first.start < second.end && second.start < first.end;
+  for (const fix of fixes) {
+    if (accepted.some((candidate) => overlaps(candidate, fix))) continue;
+    accepted.push(fix);
+  }
+  return accepted;
+}
+
+async function applyOnlineCommaCleanupFix(context, paragraph, liveText, fix, reason = "online-comma-cleanup") {
+  if (!fix) return false;
+  const region = await findReplaceableRegionRangeNearIndex(
+    context,
+    paragraph,
+    liveText,
+    fix.start,
+    fix.end,
+    reason
+  );
+  if (!region?.range) return false;
+  region.range.insertText(
+    `${region.prefix}${fix.replacement}${region.suffix}`,
+    Word.InsertLocation.replace
+  );
+  await context.sync();
+  return true;
+}
+
 async function normalizeCommaSpacingInParagraph(context, paragraph) {
   paragraph.load("text");
   await context.sync();
-  const text = paragraph.text || "";
+  let text = paragraph.text || "";
   if (!text.includes(",")) return;
+
+  if (charSpanRangeResolutionDisabled) {
+    for (let pass = 0; pass < 8; pass++) {
+      const fixes = collectOnlineCommaCleanupFixes(text);
+      if (!fixes.length) return;
+      let applied = false;
+      for (const fix of fixes) {
+        applied = await applyOnlineCommaCleanupFix(
+          context,
+          paragraph,
+          text,
+          fix,
+          `normalize-online-pass-${pass + 1}`
+        );
+        if (applied) {
+          paragraph.load("text");
+          await context.sync();
+          text = paragraph.text || "";
+          if (!text.includes(",")) return;
+          break;
+        }
+      }
+      if (!applied) return;
+    }
+    return;
+  }
 
   for (let idx = text.length - 1; idx >= 0; idx--) {
     if (text[idx] !== ",") continue;
@@ -5298,6 +5450,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
   const preferredInsertHint = resolvePreferredInsertHint();
   const maxHintDrift = suggestion?.meta?.lemmaAnchorAuthoritative ? 20 : 12;
+  const maxAnchorHintDrift = suggestion?.meta?.lemmaAnchorAuthoritative ? 24 : 16;
   const traceAuthoritativeDecision = (reason, extra = {}) => {
     if (!authoritativeInsert) return;
     log("authoritative insert planning", {
@@ -5327,6 +5480,24 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       anchor.textOccurrence ?? anchor.tokenIndex ?? 0,
       lookupOptions
     );
+    if (
+      start >= 0 &&
+      !isResolvedTokenWithinHintWindow(start, token, mappedHint, {
+        preferEnd,
+        maxDrift: maxAnchorHintDrift,
+      })
+    ) {
+      skipReason = `${reasonOnMissing}_hint_drift`;
+      if (authoritativeInsert) {
+        traceAuthoritativeDecision("rejected_anchor_hint_drift", {
+          anchorToken: token,
+          mappedHint,
+          resolvedStart: start,
+          preferEnd,
+        });
+      }
+      return { start: -1, token: null };
+    }
     if (start < 0) {
       skipReason = reasonOnMissing;
     }
@@ -5372,17 +5543,19 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     const end = Math.min(snapshotText.length, center + radius);
     return COMPANY_ABBREV_PATTERN.test(snapshotText.slice(start, end));
   };
+  const isBoundaryQuoteChar = (char) =>
+    isClosingQuoteOrCloser(char) || isOpeningQuoteOrOpener(char);
   const hasCommaAcrossQuoteBoundary = (pos) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return false;
     let left = pos - 1;
     while (left >= 0 && /\s/.test(snapshotText[left])) left--;
-    while (left >= 0 && isClosingQuoteOrCloser(snapshotText[left])) left--;
+    while (left >= 0 && isBoundaryQuoteChar(snapshotText[left])) left--;
     while (left >= 0 && /\s/.test(snapshotText[left])) left--;
     if (left >= 0 && snapshotText[left] === ",") return true;
 
     let right = pos;
     while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
-    while (right < snapshotText.length && isOpeningQuoteOrOpener(snapshotText[right])) right++;
+    while (right < snapshotText.length && isBoundaryQuoteChar(snapshotText[right])) right++;
     while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
     return false;
@@ -6657,6 +6830,8 @@ export async function applySuggestionOnlineById(suggestionId = null) {
   let paragraphBaselineSourceText = "";
   let paragraphLiveTextAfterApply = "";
   let paragraphBaselineDocumentOffset = 0;
+  let actionableSelectedSuggestions = [];
+  let noopSelectedSuggestions = [];
   try {
     await Word.run(async (context) => {
       const paragraphIndex = targetSuggestion?.paragraphIndex;
@@ -6696,9 +6871,27 @@ export async function applySuggestionOnlineById(suggestionId = null) {
         selectedSuggestions,
         oneByOnePlanOptions
       );
+      const actionableSuggestions = [];
+      const actionableSuggestionSet = new Set();
+      noopSelectedSuggestions = [...noop];
+      for (const item of noopSelectedSuggestions) {
+        if (!item || actionableSuggestionSet.has(item)) continue;
+        actionableSuggestionSet.add(item);
+        actionableSuggestions.push(item);
+      }
+      for (const op of plan) {
+        for (const item of op?.suggestions || []) {
+          if (!item || actionableSuggestionSet.has(item)) continue;
+          actionableSuggestionSet.add(item);
+          actionableSuggestions.push(item);
+        }
+      }
+      actionableSelectedSuggestions = actionableSuggestions;
 
       summary.skippedSuggestions += skipped.length + noop.length;
-      suggestionResolvedAsNoop = selectedSuggestions.length > 0 && noop.length === selectedSuggestions.length;
+      suggestionResolvedAsNoop =
+        actionableSuggestions.length > 0 &&
+        actionableSuggestions.every((item) => noopSelectedSuggestions.includes(item));
       if (!plan.length) {
         if (!noop.length) {
           summary.failedSuggestions += skipped.length ? 0 : 1;
@@ -6752,7 +6945,7 @@ export async function applySuggestionOnlineById(suggestionId = null) {
         paragraph.load("text");
         await context.sync();
         const liveText = paragraph.text || "";
-        return selectedSuggestions.every((suggestion) =>
+        return actionableSuggestions.every((suggestion) =>
           isSuggestionAppliedInLiveText(
             liveText,
             sourceText,
@@ -6775,14 +6968,14 @@ export async function applySuggestionOnlineById(suggestionId = null) {
           }
         }
         if (verifiedApplied) {
-          summary.appliedSuggestions += selectedSuggestions.length;
+          summary.appliedSuggestions += actionableSuggestions.length || 1;
           touchedIndexes.add(paragraphIndex);
         } else {
           warn("applySuggestionOnlineById: operation not verified after apply", {
             suggestionId: targetSuggestion?.id ?? null,
             kind: targetSuggestion?.kind ?? null,
           });
-          summary.failedSuggestions += selectedSuggestions.length;
+          summary.failedSuggestions += actionableSuggestions.length || 1;
         }
 
         paragraph.load("text");
@@ -6793,7 +6986,11 @@ export async function applySuggestionOnlineById(suggestionId = null) {
 
     const removedParagraphIndexes = new Set();
     if (summary.appliedSuggestions > 0 || suggestionResolvedAsNoop) {
-      const removedSuggestions = removePendingSuggestionsByReference(selectedSuggestions, {
+      const removableSuggestions =
+        summary.appliedSuggestions > 0
+          ? actionableSelectedSuggestions
+          : noopSelectedSuggestions;
+      const removedSuggestions = removePendingSuggestionsByReference(removableSuggestions, {
         persist: false,
       });
       for (const removed of removedSuggestions) {
