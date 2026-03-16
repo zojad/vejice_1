@@ -20,6 +20,8 @@ import {
 
 const log = (...args) => console.log("[Vejice Taskpane]", ...args);
 const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
+// Temporary kill-switch for the online accept/reject workflow while the flow is unstable.
+const ENABLE_ONLINE_REVIEW_ACTIONS = false;
 
 let busy = false;
 let online = false;
@@ -29,6 +31,8 @@ let lastCheckClickAt = 0;
 const CHECK_CLICK_DEBOUNCE_MS = 800;
 const MAX_VISIBLE_NOTIFICATIONS = 30;
 let lastNotificationSignature = "";
+
+const canUseOnlineReviewActions = () => online && ENABLE_ONLINE_REVIEW_ACTIONS;
 
 const resolveManifestMode = () => {
   if (typeof window === "undefined" || typeof URLSearchParams === "undefined") return null;
@@ -106,14 +110,15 @@ const syncActionButtons = () => {
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
   const checkInProgress = isDocumentCheckInProgress();
+  const reviewActionsEnabled = canUseOnlineReviewActions();
   const pendingCount = online ? getPendingSuggestionsOnline().length : 0;
   const hasPending = pendingCount > 0;
 
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
-  if (acceptOneBtn) acceptOneBtn.disabled = busy || !online || checkInProgress || !hasPending;
-  if (rejectOneBtn) rejectOneBtn.disabled = busy || !online || checkInProgress || !hasPending;
-  if (acceptBtn) acceptBtn.disabled = busy || !online || checkInProgress || !hasPending;
-  if (rejectBtn) rejectBtn.disabled = busy || !online || checkInProgress || !hasPending;
+  if (acceptOneBtn) acceptOneBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
+  if (rejectOneBtn) rejectOneBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
+  if (acceptBtn) acceptBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
+  if (rejectBtn) rejectBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
 };
 
 const setBusy = (nextBusy) => {
@@ -198,7 +203,7 @@ const runCheck = async () => {
 };
 
 const runAccept = async () => {
-  if (!online) return;
+  if (!canUseOnlineReviewActions()) return;
   if (busy || isDocumentCheckInProgress()) {
     setStatus("Po\u010dakajte, da se preverjanje kon\u010da.");
     return;
@@ -221,7 +226,7 @@ const runAccept = async () => {
 };
 
 const runReject = async () => {
-  if (!online) return;
+  if (!canUseOnlineReviewActions()) return;
   if (busy || isDocumentCheckInProgress()) {
     setStatus("Po\u010dakajte, da se preverjanje kon\u010da.");
     return;
@@ -249,7 +254,7 @@ const runReject = async () => {
 };
 
 const runAcceptOne = async () => {
-  if (!online) return;
+  if (!canUseOnlineReviewActions()) return;
   if (busy || isDocumentCheckInProgress()) {
     setStatus("Počakajte, da se preverjanje konča.");
     return;
@@ -295,7 +300,7 @@ const runAcceptOne = async () => {
   }
 };
 const runRejectOne = async () => {
-  if (!online) return;
+  if (!canUseOnlineReviewActions()) return;
   if (busy || isDocumentCheckInProgress()) {
     setStatus("Počakajte, da se preverjanje konča.");
     return;
@@ -362,23 +367,26 @@ Office.onReady((info) => {
   const rejectOneBtn = document.getElementById("btn-reject-one");
   const secondaryActions = document.getElementById("secondary-actions");
   const desktopNote = document.getElementById("desktop-note");
+  const showOnlineReviewActions = canUseOnlineReviewActions();
 
-  if (!online) {
+  if (!showOnlineReviewActions) {
     if (secondaryActions) secondaryActions.hidden = true;
     if (acceptOneBtn) acceptOneBtn.hidden = true;
     if (rejectOneBtn) rejectOneBtn.hidden = true;
     if (acceptBtn) acceptBtn.hidden = true;
     if (rejectBtn) rejectBtn.hidden = true;
+  }
+  if (!online) {
     if (desktopNote) desktopNote.hidden = false;
   }
 
   const checkBtn = document.getElementById("btn-check");
   const clearNotificationsBtn = document.getElementById("btn-clear-notifications");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
-  if (acceptOneBtn) acceptOneBtn.addEventListener("click", () => void runAcceptOne());
-  if (rejectOneBtn) rejectOneBtn.addEventListener("click", () => void runRejectOne());
-  if (acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
-  if (rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
+  if (showOnlineReviewActions && acceptOneBtn) acceptOneBtn.addEventListener("click", () => void runAcceptOne());
+  if (showOnlineReviewActions && rejectOneBtn) rejectOneBtn.addEventListener("click", () => void runRejectOne());
+  if (showOnlineReviewActions && acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());
+  if (showOnlineReviewActions && rejectBtn) rejectBtn.addEventListener("click", () => void runReject());
   if (clearNotificationsBtn) {
     clearNotificationsBtn.addEventListener("click", () => {
       clearTaskpaneNotifications();
