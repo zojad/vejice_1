@@ -2,6 +2,7 @@
 
 import {
   checkDocumentText,
+  clearPendingSuggestionHighlightsOnline,
   applyAllSuggestionsOnline,
   rejectAllSuggestionsOnline,
   applySuggestionOnlineById,
@@ -105,6 +106,7 @@ const renderNotifications = ({ force = false } = {}) => {
 
 const syncActionButtons = () => {
   const checkBtn = document.getElementById("btn-check");
+  const clearHighlightsBtn = document.getElementById("btn-clear-highlights");
   const acceptOneBtn = document.getElementById("btn-accept-one");
   const rejectOneBtn = document.getElementById("btn-reject-one");
   const acceptBtn = document.getElementById("btn-accept");
@@ -115,6 +117,7 @@ const syncActionButtons = () => {
   const hasPending = pendingCount > 0;
 
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
+  if (clearHighlightsBtn) clearHighlightsBtn.disabled = busy || !online || checkInProgress || !hasPending;
   if (acceptOneBtn) acceptOneBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
   if (rejectOneBtn) rejectOneBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
   if (acceptBtn) acceptBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
@@ -197,6 +200,35 @@ const runCheck = async () => {
     setStatus("Napaka pri preverjanju.");
   } finally {
     checkRunInFlight = false;
+    setBusy(false);
+    syncActionButtons();
+  }
+};
+
+const runClearHighlights = async () => {
+  if (!online) return;
+  if (busy || isDocumentCheckInProgress()) {
+    setStatus("Po\u010dakajte, da se preverjanje kon\u010da.");
+    return;
+  }
+  setBusy(true);
+  setStatus("Bri\u0161em ozna\u010dbe...");
+  try {
+    const summary = await clearPendingSuggestionHighlightsOnline();
+    const cleared = Number(summary?.clearedMarkers ?? 0);
+    const pending = Number(summary?.pendingAfter ?? 0);
+    if (summary?.status === "deferred") {
+      setStatus("Po\u010dakajte, da se trenutno opravilo zaklju\u010di.");
+    } else if (cleared > 0) {
+      setStatus(`Ozna\u010dbe pobrisane: ${cleared}. Predlogi: ${pending}.`);
+    } else {
+      setStatus("Ni ozna\u010db za pobrisati.");
+    }
+    log("clear highlights summary", summary);
+  } catch (err) {
+    errL("clear highlights failed", err);
+    setStatus("Napaka pri brisanju ozna\u010db.");
+  } finally {
     setBusy(false);
     syncActionButtons();
   }
@@ -363,6 +395,7 @@ Office.onReady((info) => {
 
   const acceptBtn = document.getElementById("btn-accept");
   const rejectBtn = document.getElementById("btn-reject");
+  const clearHighlightsBtn = document.getElementById("btn-clear-highlights");
   const acceptOneBtn = document.getElementById("btn-accept-one");
   const rejectOneBtn = document.getElementById("btn-reject-one");
   const secondaryActions = document.getElementById("secondary-actions");
@@ -377,12 +410,15 @@ Office.onReady((info) => {
     if (rejectBtn) rejectBtn.hidden = true;
   }
   if (!online) {
+    if (clearHighlightsBtn) clearHighlightsBtn.hidden = true;
     if (desktopNote) desktopNote.hidden = false;
   }
 
   const checkBtn = document.getElementById("btn-check");
+  const clearHighlightsActionBtn = document.getElementById("btn-clear-highlights");
   const clearNotificationsBtn = document.getElementById("btn-clear-notifications");
   if (checkBtn) checkBtn.addEventListener("click", () => void runCheck());
+  if (clearHighlightsActionBtn) clearHighlightsActionBtn.addEventListener("click", () => void runClearHighlights());
   if (showOnlineReviewActions && acceptOneBtn) acceptOneBtn.addEventListener("click", () => void runAcceptOne());
   if (showOnlineReviewActions && rejectOneBtn) rejectOneBtn.addEventListener("click", () => void runRejectOne());
   if (showOnlineReviewActions && acceptBtn) acceptBtn.addEventListener("click", () => void runAccept());

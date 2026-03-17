@@ -1241,6 +1241,7 @@ let documentCheckInProgress = false;
 const ACTION_TYPE_IDLE = "idle";
 const ACTION_TYPE_CHECK = "check";
 const ACTION_TYPE_APPLY = "apply";
+const ACTION_TYPE_CLEAR = "clear";
 const ACTION_TYPE_REJECT = "reject";
 const ONLINE_CHECK_TIMEOUT_MS_DEFAULT = 120000;
 const ONLINE_PARAGRAPH_TIMEOUT_MS_DEFAULT = 20000;
@@ -2005,6 +2006,10 @@ async function getRangeForCharacterSpan(
     const idx = Math.min(occurrence, matches.items.length - 1);
     return matches.items[idx];
   } catch (err) {
+    if (isWordOnline() && isApiNotFoundLikeError(err)) {
+      charSpanRangeResolutionDisabled = true;
+      return null;
+    }
     if (isWordOnline() && String(err?.code || err?.message || "").includes("InvalidRequest")) {
       charSpanRangeResolutionDisabled = true;
       if (!charSpanRangeDisableLogged) {
@@ -3058,25 +3063,13 @@ function normalizeUnderlineStyleForCompare(value) {
 function isVejiceMarkerHighlightColor(color) {
   const token = normalizeHighlightColorToken(color);
   if (!token) return false;
-
   const insertToken = normalizeHighlightColorToken(HIGHLIGHT_INSERT);
   const deleteToken = normalizeHighlightColorToken(HIGHLIGHT_DELETE);
-  const insertSet = new Set([
-    insertToken,
-    "#fff9c4",
-    "#ffff00",
-    "#ff0",
-    "yellow",
-  ]);
-  const deleteSet = new Set([
-    deleteToken,
-    "#ffcdd2",
-    "#ff0000",
-    "#f00",
-    "red",
-    "pink",
-  ]);
-  return insertSet.has(token) || deleteSet.has(token);
+  return token === insertToken || token === deleteToken;
+}
+
+function isStrictLegacyVejiceMarkerHighlightColor(color) {
+  return isVejiceMarkerHighlightColor(color);
 }
 
 function isVejiceMarkerStyle(underline, underlineColor) {
@@ -3613,6 +3606,11 @@ async function applySuggestionMarkerFormat(context, range, suggestion) {
         markerControl = markerRange.insertContentControl();
         markerControl.tag = markerTag;
         markerControl.title = VEJICE_MARKER_TITLE;
+        // These controls exist only as internal marker anchors; suppress Word Online's
+        // default empty-control placeholder text if the wrapped content becomes empty.
+        markerControl.placeholderText = "";
+        markerControl.appearance = "Hidden";
+        markerControl.removeWhenEdited = true;
         markerRange = markerControl.getRange("Content");
         markerViaContentControl = true;
       } catch (tagErr) {
@@ -5373,7 +5371,8 @@ const HIGHLIGHT_SCRUB_DELIMITERS = [
   "—",
 ];
 
-async function clearResidualVejiceHighlightsInParagraph(context, paragraph) {
+async function clearResidualVejiceHighlightsInParagraph(context, paragraph, options = {}) {
+  const includeLegacyHighlightColors = Boolean(options?.includeLegacyHighlightColors);
   if (!paragraph || typeof paragraph.getRange !== "function") return;
   try {
     const contentRange = paragraph.getRange("Content");
@@ -5393,7 +5392,7 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph) {
         }
         changed = true;
       }
-      if (isVejiceMarkerHighlightColor(range?.font?.highlightColor)) {
+      if (includeLegacyHighlightColors && isStrictLegacyVejiceMarkerHighlightColor(range?.font?.highlightColor)) {
         range.font.highlightColor = null;
         changed = true;
       }
@@ -5407,7 +5406,10 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph) {
       }
       changed = true;
     }
-    if (isVejiceMarkerHighlightColor(contentRange?.font?.highlightColor)) {
+    if (
+      includeLegacyHighlightColors &&
+      isStrictLegacyVejiceMarkerHighlightColor(contentRange?.font?.highlightColor)
+    ) {
       contentRange.font.highlightColor = null;
       changed = true;
     }
@@ -5419,11 +5421,11 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph) {
   }
 }
 
-async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, indexes) {
+async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, indexes, options = {}) {
   if (!indexes?.size) return;
   for (const idx of indexes) {
     const paragraph = paragraphs?.items?.[idx];
-    await clearResidualVejiceHighlightsInParagraph(context, paragraph);
+    await clearResidualVejiceHighlightsInParagraph(context, paragraph, options);
   }
 }
 
@@ -5433,7 +5435,8 @@ async function clearAllHighlightsForParagraphs(context, paragraphs, indexes) {
     for (const idx of indexes) {
       const paragraph = paragraphs?.items?.[idx];
       if (!paragraph || typeof paragraph.getRange !== "function") continue;
-      paragraph.getRange("Content").font.highlightColor = null;
+      // Never blanket-clear paragraph highlights here; that would also remove
+      // user-authored highlighting instead of only add-in markers.
     }
     await context.sync();
   } catch (err) {
@@ -5507,12 +5510,8 @@ async function clearAddinMarkerFormattingOnRanges(context, ranges) {
     await context.sync();
     let changed = 0;
     for (const range of validRanges) {
-      const isHighlightMarker = isVejiceMarkerHighlightColor(range?.font?.highlightColor);
       const isUnderlineMarker = isVejiceMarkerStyle(range?.font?.underline, null);
-      if (!isHighlightMarker && !isUnderlineMarker) continue;
-      if (isHighlightMarker) {
-        range.font.highlightColor = null;
-      }
+      if (!isUnderlineMarker) continue;
       if (isUnderlineMarker) {
         range.font.underline = "None";
         try {
@@ -5815,6 +5814,9 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
           return true;
         }
       } catch (tagErr) {
+        if (isWordOnline() && isApiNotFoundLikeError(tagErr)) {
+          return false;
+        }
         warn("clearHighlightForSuggestion: failed via marker tag", tagErr);
       }
     }
@@ -5910,6 +5912,7 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     clearedByTagCount: 0,
     clearedFallbackCount: 0,
     failedCount: 0,
+    staleControlClears: 0,
   };
 
   const clearHighlight = (sug) => {
@@ -5965,6 +5968,33 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     }
     resetSuggestionMarkerState(suggestion);
     result.failedCount += 1;
+  }
+  if (!softClearOnly) {
+    try {
+      const paragraphIndexes = new Set();
+      for (const entry of normalizedEntries) {
+        const idx = entry?.suggestion?.paragraphIndex;
+        if (Number.isFinite(idx) && idx >= 0) {
+          paragraphIndexes.add(idx);
+        }
+      }
+      for (const idx of paragraphIndexes) {
+        const paragraph = paragraphs?.items?.[idx];
+        if (!paragraph) continue;
+        const removed = await clearStaleVejiceMarkerControlsInParagraph(context, paragraph);
+        if (removed > 0) {
+          result.staleControlClears += removed;
+        }
+      }
+      if (result.staleControlClears > 0) {
+        result.clearedFallbackCount += result.staleControlClears;
+      }
+      await clearResidualVejiceHighlightsForParagraphs(context, paragraphs, paragraphIndexes, {
+        includeLegacyHighlightColors: true,
+      });
+    } catch (staleErr) {
+      warn("clearOnlineSuggestionMarkers: stale marker sweep failed", staleErr);
+    }
   }
   if (needsFinalSync) {
     try {
@@ -8552,6 +8582,80 @@ export async function rejectAllSuggestionsOnline() {
     return finalize(summary.clearedMarkers > 0 ? "partial" : "noop", "some-marker-clear-failures");
   }
   return finalize(summary.clearedMarkers > 0 ? "cleared" : "noop");
+  } finally {
+    finishAction(actionToken);
+  }
+}
+
+export async function clearPendingSuggestionHighlightsOnline() {
+  const startedAt = tnow();
+  const summary = {
+    status: "noop",
+    reason: null,
+    restored: 0,
+    pendingBefore: 0,
+    clearedMarkers: 0,
+    failedClear: 0,
+    pendingAfter: 0,
+    durationMs: 0,
+  };
+  const finalize = (status, reason = null) => {
+    summary.status = status;
+    summary.reason = reason;
+    summary.pendingAfter = pendingSuggestionsOnline.length;
+    summary.durationMs = Math.round(tnow() - startedAt);
+    return summary;
+  };
+
+  if (!pendingSuggestionsOnline.length) {
+    const restored = restorePendingSuggestionsOnline();
+    summary.restored = restored;
+    if (restored > 0) {
+      log(`clearPendingSuggestionHighlightsOnline: restored ${restored} pending suggestions from storage`);
+    }
+  }
+  summary.pendingBefore = pendingSuggestionsOnline.length;
+  if (!pendingSuggestionsOnline.length) {
+    return finalize("noop", "no-pending-suggestions");
+  }
+
+  const scanCompleted = await waitForOnlineScanCompletion();
+  if (!scanCompleted) {
+    queueScanNotification("Po\u010dakajte, da se pregled dokumenta zaklju\u010di, nato poskusite znova.", "warn");
+    flushScanNotifications();
+    return finalize("deferred", "scan-in-progress");
+  }
+  const actionToken = beginAction(ACTION_TYPE_CLEAR);
+  if (!actionToken) {
+    return finalize("deferred", "action-in-progress");
+  }
+  try {
+    await Word.run(async (context) => {
+      const paras = await wordOnlineAdapter.getParagraphs(context);
+      const entries = pendingSuggestionsOnline.map((suggestion) => ({
+        suggestion,
+        paragraph:
+          Number.isFinite(suggestion?.paragraphIndex) && suggestion.paragraphIndex >= 0
+            ? paras.items[suggestion.paragraphIndex] || null
+            : null,
+      }));
+      const clearResult = await wordOnlineAdapter.clearHighlights(context, entries, paras);
+      summary.clearedMarkers =
+        (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
+      summary.failedClear = clearResult?.failedCount || 0;
+    });
+
+    for (const suggestion of pendingSuggestionsOnline) {
+      const paragraphIndex = suggestion?.paragraphIndex;
+      if (Number.isFinite(paragraphIndex) && paragraphIndex >= 0) {
+        clearOnlineParagraphRenderState(paragraphIndex);
+      }
+    }
+    persistPendingSuggestionsOnline();
+    if (summary.failedClear > 0) {
+      return finalize(summary.clearedMarkers > 0 ? "partial" : "noop", "some-marker-clear-failures");
+    }
+    return finalize(summary.clearedMarkers > 0 ? "cleared" : "noop");
   } finally {
     finishAction(actionToken);
   }
