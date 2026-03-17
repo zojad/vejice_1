@@ -84,6 +84,8 @@ const MARKER_RENDER_FAILED_MESSAGE = "Napake so bile najdene, vendar jih v Word 
 const PARAGRAPH_TIMEOUT_MESSAGE = "Nekateri odstavki niso bili pregledani zaradi casovne omejitve.";
 const ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT = 5;
 const ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT = 24;
+const LOCAL_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT = 1;
+const LOCAL_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT = 10;
 const ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
 const ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD_DEFAULT = 2;
 const ONLINE_RENDER_STATE_MAX_PARAGRAPHS = 1200;
@@ -107,6 +109,81 @@ function parseBooleanFlag(value) {
   if (BOOLEAN_TRUE.has(normalized)) return true;
   if (BOOLEAN_FALSE.has(normalized)) return false;
   return undefined;
+}
+
+const QUOTE_TRACE_REGEX = /["'\u00AB\u00BB\u2018\u2019\u201C\u201D]/u;
+
+function isQuoteTraceEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return false;
+}
+
+function hasQuoteTraceChar(value) {
+  return typeof value === "string" && QUOTE_TRACE_REGEX.test(value);
+}
+
+function suggestionTouchesQuoteBoundary(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") return false;
+  const meta = suggestion?.meta?.anchor || {};
+  const snippetLeft = suggestion?.snippets?.leftSnippet;
+  const snippetRight = suggestion?.snippets?.rightSnippet;
+  const candidates = [
+    snippetLeft,
+    snippetRight,
+    meta?.highlightText,
+    meta?.sourceTokenBefore?.tokenText,
+    meta?.sourceTokenAt?.tokenText,
+    meta?.sourceTokenAfter?.tokenText,
+    meta?.targetTokenBefore?.tokenText,
+    meta?.targetTokenAt?.tokenText,
+    meta?.targetTokenAfter?.tokenText,
+  ];
+  return candidates.some((value) => hasQuoteTraceChar(value));
+}
+
+function buildQuoteTraceSuggestionSnapshot(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") return null;
+  const op = suggestion?.meta?.op || {};
+  const anchor = suggestion?.meta?.anchor || {};
+  return {
+    id: suggestion?.id ?? null,
+    paragraphIndex: Number.isFinite(suggestion?.paragraphIndex) ? suggestion.paragraphIndex : null,
+    kind: suggestion?.kind ?? null,
+    opOriginalPos: Number.isFinite(op?.originalPos) ? op.originalPos : null,
+    opCorrectedPos: Number.isFinite(op?.correctedPos) ? op.correctedPos : null,
+    opPos: Number.isFinite(op?.pos) ? op.pos : null,
+    charHintStart: Number.isFinite(suggestion?.charHint?.start) ? suggestion.charHint.start : null,
+    charHintEnd: Number.isFinite(suggestion?.charHint?.end) ? suggestion.charHint.end : null,
+    sourceTokenBefore: anchor?.sourceTokenBefore?.tokenText || null,
+    sourceTokenAfter: anchor?.sourceTokenAfter?.tokenText || null,
+    targetTokenBefore: anchor?.targetTokenBefore?.tokenText || null,
+    targetTokenAfter: anchor?.targetTokenAfter?.tokenText || null,
+    highlightText: anchor?.highlightText || null,
+    leftSnippet:
+      typeof suggestion?.snippets?.leftSnippet === "string"
+        ? suggestion.snippets.leftSnippet.slice(-28)
+        : null,
+    rightSnippet:
+      typeof suggestion?.snippets?.rightSnippet === "string"
+        ? suggestion.snippets.rightSnippet.slice(0, 28)
+        : null,
+  };
+}
+
+function traceQuoteSuggestion(stage, suggestion, extra = {}) {
+  if (!isQuoteTraceEnabled()) return;
+  if (!suggestionTouchesQuoteBoundary(suggestion) && !extra?.force) return;
+  log("[QUOTE TRACE]", stage, {
+    suggestion: buildQuoteTraceSuggestionSnapshot(suggestion),
+    ...extra,
+  });
 }
 
 function isLocalhostRuntime() {
@@ -1026,6 +1103,14 @@ function collectRelocationPairSuggestions(targetSuggestion, candidates = []) {
       related.push(candidate);
     }
   }
+  traceQuoteSuggestion("pair.collect", targetSuggestion, {
+    relatedCount: related.length,
+    related: related.map((sug) => ({
+      id: sug?.id ?? null,
+      kind: sug?.kind ?? null,
+      paragraphIndex: Number.isFinite(sug?.paragraphIndex) ? sug.paragraphIndex : null,
+    })),
+  });
   return related;
 }
 
@@ -1312,7 +1397,10 @@ function resolveOnlineHighlightFlushParagraphs() {
   if (override == null && typeof process !== "undefined") {
     override = parsePositiveInteger(process.env?.VEJICE_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS);
   }
-  const value = override ?? ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT;
+  const defaultValue = isLocalSpeedProfileEnabled()
+    ? LOCAL_ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT
+    : ONLINE_HIGHLIGHT_FLUSH_PARAGRAPHS_DEFAULT;
+  const value = override ?? defaultValue;
   return Math.max(1, Math.min(value, 50));
 }
 
@@ -1324,7 +1412,10 @@ function resolveOnlineHighlightFlushSuggestions() {
   if (override == null && typeof process !== "undefined") {
     override = parsePositiveInteger(process.env?.VEJICE_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS);
   }
-  const value = override ?? ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT;
+  const defaultValue = isLocalSpeedProfileEnabled()
+    ? LOCAL_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT
+    : ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT;
+  const value = override ?? defaultValue;
   return Math.max(1, Math.min(value, 200));
 }
 
@@ -1827,13 +1918,13 @@ function canonicalizeWithBoundaryMap(text, profile = getNormalizationProfile()) 
 
   const normalizeChar = (ch) => {
     if (profile?.normalizeQuotes) {
-      if ("\"“”„«»".includes(ch)) return "\"";
-      if ("'`’‘‚‛‹›".includes(ch)) return "'";
+      if ("\"â€œâ€â€žÂ«Â»".includes(ch)) return "\"";
+      if ("'`â€™â€˜â€šâ€›â€¹â€º".includes(ch)) return "'";
     }
-    if (profile?.normalizeDashes && "–—−".includes(ch)) {
+    if (profile?.normalizeDashes && "â€“â€”âˆ’".includes(ch)) {
       return "-";
     }
-    if (profile?.normalizeEllipsis && ch === "…") {
+    if (profile?.normalizeEllipsis && ch === "â€¦") {
       return "...";
     }
     return ch;
@@ -3072,6 +3163,14 @@ function isStrictLegacyVejiceMarkerHighlightColor(color) {
   return isVejiceMarkerHighlightColor(color);
 }
 
+function sanitizeRestoredHighlightColor(color) {
+  const normalized = normalizeHighlightColorValue(color);
+  if (!normalized) return null;
+  // Never restore add-in marker colors; they should be cleared, not persisted.
+  if (isVejiceMarkerHighlightColor(normalized)) return null;
+  return normalized;
+}
+
 function isVejiceMarkerStyle(underline, underlineColor) {
   const style = normalizeUnderlineStyleForCompare(underline);
   const color = normalizeHighlightColorForCompare(underlineColor);
@@ -3592,7 +3691,7 @@ async function applySuggestionMarkerFormat(context, range, suggestion) {
       await context.sync();
       const existingHighlightColor = normalizeHighlightColorValue(markerRange.font.highlightColor);
       // Preserve the user's exact original highlight (including yellow).
-      suggestion.previousHighlightColor = existingHighlightColor;
+      suggestion.previousHighlightColor = sanitizeRestoredHighlightColor(existingHighlightColor);
       suggestion.previousUnderline = null;
       suggestion.previousUnderlineColor = null;
       suggestion.underlineBaselineKey = null;
@@ -4218,7 +4317,7 @@ function resolveTokenPairMatchInText(
     ? Math.max(0, Math.floor(options.maxGapLength))
     : 24;
   const gapPattern = allowQuoteGap
-    ? /^[\s"'`“”„«»’‘()\[\]]*$/u
+    ? /^[\s"'`â€œâ€â€žÂ«Â»â€™â€˜()\[\]]*$/u
     : /^\s*$/u;
 
   const candidates = [];
@@ -4785,12 +4884,23 @@ function selectInsertAnchor(meta) {
 
 async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   const meta = suggestion?.meta?.anchor;
-  if (!meta) return false;
+  if (!meta) {
+    traceQuoteSuggestion("apply.insert.skip", suggestion, { reason: "missing_anchor_meta" });
+    return false;
+  }
+  traceQuoteSuggestion("apply.insert.start", suggestion, {
+    lowReliability: Boolean(suggestion?.meta?.lowAnchorReliability),
+  });
   const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
   const lowReliability = Boolean(suggestion?.meta?.lowAnchorReliability);
   const insertCommaAtBoundary = async (text, rawPos, traceLabel, fallbackSnippet, options = {}) => {
     if (typeof text !== "string") return false;
     if (!Number.isFinite(rawPos) || rawPos < 0 || rawPos > text.length) {
+      traceQuoteSuggestion("apply.insert.boundary.skip", suggestion, {
+        traceLabel,
+        reason: "invalid_raw_pos",
+        rawPos,
+      });
       return false;
     }
     let insertionPos = Math.max(0, Math.min(text.length, Math.floor(rawPos)));
@@ -4801,6 +4911,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     }
     const prevChar = insertionPos > 0 ? text[insertionPos - 1] : "";
     const nextChar = insertionPos < text.length ? text[insertionPos] : "";
+    traceQuoteSuggestion("apply.insert.boundary.try", suggestion, {
+      traceLabel,
+      rawPos,
+      insertionPos,
+      prevChar,
+      nextChar,
+    });
     if (
       insertionPos > 0 &&
       insertionPos < text.length &&
@@ -4808,6 +4925,13 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       WORD_CHAR_REGEX.test(nextChar)
     ) {
       warn(`${traceLabel}: refusing in-word comma insertion`, { insertionPos, prevChar, nextChar });
+      traceQuoteSuggestion("apply.insert.boundary.skip", suggestion, {
+        traceLabel,
+        reason: "in_word_boundary",
+        insertionPos,
+        prevChar,
+        nextChar,
+      });
       return false;
     }
 
@@ -4829,6 +4953,11 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
         );
         if (gapRange) {
           gapRange.insertText(", ", Word.InsertLocation.replace);
+          traceQuoteSuggestion("apply.insert.boundary.success", suggestion, {
+            traceLabel,
+            mode: "replace_whitespace_gap",
+            insertionPos,
+          });
           return true;
         }
       }
@@ -4847,6 +4976,11 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       );
       if (!targetRange) return false;
       targetRange.insertText(",", Word.InsertLocation.before);
+      traceQuoteSuggestion("apply.insert.boundary.success", suggestion, {
+        traceLabel,
+        mode: "before_target",
+        insertionPos,
+      });
       return true;
     }
 
@@ -4862,6 +4996,11 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     );
     if (!targetRange) return false;
     targetRange.insertText(",", Word.InsertLocation.after);
+    traceQuoteSuggestion("apply.insert.boundary.success", suggestion, {
+      traceLabel,
+      mode: "append_after_last_char",
+      insertionPos,
+    });
     return true;
   };
   const insertCommaAtChar = async (charIndex, traceLabel) => {
@@ -5075,6 +5214,9 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
 
   if (lowReliability) {
     if (await tryInsertUsingOpCharHint("apply-insert-op-char-low-reliability")) {
+      traceQuoteSuggestion("apply.insert.success", suggestion, {
+        path: "low_reliability_char_hint",
+      });
       return true;
     }
   }
@@ -5108,12 +5250,30 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       try {
         const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
         const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
-        if (await replaceGapBetweenAnchors(beforeAnchor, afterAnchor, "apply-insert-token-gap")) return true;
-        if (await insertCommaBeforeToken(afterAnchor, "apply-insert-lemma-after-token")) return true;
-        if (await insertCommaAfterToken(beforeAnchor ?? anchor, "apply-insert-lemma-anchor")) return true;
+        if (await replaceGapBetweenAnchors(beforeAnchor, afterAnchor, "apply-insert-token-gap")) {
+          traceQuoteSuggestion("apply.insert.success", suggestion, {
+            path: "replace_gap_between_anchors",
+          });
+          return true;
+        }
+        if (await insertCommaBeforeToken(afterAnchor, "apply-insert-lemma-after-token")) {
+          traceQuoteSuggestion("apply.insert.success", suggestion, {
+            path: "insert_before_after_token",
+          });
+          return true;
+        }
+        if (await insertCommaAfterToken(beforeAnchor ?? anchor, "apply-insert-lemma-anchor")) {
+          traceQuoteSuggestion("apply.insert.success", suggestion, {
+            path: "insert_after_before_token",
+          });
+          return true;
+        }
         const hasTokenAnchors = Boolean(beforeAnchor || afterAnchor || meta.sourceTokenAt || meta.targetTokenAt);
         if (!hasTokenAnchors && Number.isFinite(anchorEnd) && anchorEnd >= 0) {
           if (await insertCommaAtChar(anchorEnd, "apply-insert-lemma-anchor")) {
+            traceQuoteSuggestion("apply.insert.success", suggestion, {
+              path: "insert_at_anchor_end_char",
+            });
             return true;
           }
         }
@@ -5130,13 +5290,36 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   );
   if (hasTokenAnchors) {
     // Avoid unsafe char fallback when token anchors exist but did not resolve cleanly.
+    traceQuoteSuggestion("apply.insert.skip", suggestion, {
+      reason: "token_anchors_present_char_fallback_blocked",
+    });
     return false;
   }
-  if (!Number.isFinite(insertionCharStart) || insertionCharStart < 0) return false;
+  if (!Number.isFinite(insertionCharStart) || insertionCharStart < 0) {
+    traceQuoteSuggestion("apply.insert.skip", suggestion, {
+      reason: "missing_insertion_char_start",
+      insertionCharStart,
+    });
+    return false;
+  }
   try {
-    return await insertCommaAtChar(insertionCharStart, "apply-insert-target-char");
+    const inserted = await insertCommaAtChar(insertionCharStart, "apply-insert-target-char");
+    if (inserted) {
+      traceQuoteSuggestion("apply.insert.success", suggestion, {
+        path: "target_char_fallback",
+      });
+    } else {
+      traceQuoteSuggestion("apply.insert.skip", suggestion, {
+        reason: "target_char_fallback_failed",
+      });
+    }
+    return inserted;
   } catch (err) {
     warn("apply insert metadata: failed to insert via target char", err);
+    traceQuoteSuggestion("apply.insert.error", suggestion, {
+      reason: "target_char_exception",
+      message: err?.message || null,
+    });
     return false;
   }
 }
@@ -5366,9 +5549,31 @@ const HIGHLIGHT_SCRUB_DELIMITERS = [
   "{",
   "}",
   "\"",
+  "'",
+  "«",
+  "»",
+  "“",
+  "”",
+  "‘",
+  "’",
   "-",
   "–",
   "—",
+];
+
+const HIGHLIGHT_SCRUB_PUNCTUATION = [
+  ",",
+  ".",
+  ";",
+  ":",
+  "!",
+  "?",
+  "\"",
+  "'",
+  "\u00BB",
+  "\u00AB",
+  "(",
+  ")",
 ];
 
 async function clearResidualVejiceHighlightsInParagraph(context, paragraph, options = {}) {
@@ -5377,6 +5582,16 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph, opti
   try {
     const contentRange = paragraph.getRange("Content");
     const textRanges = contentRange.getTextRanges(HIGHLIGHT_SCRUB_DELIMITERS, false);
+    const punctuationMatches = HIGHLIGHT_SCRUB_PUNCTUATION.map((mark) => {
+      const matches = contentRange.search(mark, {
+        matchCase: false,
+        matchWholeWord: false,
+        ignorePunct: false,
+        ignoreSpace: false,
+      });
+      matches.load("items/font/underline,items/font/highlightColor");
+      return matches;
+    });
     textRanges.load("items/font/underline,items/font/highlightColor");
     contentRange.font.load("underline,highlightColor");
     await context.sync();
@@ -5395,6 +5610,26 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph, opti
       if (includeLegacyHighlightColors && isStrictLegacyVejiceMarkerHighlightColor(range?.font?.highlightColor)) {
         range.font.highlightColor = null;
         changed = true;
+      }
+    }
+    for (const matches of punctuationMatches) {
+      for (const range of matches.items || []) {
+        if (isVejiceMarkerStyle(range?.font?.underline, null)) {
+          range.font.underline = "None";
+          try {
+            range.font.underlineColor = null;
+          } catch (_err) {
+            // ignore: underlineColor not supported on some hosts
+          }
+          changed = true;
+        }
+        if (
+          includeLegacyHighlightColors &&
+          isStrictLegacyVejiceMarkerHighlightColor(range?.font?.highlightColor)
+        ) {
+          range.font.highlightColor = null;
+          changed = true;
+        }
       }
     }
     if (isVejiceMarkerStyle(contentRange?.font?.underline, null)) {
@@ -5423,9 +5658,99 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph, opti
 
 async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, indexes, options = {}) {
   if (!indexes?.size) return;
+  const includeLegacyHighlightColors = Boolean(options?.includeLegacyHighlightColors);
+  const workItems = [];
   for (const idx of indexes) {
     const paragraph = paragraphs?.items?.[idx];
-    await clearResidualVejiceHighlightsInParagraph(context, paragraph, options);
+    if (!paragraph || typeof paragraph.getRange !== "function") continue;
+    const contentRange = paragraph.getRange("Content");
+    const textRanges = contentRange.getTextRanges(HIGHLIGHT_SCRUB_DELIMITERS, false);
+    const punctuationMatches = HIGHLIGHT_SCRUB_PUNCTUATION.map((mark) => {
+      const matches = contentRange.search(mark, {
+        matchCase: false,
+        matchWholeWord: false,
+        ignorePunct: false,
+        ignoreSpace: false,
+      });
+      matches.load("items/font/underline,items/font/highlightColor");
+      return matches;
+    });
+    textRanges.load("items/font/underline,items/font/highlightColor");
+    contentRange.font.load("underline,highlightColor");
+    workItems.push({ contentRange, textRanges, punctuationMatches });
+  }
+  if (!workItems.length) return;
+
+  try {
+    await context.sync();
+    let changed = false;
+    for (const item of workItems) {
+      const contentRange = item.contentRange;
+      const textRanges = item.textRanges;
+      const punctuationMatches = item.punctuationMatches;
+
+      for (const range of textRanges.items || []) {
+        if (isVejiceMarkerStyle(range?.font?.underline, null)) {
+          range.font.underline = "None";
+          try {
+            range.font.underlineColor = null;
+          } catch (_err) {
+            // ignore: underlineColor not supported on some hosts
+          }
+          changed = true;
+        }
+        if (
+          includeLegacyHighlightColors &&
+          isStrictLegacyVejiceMarkerHighlightColor(range?.font?.highlightColor)
+        ) {
+          range.font.highlightColor = null;
+          changed = true;
+        }
+      }
+
+      for (const matches of punctuationMatches) {
+        for (const range of matches.items || []) {
+          if (isVejiceMarkerStyle(range?.font?.underline, null)) {
+            range.font.underline = "None";
+            try {
+              range.font.underlineColor = null;
+            } catch (_err) {
+              // ignore: underlineColor not supported on some hosts
+            }
+            changed = true;
+          }
+          if (
+            includeLegacyHighlightColors &&
+            isStrictLegacyVejiceMarkerHighlightColor(range?.font?.highlightColor)
+          ) {
+            range.font.highlightColor = null;
+            changed = true;
+          }
+        }
+      }
+
+      if (isVejiceMarkerStyle(contentRange?.font?.underline, null)) {
+        contentRange.font.underline = "None";
+        try {
+          contentRange.font.underlineColor = null;
+        } catch (_err) {
+          // ignore: underlineColor not supported on some hosts
+        }
+        changed = true;
+      }
+      if (
+        includeLegacyHighlightColors &&
+        isStrictLegacyVejiceMarkerHighlightColor(contentRange?.font?.highlightColor)
+      ) {
+        contentRange.font.highlightColor = null;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await context.sync();
+    }
+  } catch (err) {
+    warn("Residual highlight scrub failed", err);
   }
 }
 
@@ -5468,6 +5793,46 @@ async function clearStaleVejiceMarkerControlsInParagraph(context, paragraph) {
   } catch (err) {
     warn("clearStaleVejiceMarkerControlsInParagraph failed", err);
     return 0;
+  }
+}
+
+async function clearStaleVejiceMarkerControlsForParagraphs(context, paragraphs, indexes) {
+  if (!indexes?.size) return { removed: 0, failed: false };
+  const scopedControls = [];
+  try {
+    for (const idx of indexes) {
+      const paragraph = paragraphs?.items?.[idx];
+      if (!paragraph || typeof paragraph.getRange !== "function") continue;
+      const controls = paragraph.getRange("Content").contentControls;
+      controls.load("items/tag,title");
+      scopedControls.push(controls);
+    }
+    if (!scopedControls.length) return { removed: 0, failed: false };
+    await context.sync();
+
+    const toDelete = [];
+    for (const controls of scopedControls) {
+      for (const control of controls.items || []) {
+        const tag = typeof control?.tag === "string" ? control.tag : "";
+        const title = typeof control?.title === "string" ? control.title : "";
+        if (tag.startsWith(VEJICE_MARKER_TAG_PREFIX) || title === VEJICE_MARKER_TITLE) {
+          toDelete.push(control);
+        }
+      }
+    }
+    if (!toDelete.length) return { removed: 0, failed: false };
+    for (const control of toDelete) {
+      try {
+        control.delete(true);
+      } catch (deleteErr) {
+        warn("Failed to delete stale scoped marker control", deleteErr);
+      }
+    }
+    await context.sync();
+    return { removed: toDelete.length, failed: false };
+  } catch (err) {
+    warn("clearStaleVejiceMarkerControlsForParagraphs failed", err);
+    return { removed: 0, failed: true };
   }
 }
 
@@ -5584,7 +5949,7 @@ function applyMarkerRestoreFormatting(range, suggestion) {
   const restoreWordUnderline = toWordUnderline(restoreMarker?.underline);
   const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
   if (suggestion.markerChannel === "highlight") {
-    range.font.highlightColor = suggestion.previousHighlightColor || null;
+    range.font.highlightColor = sanitizeRestoredHighlightColor(suggestion.previousHighlightColor);
     return true;
   }
   range.font.underline = restoreWordUnderline;
@@ -5732,10 +6097,7 @@ async function clearSuggestionMarkersByKnownTags(context, markerTags, options = 
     const restoreUnderline = toWordUnderline(restoreState?.previousUnderline);
     const restoreUnderlineColor = normalizeHighlightColorValue(restoreState?.previousUnderlineColor);
     const restoreChannel = restoreState?.markerChannel;
-    const restoreHighlight =
-      typeof restoreState?.previousHighlightColor === "string" || restoreState?.previousHighlightColor === null
-        ? restoreState.previousHighlightColor
-        : null;
+    const restoreHighlight = sanitizeRestoredHighlightColor(restoreState?.previousHighlightColor);
     for (const control of items) {
       try {
         const controlRange = control.getRange("Content");
@@ -5785,6 +6147,7 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
   const restoreWordUnderlineColor = normalizeHighlightColorValue(restoreMarker?.underlineColor);
   const skipTagLookup = Boolean(options?.skipTagLookup);
   const deleteTaggedControl = options?.deleteTaggedControl !== false;
+  const disableTextFallback = Boolean(options?.disableTextFallback);
   if (isWordOnline() && !skipTagLookup) {
     const markerTag = getSuggestionMarkerTag(suggestion, { create: false });
     if (markerTag) {
@@ -5796,7 +6159,9 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
           for (const control of controls.items) {
             const controlRange = control.getRange("Content");
             if (suggestion.markerChannel === "highlight") {
-              controlRange.font.highlightColor = suggestion.previousHighlightColor || null;
+              controlRange.font.highlightColor = sanitizeRestoredHighlightColor(
+                suggestion.previousHighlightColor
+              );
             } else {
               controlRange.font.underline = restoreWordUnderline;
               try {
@@ -5825,7 +6190,9 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
     let clearedViaTrackedRange = false;
     try {
       if (suggestion.markerChannel === "highlight") {
-        suggestion.highlightRange.font.highlightColor = suggestion.previousHighlightColor || null;
+        suggestion.highlightRange.font.highlightColor = sanitizeRestoredHighlightColor(
+          suggestion.previousHighlightColor
+        );
       } else {
         suggestion.highlightRange.font.underline = restoreWordUnderline;
         try {
@@ -5876,16 +6243,16 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
     );
   }
   // Fallbacks: when highlight was created via snippet/ordinal path, anchor lookup can miss.
-  if (!range && suggestion?.kind === "insert") {
+  if (!range && !disableTextFallback && suggestion?.kind === "insert") {
     range = await findRangeForInsert(context, paragraph, suggestion);
   }
-  if (!range && suggestion?.kind === "delete") {
+  if (!range && !disableTextFallback && suggestion?.kind === "delete") {
     const liveText = paragraph.text || suggestion?.meta?.originalText || "";
     range = await findCommaRangeByOrdinal(context, paragraph, liveText, suggestion?.meta?.op || {});
   }
   if (range) {
     if (suggestion.markerChannel === "highlight") {
-      range.font.highlightColor = suggestion.previousHighlightColor || null;
+      range.font.highlightColor = sanitizeRestoredHighlightColor(suggestion.previousHighlightColor);
     } else {
       range.font.underline = restoreWordUnderline;
       try {
@@ -5911,6 +6278,7 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     requestedCount: normalizedEntries.length,
     clearedByTagCount: 0,
     clearedFallbackCount: 0,
+    postTagSanityClearedCount: 0,
     failedCount: 0,
     staleControlClears: 0,
   };
@@ -5935,11 +6303,106 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     }
     return result;
   }
+  const markerStateBySuggestion = new Map();
+  for (const entry of normalizedEntries) {
+    const suggestion = entry?.suggestion;
+    if (!suggestion) continue;
+    markerStateBySuggestion.set(suggestion, {
+      markerChannel: suggestion?.markerChannel ?? null,
+      previousHighlightColor: normalizeHighlightColorValue(suggestion?.previousHighlightColor),
+      previousUnderline: normalizeUnderlineStyleValue(suggestion?.previousUnderline),
+      previousUnderlineColor: normalizeHighlightColorValue(suggestion?.previousUnderlineColor),
+      highlightRange: suggestion?.highlightRange || null,
+    });
+  }
   const taggedResult = softClearOnly
     ? { clearedCount: 0, unresolvedEntries: normalizedEntries }
     : await clearSuggestionMarkersByTag(context, normalizedEntries);
   result.clearedByTagCount = taggedResult.clearedCount;
+  if (isQuoteTraceEnabled()) {
+    const quoteUnresolved = (taggedResult.unresolvedEntries || []).filter((entry) =>
+      suggestionTouchesQuoteBoundary(entry?.suggestion)
+    );
+    if (quoteUnresolved.length) {
+      log("[QUOTE TRACE]", "cleanup.unresolved_after_tag_clear", {
+        unresolvedCount: quoteUnresolved.length,
+        unresolved: quoteUnresolved.map((entry) => buildQuoteTraceSuggestionSnapshot(entry?.suggestion)),
+      });
+    }
+  }
+  const unresolvedSuggestionSet = new Set(
+    (taggedResult.unresolvedEntries || []).map((entry) => entry?.suggestion).filter(Boolean)
+  );
   let needsFinalSync = false;
+  if (!softClearOnly && taggedResult.clearedCount > 0) {
+    const postTagSanityEntries = normalizedEntries.filter((entry) => {
+      const suggestion = entry?.suggestion;
+      const markerState = markerStateBySuggestion.get(suggestion);
+      if (!suggestion || unresolvedSuggestionSet.has(suggestion)) return false;
+      if (!entry?.paragraph) return false;
+      if (markerState?.markerChannel !== "highlight") return false;
+      if (sanitizeRestoredHighlightColor(markerState?.previousHighlightColor) !== null) return false;
+      return true;
+    });
+    if (isQuoteTraceEnabled() && postTagSanityEntries.length) {
+      log("[QUOTE TRACE]", "cleanup.post_tag_sanity_candidates", {
+        candidateCount: postTagSanityEntries.length,
+        candidates: postTagSanityEntries.map((entry) =>
+          buildQuoteTraceSuggestionSnapshot(entry?.suggestion)
+        ),
+      });
+    }
+    for (const entry of postTagSanityEntries) {
+      const suggestion = entry.suggestion;
+      const paragraph = entry.paragraph;
+      const markerState = markerStateBySuggestion.get(suggestion);
+      const trackedRange = markerState?.highlightRange || null;
+      if (trackedRange && typeof trackedRange === "object") {
+        let clearedViaTrackedRange = false;
+        try {
+          applyMarkerRestoreFormatting(trackedRange, {
+            markerChannel: markerState.markerChannel,
+            previousHighlightColor: markerState.previousHighlightColor,
+            previousUnderline: markerState.previousUnderline,
+            previousUnderlineColor: markerState.previousUnderlineColor,
+          });
+          context.trackedObjects.remove(trackedRange);
+          clearedViaTrackedRange = true;
+        } catch (trackedErr) {
+          warn("cleanup.post_tag_sanity tracked range clear failed", trackedErr);
+        }
+        if (clearedViaTrackedRange) {
+          result.postTagSanityClearedCount += 1;
+          needsFinalSync = true;
+          resetSuggestionMarkerState(suggestion);
+          traceQuoteSuggestion("cleanup.post_tag_sanity_result", suggestion, {
+            cleared: true,
+            via: "tracked_range",
+          });
+          continue;
+        }
+      }
+      if (markerState) {
+        suggestion.markerChannel = markerState.markerChannel;
+        suggestion.previousHighlightColor = markerState.previousHighlightColor;
+        suggestion.previousUnderline = markerState.previousUnderline;
+        suggestion.previousUnderlineColor = markerState.previousUnderlineColor;
+      }
+      const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion, {
+        skipTagLookup: true,
+        deleteTaggedControl: false,
+        disableTextFallback: true,
+      });
+      if (cleared) {
+        result.postTagSanityClearedCount += 1;
+        needsFinalSync = true;
+      }
+      traceQuoteSuggestion("cleanup.post_tag_sanity_result", suggestion, {
+        cleared,
+        via: cleared ? "anchor_span" : "anchor_span_miss",
+      });
+    }
+  }
   for (const entry of taggedResult.unresolvedEntries) {
     const suggestion = entry.suggestion;
     const paragraph = entry.paragraph;
@@ -5948,6 +6411,10 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
       const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion, {
         skipTagLookup: false,
         deleteTaggedControl: !softClearOnly,
+      });
+      traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+        cleared,
+        hadParagraph: true,
       });
       if (cleared) {
         result.clearedFallbackCount += 1;
@@ -5964,10 +6431,20 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     if (suggestion?.highlightRange) {
       clearHighlight(suggestion);
       needsFinalSync = true;
+      traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+        cleared: true,
+        hadParagraph: false,
+        via: "tracked_highlight_range",
+      });
       continue;
     }
     resetSuggestionMarkerState(suggestion);
     result.failedCount += 1;
+    traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+      cleared: false,
+      hadParagraph: false,
+      reason: "no_paragraph_no_tracked_range",
+    });
   }
   if (!softClearOnly) {
     try {
@@ -5978,12 +6455,21 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
           paragraphIndexes.add(idx);
         }
       }
-      for (const idx of paragraphIndexes) {
-        const paragraph = paragraphs?.items?.[idx];
-        if (!paragraph) continue;
-        const removed = await clearStaleVejiceMarkerControlsInParagraph(context, paragraph);
-        if (removed > 0) {
-          result.staleControlClears += removed;
+      const scopedSweep = await clearStaleVejiceMarkerControlsForParagraphs(
+        context,
+        paragraphs,
+        paragraphIndexes
+      );
+      if (scopedSweep.removed > 0) {
+        result.staleControlClears += scopedSweep.removed;
+      } else if (scopedSweep.failed) {
+        for (const idx of paragraphIndexes) {
+          const paragraph = paragraphs?.items?.[idx];
+          if (!paragraph) continue;
+          const removed = await clearStaleVejiceMarkerControlsInParagraph(context, paragraph);
+          if (removed > 0) {
+            result.staleControlClears += removed;
+          }
         }
       }
       if (result.staleControlClears > 0) {
@@ -6014,6 +6500,9 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
   }
   if (!suggestionsOverride) {
     resetPendingSuggestionsOnline();
+  }
+  if (isQuoteTraceEnabled()) {
+    log("[QUOTE TRACE]", "cleanup.summary", result);
   }
   return result;
 }
@@ -6225,11 +6714,11 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
 
   const isQuoteOrSpaceBoundary = (value) =>
-    typeof value === "string" && /^[\s"'“”„«»’‘`]+$/.test(value);
+    typeof value === "string" && /^[\s"'â€œâ€â€žÂ«Â»â€™â€˜`]+$/.test(value);
   // In Word content, angled quotes can surface in either direction around boundaries.
-  // Treat both « and » as boundary quotes.
-  const isClosingQuoteOrCloser = (char) => /["'”»’)\]]/.test(char || "");
-  const isOpeningQuoteOrOpener = (char) => /["'“«‘(\[]/.test(char || "");
+  // Treat both Â« and Â» as boundary quotes.
+  const isClosingQuoteOrCloser = (char) => /["'â€Â»â€™)\]]/.test(char || "");
+  const isOpeningQuoteOrOpener = (char) => /["'â€œÂ«â€˜(\[]/.test(char || "");
   const normalizeInsertPosForQuoteBoundary = (pos, options = {}) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
     if (options?.allowHeuristic === false) return pos;
@@ -6345,8 +6834,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (gapText && isQuoteOrSpaceBoundary(gapText)) {
       const trimmedGap = gapText.replace(/\s+/gu, "");
       if (trimmedGap) {
-        const leadingClosers = /^["'”»’)\]]+/u.exec(trimmedGap)?.[0] || "";
-        const trailingOpeners = /["'“«‘(\[]+$/u.exec(trimmedGap)?.[0] || "";
+        const leadingClosers = /^["'â€Â»â€™)\]]+/u.exec(trimmedGap)?.[0] || "";
+        const trailingOpeners = /["'â€œÂ«â€˜(\[]+$/u.exec(trimmedGap)?.[0] || "";
         if (leadingClosers && (!trailingOpeners || preferredSide === "after_before_token")) {
           quotePolicy = "after_closing_quote";
         } else if (trailingOpeners) {
@@ -6909,9 +7398,9 @@ function normalizeDeleteContextToken(rawToken) {
 function isSafeGapBetweenTokenAndComma(gap = "", direction = "before") {
   if (typeof gap !== "string") return false;
   if (direction === "before") {
-    return /^[\s"'”»’)\]]*$/.test(gap);
+    return /^[\s"'â€Â»â€™)\]]*$/.test(gap);
   }
-  return /^[\s"'“«‘(\[]*$/.test(gap);
+  return /^[\s"'â€œÂ«â€˜(\[]*$/.test(gap);
 }
 
 function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex) {
@@ -7223,6 +7712,10 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
     if (deterministicMode) {
       const deterministicConfidence = resolveDeterministicConfidenceLevel(suggestion);
       if (deterministicConfidence !== "high") {
+        traceQuoteSuggestion("planner.skip", suggestion, {
+          reason: "deterministic_low_confidence",
+          deterministicConfidence,
+        });
         setDeterministicSkipReason(suggestion, "deterministic_low_confidence");
         skipped.push({
           suggestion,
@@ -7238,6 +7731,13 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
       opResult = resolveInsertOperation(snapshotText, sourceText, suggestion);
     }
     const op = opResult?.op ?? null;
+    traceQuoteSuggestion("planner.resolve", suggestion, {
+      opKind: op?.kind || null,
+      opStart: Number.isFinite(op?.start) ? op.start : null,
+      opEnd: Number.isFinite(op?.end) ? op.end : null,
+      opReplacement: typeof op?.replacement === "string" ? op.replacement : null,
+      skipReason: opResult?.skipReason || null,
+    });
 
     if (!op) {
       if (deterministicMode) {
@@ -7251,10 +7751,17 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
     }
     clearDeterministicSkipReason(suggestion);
     if (op.kind === "noop") {
+      traceQuoteSuggestion("planner.noop", suggestion, {
+        reason: "resolved_noop",
+      });
       noop.push(suggestion);
       continue;
     }
     if (deterministicMode && !isDeterministicOpStable(snapshotText, sourceText, suggestion, op)) {
+      traceQuoteSuggestion("planner.skip", suggestion, {
+        reason: "deterministic_mapping_drift",
+        opKind: op?.kind || null,
+      });
       setDeterministicSkipReason(suggestion, "deterministic_mapping_drift");
       skipped.push({
         suggestion,
@@ -7289,6 +7796,9 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
       });
       if (hasPairedPlannedOperation) continue;
       droppedPlanIndexes.add(i);
+      traceQuoteSuggestion("planner.drop_unpaired_relocation", plannedSuggestion, {
+        reason: "paired_relocation_counterpart_unresolved",
+      });
       if (!skippedSuggestions.has(plannedSuggestion) && !noopSuggestions.has(plannedSuggestion)) {
         skipped.push({
           suggestion: plannedSuggestion,
@@ -7408,6 +7918,19 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
     }
 
     plan.push(current);
+  }
+
+  if (isQuoteTraceEnabled()) {
+    const quoteSuggestions = (suggestions || []).filter((suggestion) => suggestionTouchesQuoteBoundary(suggestion));
+    if (quoteSuggestions.length) {
+      log("[QUOTE TRACE]", "planner.summary", {
+        quoteSuggestions: quoteSuggestions.map((suggestion) => suggestion?.id ?? null),
+        rawPlanCount: rawPlan.length,
+        planCount: plan.length,
+        skippedCount: skipped.length,
+        noopCount: noop.length,
+      });
+    }
   }
 
   return { plan, skipped, noop };
@@ -7704,7 +8227,7 @@ export async function applySuggestionOnlineById(suggestionId = null) {
 
   const scanCompleted = await waitForOnlineScanCompletion();
   if (!scanCompleted) {
-    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.", "warn");
+    queueScanNotification("PoÄakajte, da se pregled dokumenta zakljuÄi, nato poskusite znova.", "warn");
     flushScanNotifications();
     return finalize("deferred", "scan-in-progress");
   }
@@ -8059,7 +8582,7 @@ export async function rejectSuggestionOnlineById(suggestionId = null) {
 
   const scanCompleted = await waitForOnlineScanCompletion();
   if (!scanCompleted) {
-    queueScanNotification("Počakajte, da se pregled dokumenta zaključi, nato poskusite znova.", "warn");
+    queueScanNotification("PoÄakajte, da se pregled dokumenta zakljuÄi, nato poskusite znova.", "warn");
     flushScanNotifications();
     return finalize("deferred", "scan-in-progress");
   }
@@ -9310,11 +9833,7 @@ async function checkDocumentTextOnline(checkToken) {
             existingSuggestion?.markerChannel === "underline"
               ? existingSuggestion.markerChannel
               : null,
-          previousHighlightColor:
-            existingSuggestion?.previousHighlightColor === null ||
-            typeof existingSuggestion?.previousHighlightColor === "string"
-              ? existingSuggestion.previousHighlightColor
-              : null,
+          previousHighlightColor: sanitizeRestoredHighlightColor(existingSuggestion?.previousHighlightColor),
           previousUnderline:
             existingSuggestion?.previousUnderline === null ||
             typeof existingSuggestion?.previousUnderline === "string"
@@ -9350,6 +9869,7 @@ async function checkDocumentTextOnline(checkToken) {
       let documentCharOffset = 0;
       let pendingHighlightParagraphs = 0;
       let pendingHighlightSuggestions = 0;
+      let hasFlushedHighlightsInCurrentCheck = false;
       const markerParagraphCleanupDone = new Set();
       const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
       const flushParagraphThreshold = resolveOnlineHighlightFlushParagraphs();
@@ -9364,10 +9884,12 @@ async function checkDocumentTextOnline(checkToken) {
         pendingHighlightParagraphs++;
         pendingHighlightSuggestions += highlightedInParagraph;
         const shouldFlushNow =
+          !hasFlushedHighlightsInCurrentCheck ||
           pendingHighlightParagraphs >= flushParagraphThreshold ||
           pendingHighlightSuggestions >= flushSuggestionThreshold;
         if (shouldFlushNow) {
           await context.sync();
+          hasFlushedHighlightsInCurrentCheck = true;
           pendingHighlightParagraphs = 0;
           pendingHighlightSuggestions = 0;
         }
@@ -9446,7 +9968,9 @@ async function checkDocumentTextOnline(checkToken) {
               if (previousMarkerState.markerTag) {
                 suggestionObj.markerTag = previousMarkerState.markerTag;
               }
-              suggestionObj.previousHighlightColor = previousMarkerState.previousHighlightColor;
+              suggestionObj.previousHighlightColor = sanitizeRestoredHighlightColor(
+                previousMarkerState.previousHighlightColor
+              );
               suggestionObj.previousUnderline = previousMarkerState.previousUnderline;
               suggestionObj.previousUnderlineColor = previousMarkerState.previousUnderlineColor;
             }
@@ -9682,51 +10206,8 @@ async function checkDocumentTextOnline(checkToken) {
           cacheMisses,
         });
       }
-      const analysisResults = await runWithConcurrency(
-        analysisJobs,
-        onlineAnalyzeConcurrency,
-        async (job) => {
-          const startedAt = tnow();
-          try {
-            ensureCheckActionActive(checkToken);
-            if (checkAbortSignal?.aborted) {
-              throw new CheckAbortError(
-                "Check was cancelled",
-                checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
-              );
-            }
-            const result = await runWithTimeout(
-              () =>
-                commaEngine.analyzeParagraph({
-                  paragraphIndex: job.paragraphIndex,
-                  originalText: job.sourceText,
-                  normalizedOriginalText: job.normalizedOriginalText,
-                  paragraphDocOffset: job.paragraphDocOffset,
-                  abortSignal: checkAbortSignal,
-                }),
-              job.paragraphGuardTimeoutMs,
-              job.timeoutReason,
-              job.timeoutLabel
-            );
-            return {
-              job,
-              result,
-              error: null,
-              durationMs: Math.max(0, tnow() - startedAt),
-            };
-          } catch (error) {
-            return {
-              job,
-              result: null,
-              error,
-              durationMs: Math.max(0, tnow() - startedAt),
-            };
-          }
-        }
-      );
-
-      for (const analyzed of analysisResults) {
-        if (!analyzed?.job) continue;
+      const processAnalyzedOnlineJob = async (analyzed) => {
+        if (!analyzed?.job) return;
         const job = analyzed.job;
         const paragraphPhaseStartedAt = tnow();
         try {
@@ -9832,7 +10313,7 @@ async function checkDocumentTextOnline(checkToken) {
           ) {
             apiErrors++;
             notifyParagraphTimeout(job.paragraphIndex, paragraphTimeoutMs);
-            continue;
+            return;
           }
           apiErrors++;
           warn(`P${job.paragraphIndex} ONLINE: paragraph processing failed`, paragraphErr);
@@ -9842,7 +10323,71 @@ async function checkDocumentTextOnline(checkToken) {
           const analysisElapsedMs = Math.max(0, Number(analyzed.durationMs) || 0);
           recordParagraphTiming(analysisElapsedMs + renderElapsedMs);
         }
-      }
+      };
+
+      const analyzedByIndex = new Array(analysisJobs.length).fill(null);
+      let nextAnalyzedToRender = 0;
+      let orderedRenderDrain = Promise.resolve();
+      const drainReadyAnalyzedInOrder = () => {
+        orderedRenderDrain = orderedRenderDrain.then(async () => {
+          while (nextAnalyzedToRender < analyzedByIndex.length) {
+            const analyzed = analyzedByIndex[nextAnalyzedToRender];
+            if (!analyzed) break;
+            analyzedByIndex[nextAnalyzedToRender] = null;
+            nextAnalyzedToRender++;
+            await processAnalyzedOnlineJob(analyzed);
+          }
+        });
+        return orderedRenderDrain;
+      };
+
+      await runWithConcurrency(
+        analysisJobs,
+        onlineAnalyzeConcurrency,
+        async (job, index) => {
+          const startedAt = tnow();
+          let analyzed;
+          try {
+            ensureCheckActionActive(checkToken);
+            if (checkAbortSignal?.aborted) {
+              throw new CheckAbortError(
+                "Check was cancelled",
+                checkToken?.cancelReason || CHECK_ABORT_REASON_CANCELLED
+              );
+            }
+            const result = await runWithTimeout(
+              () =>
+                commaEngine.analyzeParagraph({
+                  paragraphIndex: job.paragraphIndex,
+                  originalText: job.sourceText,
+                  normalizedOriginalText: job.normalizedOriginalText,
+                  paragraphDocOffset: job.paragraphDocOffset,
+                  abortSignal: checkAbortSignal,
+                }),
+              job.paragraphGuardTimeoutMs,
+              job.timeoutReason,
+              job.timeoutLabel
+            );
+            analyzed = {
+              job,
+              result,
+              error: null,
+              durationMs: Math.max(0, tnow() - startedAt),
+            };
+          } catch (error) {
+            analyzed = {
+              job,
+              result: null,
+              error,
+              durationMs: Math.max(0, tnow() - startedAt),
+            };
+          }
+          analyzedByIndex[index] = analyzed;
+          await drainReadyAnalyzedInOrder();
+          return analyzed;
+        }
+      );
+      await drainReadyAnalyzedInOrder();
 
       persistPendingSuggestionsOnline();
       await context.sync();

@@ -998,6 +998,7 @@ async function requestPopravek(poved, options = {}) {
       const canTryProtectedDots =
         !protectedRetryUsed &&
         !USE_MOCK &&
+        !primaryPayload.dotProtected &&
         typeof info?.status === "number" &&
         info.status >= 500 &&
         hasProblematicDotPattern(poved);
