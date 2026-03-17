@@ -5817,6 +5817,7 @@ async function clearHighlightBySpanSweepForParagraphs(context, paragraphSweepIte
       paragraph,
       spans: mergeCharacterSpans(item.spans),
       textRanges,
+      restoreHighlightColor: sanitizeRestoredHighlightColor(item?.restoreHighlightColor),
     });
   }
   if (!workItems.length) {
@@ -5849,7 +5850,7 @@ async function clearHighlightBySpanSweepForParagraphs(context, paragraphSweepIte
         const tokenEnd = tokenStart + token.length;
         cursor = tokenEnd;
         if (!doesRangeIntersectAnySpan(tokenStart, tokenEnd, item.spans)) continue;
-        range.font.highlightColor = null;
+        range.font.highlightColor = item.restoreHighlightColor;
         clearedRangeCount += 1;
         paragraphChanged = true;
         changed = true;
@@ -6653,22 +6654,25 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     if (
       entry?.unresolvedReason === "no_controls" &&
       markerState?.markerChannel === "highlight" &&
-      sanitizeRestoredHighlightColor(markerState?.previousHighlightColor) === null &&
       Number.isFinite(paragraphIndex) &&
       paragraphIndex >= 0 &&
       Number.isFinite(visualBounds?.start) &&
       Number.isFinite(visualBounds?.end) &&
       visualBounds.end > visualBounds.start
     ) {
-      if (!unresolvedSweepByParagraph.has(paragraphIndex)) {
-        unresolvedSweepByParagraph.set(paragraphIndex, {
+      const restoreHighlightColor = sanitizeRestoredHighlightColor(markerState?.previousHighlightColor);
+      const restoreColorKey = normalizeHighlightColorToken(restoreHighlightColor) || "__clear__";
+      const paragraphSweepKey = `${paragraphIndex}:${restoreColorKey}`;
+      if (!unresolvedSweepByParagraph.has(paragraphSweepKey)) {
+        unresolvedSweepByParagraph.set(paragraphSweepKey, {
           paragraphIndex,
           paragraph: entry.paragraph,
           spans: [],
           entries: [],
+          restoreHighlightColor,
         });
       }
-      const group = unresolvedSweepByParagraph.get(paragraphIndex);
+      const group = unresolvedSweepByParagraph.get(paragraphSweepKey);
       group.spans.push({
         start: Math.max(0, visualBounds.start - 1),
         end: Math.max(visualBounds.end + 1, visualBounds.start + 1),
@@ -6711,6 +6715,7 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     if (preferSingleFlush) {
       const markerState = markerStateBySuggestion.get(suggestion);
       const trackedRange = markerState?.highlightRange || null;
+      const restoreHighlightColor = sanitizeRestoredHighlightColor(markerState?.previousHighlightColor);
       if (trackedRange && typeof trackedRange === "object") {
         let clearedViaTrackedRange = false;
         try {
@@ -6733,6 +6738,27 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
             cleared: true,
             hadParagraph: Boolean(paragraph),
             via: "tracked_range_only",
+          });
+          continue;
+        }
+      }
+      if (paragraph && restoreHighlightColor !== null) {
+        suggestion.markerChannel = markerState?.markerChannel ?? "highlight";
+        suggestion.previousHighlightColor = markerState?.previousHighlightColor ?? null;
+        suggestion.previousUnderline = markerState?.previousUnderline ?? null;
+        suggestion.previousUnderlineColor = markerState?.previousUnderlineColor ?? null;
+        const clearedViaAnchor = await clearHighlightForSuggestion(context, paragraph, suggestion, {
+          skipTagLookup: true,
+          deleteTaggedControl: false,
+          disableTextFallback: true,
+        });
+        if (clearedViaAnchor) {
+          result.clearedFallbackCount += 1;
+          needsFinalSync = true;
+          traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+            cleared: true,
+            hadParagraph: true,
+            via: "single_flush_anchor_restore",
           });
           continue;
         }
