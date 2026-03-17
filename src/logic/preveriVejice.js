@@ -3349,6 +3349,42 @@ function resolveSuggestionVisualBounds(suggestion) {
   return { start, end };
 }
 
+function mergeCharacterSpans(spans = []) {
+  const normalized = [];
+  for (const span of spans) {
+    const start = Number.isFinite(span?.start) ? Math.max(0, Math.floor(span.start)) : null;
+    const end = Number.isFinite(span?.end) ? Math.max(start ?? 0, Math.floor(span.end)) : null;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    normalized.push({ start, end });
+  }
+  if (!normalized.length) return [];
+  normalized.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged = [normalized[0]];
+  for (let i = 1; i < normalized.length; i += 1) {
+    const current = normalized[i];
+    const last = merged[merged.length - 1];
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end);
+      continue;
+    }
+    merged.push(current);
+  }
+  return merged;
+}
+
+function doesRangeIntersectAnySpan(start, end, spans = []) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !Array.isArray(spans) || !spans.length) {
+    return false;
+  }
+  for (const span of spans) {
+    if (!Number.isFinite(span?.start) || !Number.isFinite(span?.end)) continue;
+    if (end > span.start && start < span.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildSuggestionHighlightKey(suggestion) {
   const paragraphIndex = suggestion?.paragraphIndex;
   const visualBounds = resolveSuggestionVisualBounds(suggestion);
@@ -5659,6 +5695,7 @@ async function clearResidualVejiceHighlightsInParagraph(context, paragraph, opti
 async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, indexes, options = {}) {
   if (!indexes?.size) return;
   const includeLegacyHighlightColors = Boolean(options?.includeLegacyHighlightColors);
+  const commitChanges = options?.commitChanges !== false;
   const workItems = [];
   for (const idx of indexes) {
     const paragraph = paragraphs?.items?.[idx];
@@ -5746,12 +5783,95 @@ async function clearResidualVejiceHighlightsForParagraphs(context, paragraphs, i
         changed = true;
       }
     }
-    if (changed) {
+    if (changed && commitChanges) {
       await context.sync();
     }
+    return { changed, requiresCommit: changed && !commitChanges };
   } catch (err) {
     warn("Residual highlight scrub failed", err);
+    return { changed: false, requiresCommit: false };
   }
+}
+
+async function clearHighlightBySpanSweepForParagraphs(context, paragraphSweepItems = [], options = {}) {
+  const items = Array.isArray(paragraphSweepItems)
+    ? paragraphSweepItems.filter((item) => item?.paragraph && Array.isArray(item?.spans) && item.spans.length)
+    : [];
+  const commitChanges = options?.commitChanges !== false;
+  if (!items.length) {
+    return {
+      clearedRangeCount: 0,
+      touchedParagraphIndexes: new Set(),
+      requiresCommit: false,
+    };
+  }
+  const workItems = [];
+  for (const item of items) {
+    const paragraph = item.paragraph;
+    const contentRange = paragraph.getRange("Content");
+    const textRanges = contentRange.getTextRanges(HIGHLIGHT_SCRUB_DELIMITERS, false);
+    textRanges.load("items/text,items/font/highlightColor");
+    paragraph.load("text");
+    workItems.push({
+      paragraphIndex: item.paragraphIndex,
+      paragraph,
+      spans: mergeCharacterSpans(item.spans),
+      textRanges,
+    });
+  }
+  if (!workItems.length) {
+    return {
+      clearedRangeCount: 0,
+      touchedParagraphIndexes: new Set(),
+      requiresCommit: false,
+    };
+  }
+
+  const touchedParagraphIndexes = new Set();
+  let clearedRangeCount = 0;
+  let requiresCommit = false;
+  try {
+    await context.sync();
+    let changed = false;
+    for (const item of workItems) {
+      const paragraphText = item.paragraph?.text || "";
+      if (!paragraphText || !item.spans.length) continue;
+      let cursor = 0;
+      let paragraphChanged = false;
+      for (const range of item.textRanges.items || []) {
+        const token = typeof range?.text === "string" ? range.text : "";
+        if (!token) continue;
+        let tokenStart = paragraphText.indexOf(token, cursor);
+        if (tokenStart < 0 && cursor > 0) {
+          tokenStart = paragraphText.indexOf(token);
+        }
+        if (tokenStart < 0) continue;
+        const tokenEnd = tokenStart + token.length;
+        cursor = tokenEnd;
+        if (!doesRangeIntersectAnySpan(tokenStart, tokenEnd, item.spans)) continue;
+        range.font.highlightColor = null;
+        clearedRangeCount += 1;
+        paragraphChanged = true;
+        changed = true;
+      }
+      if (paragraphChanged && Number.isFinite(item.paragraphIndex) && item.paragraphIndex >= 0) {
+        touchedParagraphIndexes.add(item.paragraphIndex);
+      }
+    }
+    if (changed && commitChanges) {
+      await context.sync();
+    }
+    if (changed && !commitChanges) {
+      requiresCommit = true;
+    }
+  } catch (err) {
+    warn("clearHighlightBySpanSweepForParagraphs failed", err);
+  }
+  return {
+    clearedRangeCount,
+    touchedParagraphIndexes,
+    requiresCommit,
+  };
 }
 
 async function clearAllHighlightsForParagraphs(context, paragraphs, indexes) {
@@ -5968,12 +6088,16 @@ function normalizeSuggestionClearEntry(item, paragraphs) {
   return { suggestion, paragraph };
 }
 
-async function clearSuggestionMarkersByTag(context, entries) {
+async function clearSuggestionMarkersByTag(context, entries, options = {}) {
+  const commitChanges = options?.commitChanges !== false;
+  const deferMutations = Boolean(options?.deferMutations);
   const normalizedEntries = Array.isArray(entries) ? entries.filter((entry) => entry?.suggestion) : [];
   if (!normalizedEntries.length) {
     return {
       clearedCount: 0,
       unresolvedEntries: [],
+      requiresCommit: false,
+      pendingTagMutations: [],
     };
   }
   const taggedEntries = [];
@@ -5981,7 +6105,7 @@ async function clearSuggestionMarkersByTag(context, entries) {
   for (const entry of normalizedEntries) {
     const markerTag = getSuggestionMarkerTag(entry.suggestion, { create: false });
     if (!markerTag) {
-      unresolvedEntries.push(entry);
+      unresolvedEntries.push({ ...entry, unresolvedReason: "no_marker_tag" });
       continue;
     }
     try {
@@ -5990,13 +6114,15 @@ async function clearSuggestionMarkersByTag(context, entries) {
       taggedEntries.push({ ...entry, controls });
     } catch (err) {
       warn("clearSuggestionMarkersByTag: failed to queue content control load", err);
-      unresolvedEntries.push(entry);
+      unresolvedEntries.push({ ...entry, unresolvedReason: "tag_lookup_queue_failed" });
     }
   }
   if (!taggedEntries.length) {
     return {
       clearedCount: 0,
       unresolvedEntries,
+      requiresCommit: false,
+      pendingTagMutations: [],
     };
   }
   try {
@@ -6005,16 +6131,55 @@ async function clearSuggestionMarkersByTag(context, entries) {
     warn("clearSuggestionMarkersByTag: failed to load tagged controls", syncErr);
     return {
       clearedCount: 0,
-      unresolvedEntries: [...unresolvedEntries, ...taggedEntries.map((entry) => ({ suggestion: entry.suggestion, paragraph: entry.paragraph }))],
+      unresolvedEntries: [
+        ...unresolvedEntries,
+        ...taggedEntries.map((entry) => ({
+          suggestion: entry.suggestion,
+          paragraph: entry.paragraph,
+          unresolvedReason: "tag_lookup_sync_failed",
+        })),
+      ],
+      requiresCommit: false,
+      pendingTagMutations: [],
     };
   }
 
   let clearedCount = 0;
-  let changed = false;
+  let requiresCommit = false;
+  const pendingTagMutations = [];
+  if (deferMutations) {
+    for (const entry of taggedEntries) {
+      const items = entry.controls?.items || [];
+      if (!items.length) {
+        unresolvedEntries.push({
+          suggestion: entry.suggestion,
+          paragraph: entry.paragraph,
+          unresolvedReason: "no_controls",
+        });
+        continue;
+      }
+      pendingTagMutations.push({
+        suggestion: entry.suggestion,
+        paragraph: entry.paragraph,
+        controls: items,
+      });
+      clearedCount += 1;
+    }
+    return {
+      clearedCount,
+      unresolvedEntries,
+      requiresCommit: false,
+      pendingTagMutations,
+    };
+  }
   for (const entry of taggedEntries) {
     const items = entry.controls?.items || [];
     if (!items.length) {
-      unresolvedEntries.push({ suggestion: entry.suggestion, paragraph: entry.paragraph });
+      unresolvedEntries.push({
+        suggestion: entry.suggestion,
+        paragraph: entry.paragraph,
+        unresolvedReason: "no_controls",
+      });
       continue;
     }
     let entryCleared = false;
@@ -6023,7 +6188,7 @@ async function clearSuggestionMarkersByTag(context, entries) {
         const controlRange = control.getRange("Content");
         applyMarkerRestoreFormatting(controlRange, entry.suggestion);
         control.delete(true);
-        changed = true;
+        requiresCommit = true;
         entryCleared = true;
       } catch (err) {
         warn("clearSuggestionMarkersByTag: failed to clear tagged control", err);
@@ -6033,10 +6198,14 @@ async function clearSuggestionMarkersByTag(context, entries) {
       resetSuggestionMarkerState(entry.suggestion);
       clearedCount += 1;
     } else {
-      unresolvedEntries.push({ suggestion: entry.suggestion, paragraph: entry.paragraph });
+      unresolvedEntries.push({
+        suggestion: entry.suggestion,
+        paragraph: entry.paragraph,
+        unresolvedReason: "tag_clear_failed",
+      });
     }
   }
-  if (changed) {
+  if (requiresCommit && commitChanges) {
     try {
       await context.sync();
     } catch (syncErr) {
@@ -6046,6 +6215,8 @@ async function clearSuggestionMarkersByTag(context, entries) {
   return {
     clearedCount,
     unresolvedEntries,
+    requiresCommit: requiresCommit && !commitChanges,
+    pendingTagMutations,
   };
 }
 
@@ -6268,6 +6439,7 @@ async function clearHighlightForSuggestion(context, paragraph, suggestion, optio
 async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragraphs, options = {}) {
   const usingOverride = Array.isArray(suggestionsOverride);
   const softClearOnly = Boolean(options?.softClearOnly);
+  const preferSingleFlush = Boolean(options?.preferSingleFlush);
   const source = usingOverride ? suggestionsOverride : pendingSuggestionsOnline;
   const normalizedEntries = [];
   for (const item of source) {
@@ -6279,9 +6451,11 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     clearedByTagCount: 0,
     clearedFallbackCount: 0,
     postTagSanityClearedCount: 0,
+    postTagSanitySweepRangeCount: 0,
     failedCount: 0,
     staleControlClears: 0,
   };
+  let needsFinalSync = false;
 
   const clearHighlight = (sug) => {
     if (!sug?.highlightRange) return;
@@ -6316,9 +6490,18 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
     });
   }
   const taggedResult = softClearOnly
-    ? { clearedCount: 0, unresolvedEntries: normalizedEntries }
-    : await clearSuggestionMarkersByTag(context, normalizedEntries);
+    ? { clearedCount: 0, unresolvedEntries: normalizedEntries, requiresCommit: false }
+    : await clearSuggestionMarkersByTag(context, normalizedEntries, {
+        commitChanges: false,
+        deferMutations: preferSingleFlush,
+      });
   result.clearedByTagCount = taggedResult.clearedCount;
+  if (taggedResult.requiresCommit) {
+    needsFinalSync = true;
+  }
+  const pendingTagMutations = Array.isArray(taggedResult.pendingTagMutations)
+    ? taggedResult.pendingTagMutations
+    : [];
   if (isQuoteTraceEnabled()) {
     const quoteUnresolved = (taggedResult.unresolvedEntries || []).filter((entry) =>
       suggestionTouchesQuoteBoundary(entry?.suggestion)
@@ -6333,7 +6516,6 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
   const unresolvedSuggestionSet = new Set(
     (taggedResult.unresolvedEntries || []).map((entry) => entry?.suggestion).filter(Boolean)
   );
-  let needsFinalSync = false;
   if (!softClearOnly && taggedResult.clearedCount > 0) {
     const postTagSanityEntries = normalizedEntries.filter((entry) => {
       const suggestion = entry?.suggestion;
@@ -6352,7 +6534,65 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
         ),
       });
     }
+    const spanSweepByParagraph = new Map();
+    const postTagSanityFallbackEntries = [];
     for (const entry of postTagSanityEntries) {
+      const suggestion = entry.suggestion;
+      const paragraphIndex = suggestion?.paragraphIndex;
+      const visualBounds = resolveSuggestionVisualBounds(suggestion);
+      if (
+        !Number.isFinite(paragraphIndex) ||
+        paragraphIndex < 0 ||
+        !Number.isFinite(visualBounds?.start) ||
+        !Number.isFinite(visualBounds?.end) ||
+        visualBounds.end <= visualBounds.start
+      ) {
+        postTagSanityFallbackEntries.push(entry);
+        continue;
+      }
+      if (!spanSweepByParagraph.has(paragraphIndex)) {
+        spanSweepByParagraph.set(paragraphIndex, {
+          paragraphIndex,
+          paragraph: entry.paragraph,
+          spans: [],
+          entries: [],
+        });
+      }
+      const group = spanSweepByParagraph.get(paragraphIndex);
+      group.spans.push({
+        start: Math.max(0, visualBounds.start - 1),
+        end: Math.max(visualBounds.end + 1, visualBounds.start + 1),
+      });
+      group.entries.push(entry);
+    }
+    if (spanSweepByParagraph.size > 0) {
+      const sweepItems = [...spanSweepByParagraph.values()];
+      const sweepResult = await clearHighlightBySpanSweepForParagraphs(context, sweepItems, {
+        commitChanges: false,
+      });
+      if (sweepResult.clearedRangeCount > 0 || sweepResult.requiresCommit) {
+        needsFinalSync = true;
+        result.postTagSanitySweepRangeCount += sweepResult.clearedRangeCount;
+      }
+      for (const sweepItem of sweepItems) {
+        const paragraphTouched = sweepResult.touchedParagraphIndexes.has(sweepItem.paragraphIndex);
+        if (!paragraphTouched) {
+          postTagSanityFallbackEntries.push(...(sweepItem.entries || []));
+          continue;
+        }
+        for (const resolvedEntry of sweepItem.entries || []) {
+          const resolvedSuggestion = resolvedEntry?.suggestion;
+          if (!resolvedSuggestion) continue;
+          result.postTagSanityClearedCount += 1;
+          traceQuoteSuggestion("cleanup.post_tag_sanity_result", resolvedSuggestion, {
+            cleared: true,
+            via: "span_sweep",
+          });
+          resetSuggestionMarkerState(resolvedSuggestion);
+        }
+      }
+    }
+    for (const entry of postTagSanityFallbackEntries) {
       const suggestion = entry.suggestion;
       const paragraph = entry.paragraph;
       const markerState = markerStateBySuggestion.get(suggestion);
@@ -6403,13 +6643,114 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
       });
     }
   }
-  for (const entry of taggedResult.unresolvedEntries) {
+  const unresolvedSweepByParagraph = new Map();
+  const unresolvedFallbackEntries = [];
+  for (const entry of taggedResult.unresolvedEntries || []) {
+    const suggestion = entry?.suggestion;
+    const markerState = markerStateBySuggestion.get(suggestion);
+    const paragraphIndex = suggestion?.paragraphIndex;
+    const visualBounds = resolveSuggestionVisualBounds(suggestion);
+    if (
+      entry?.unresolvedReason === "no_controls" &&
+      markerState?.markerChannel === "highlight" &&
+      sanitizeRestoredHighlightColor(markerState?.previousHighlightColor) === null &&
+      Number.isFinite(paragraphIndex) &&
+      paragraphIndex >= 0 &&
+      Number.isFinite(visualBounds?.start) &&
+      Number.isFinite(visualBounds?.end) &&
+      visualBounds.end > visualBounds.start
+    ) {
+      if (!unresolvedSweepByParagraph.has(paragraphIndex)) {
+        unresolvedSweepByParagraph.set(paragraphIndex, {
+          paragraphIndex,
+          paragraph: entry.paragraph,
+          spans: [],
+          entries: [],
+        });
+      }
+      const group = unresolvedSweepByParagraph.get(paragraphIndex);
+      group.spans.push({
+        start: Math.max(0, visualBounds.start - 1),
+        end: Math.max(visualBounds.end + 1, visualBounds.start + 1),
+      });
+      group.entries.push(entry);
+      continue;
+    }
+    unresolvedFallbackEntries.push(entry);
+  }
+  if (unresolvedSweepByParagraph.size > 0) {
+    const unresolvedSweepItems = [...unresolvedSweepByParagraph.values()];
+    const unresolvedSweepResult = await clearHighlightBySpanSweepForParagraphs(context, unresolvedSweepItems, {
+      commitChanges: false,
+    });
+    if (unresolvedSweepResult.clearedRangeCount > 0 || unresolvedSweepResult.requiresCommit) {
+      needsFinalSync = true;
+    }
+    for (const sweepItem of unresolvedSweepItems) {
+      const paragraphTouched = unresolvedSweepResult.touchedParagraphIndexes.has(sweepItem.paragraphIndex);
+      if (!paragraphTouched) {
+        unresolvedFallbackEntries.push(...(sweepItem.entries || []));
+        continue;
+      }
+      for (const resolvedEntry of sweepItem.entries || []) {
+        const resolvedSuggestion = resolvedEntry?.suggestion;
+        if (!resolvedSuggestion) continue;
+        result.clearedFallbackCount += 1;
+        resetSuggestionMarkerState(resolvedSuggestion);
+        traceQuoteSuggestion("cleanup.clear_result", resolvedSuggestion, {
+          cleared: true,
+          hadParagraph: true,
+          via: "span_sweep",
+        });
+      }
+    }
+  }
+  for (const entry of unresolvedFallbackEntries) {
     const suggestion = entry.suggestion;
     const paragraph = entry.paragraph;
+    if (preferSingleFlush) {
+      const markerState = markerStateBySuggestion.get(suggestion);
+      const trackedRange = markerState?.highlightRange || null;
+      if (trackedRange && typeof trackedRange === "object") {
+        let clearedViaTrackedRange = false;
+        try {
+          applyMarkerRestoreFormatting(trackedRange, {
+            markerChannel: markerState.markerChannel,
+            previousHighlightColor: markerState.previousHighlightColor,
+            previousUnderline: markerState.previousUnderline,
+            previousUnderlineColor: markerState.previousUnderlineColor,
+          });
+          context.trackedObjects.remove(trackedRange);
+          clearedViaTrackedRange = true;
+        } catch (trackedErr) {
+          warn("cleanup.clear_result tracked range clear failed", trackedErr);
+        }
+        if (clearedViaTrackedRange) {
+          result.clearedFallbackCount += 1;
+          needsFinalSync = true;
+          resetSuggestionMarkerState(suggestion);
+          traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+            cleared: true,
+            hadParagraph: Boolean(paragraph),
+            via: "tracked_range_only",
+          });
+          continue;
+        }
+      }
+      resetSuggestionMarkerState(suggestion);
+      result.failedCount += 1;
+      traceQuoteSuggestion("cleanup.clear_result", suggestion, {
+        cleared: false,
+        hadParagraph: Boolean(paragraph),
+        reason: "single_flush_skip_anchor",
+      });
+      continue;
+    }
     if (paragraph) {
       const clearedBeforeTrackedFallback = result.clearedFallbackCount;
+      const canSkipTagLookup = entry?.unresolvedReason === "no_controls";
       const cleared = await clearHighlightForSuggestion(context, paragraph, suggestion, {
-        skipTagLookup: false,
+        skipTagLookup: canSkipTagLookup,
         deleteTaggedControl: !softClearOnly,
       });
       traceQuoteSuggestion("cleanup.clear_result", suggestion, {
@@ -6446,7 +6787,30 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
       reason: "no_paragraph_no_tracked_range",
     });
   }
-  if (!softClearOnly) {
+  if (pendingTagMutations.length) {
+    for (const mutation of pendingTagMutations) {
+      const suggestion = mutation?.suggestion;
+      const markerState = markerStateBySuggestion.get(suggestion);
+      const controls = Array.isArray(mutation?.controls) ? mutation.controls : [];
+      for (const control of controls) {
+        try {
+          const controlRange = control.getRange("Content");
+          applyMarkerRestoreFormatting(controlRange, {
+            markerChannel: markerState?.markerChannel ?? "highlight",
+            previousHighlightColor: markerState?.previousHighlightColor ?? null,
+            previousUnderline: markerState?.previousUnderline ?? null,
+            previousUnderlineColor: markerState?.previousUnderlineColor ?? null,
+          });
+          control.delete(true);
+          needsFinalSync = true;
+        } catch (tagMutationErr) {
+          warn("clearOnlineSuggestionMarkers: deferred tag mutation failed", tagMutationErr);
+        }
+      }
+      resetSuggestionMarkerState(suggestion);
+    }
+  }
+  if (!softClearOnly && !preferSingleFlush) {
     try {
       const paragraphIndexes = new Set();
       for (const entry of normalizedEntries) {
@@ -6475,9 +6839,13 @@ async function clearOnlineSuggestionMarkers(context, suggestionsOverride, paragr
       if (result.staleControlClears > 0) {
         result.clearedFallbackCount += result.staleControlClears;
       }
-      await clearResidualVejiceHighlightsForParagraphs(context, paragraphs, paragraphIndexes, {
+      const residualSweep = await clearResidualVejiceHighlightsForParagraphs(context, paragraphs, paragraphIndexes, {
         includeLegacyHighlightColors: true,
+        commitChanges: false,
       });
+      if (residualSweep?.requiresCommit) {
+        needsFinalSync = true;
+      }
     } catch (staleErr) {
       warn("clearOnlineSuggestionMarkers: stale marker sweep failed", staleErr);
     }
@@ -9162,7 +9530,9 @@ export async function clearPendingSuggestionHighlightsOnline() {
             ? paras.items[suggestion.paragraphIndex] || null
             : null,
       }));
-      const clearResult = await wordOnlineAdapter.clearHighlights(context, entries, paras);
+      const clearResult = await wordOnlineAdapter.clearHighlights(context, entries, paras, {
+        preferSingleFlush: true,
+      });
       summary.clearedMarkers =
         (clearResult?.clearedByTagCount || 0) + (clearResult?.clearedFallbackCount || 0);
       summary.failedClear = clearResult?.failedCount || 0;
