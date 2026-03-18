@@ -351,6 +351,57 @@ function sortPendingSuggestionsOnlineInPlace() {
   pendingSuggestionsOnline.sort(comparePendingSuggestionsByDocumentOrder);
 }
 
+function compareSuggestionsByRenderVisualOrder(left, right) {
+  const leftParagraph = Number.isFinite(left?.paragraphIndex) ? left.paragraphIndex : Number.MAX_SAFE_INTEGER;
+  const rightParagraph = Number.isFinite(right?.paragraphIndex) ? right.paragraphIndex : Number.MAX_SAFE_INTEGER;
+  if (leftParagraph !== rightParagraph) {
+    return leftParagraph - rightParagraph;
+  }
+
+  const leftBounds = resolveSuggestionVisualBounds(left);
+  const rightBounds = resolveSuggestionVisualBounds(right);
+  const leftStart =
+    Number.isFinite(leftBounds?.start) && leftBounds.start >= 0
+      ? leftBounds.start
+      : normalizeSuggestionPositionForOrdering(left);
+  const rightStart =
+    Number.isFinite(rightBounds?.start) && rightBounds.start >= 0
+      ? rightBounds.start
+      : normalizeSuggestionPositionForOrdering(right);
+  if (leftStart !== rightStart) {
+    return leftStart - rightStart;
+  }
+
+  const leftEnd =
+    Number.isFinite(leftBounds?.end) && leftBounds.end > leftStart ? leftBounds.end : leftStart + 1;
+  const rightEnd =
+    Number.isFinite(rightBounds?.end) && rightBounds.end > rightStart ? rightBounds.end : rightStart + 1;
+  if (leftEnd !== rightEnd) {
+    return leftEnd - rightEnd;
+  }
+
+  const leftKind = typeof left?.kind === "string" ? left.kind : "";
+  const rightKind = typeof right?.kind === "string" ? right.kind : "";
+  if (leftKind !== rightKind) {
+    if (leftKind === "delete") return -1;
+    if (rightKind === "delete") return 1;
+    return leftKind.localeCompare(rightKind);
+  }
+
+  const leftId = String(left?.id ?? "");
+  const rightId = String(right?.id ?? "");
+  if (leftId !== rightId) {
+    return leftId.localeCompare(rightId);
+  }
+  return 0;
+}
+
+function sortSuggestionsForRenderByVisualOrder(suggestions) {
+  const source = Array.isArray(suggestions) ? suggestions.filter(Boolean) : [];
+  if (source.length < 2) return source;
+  return [...source].sort(compareSuggestionsByRenderVisualOrder);
+}
+
 function addPendingSuggestionOnline(suggestion, { persist = true } = {}) {
   const renderKey = buildSuggestionRenderDedupKey(suggestion);
   if (renderKey && pendingSuggestionRenderKeys.has(renderKey)) {
@@ -3593,7 +3644,7 @@ function prepareSuggestionsForRender({
 
   if (typeof snapshotText !== "string") {
     return {
-      suggestions: dedupedSuggestions,
+      suggestions: sortSuggestionsForRenderByVisualOrder(dedupedSuggestions),
       renderDedupDropped: deduped.dropped,
       planDropped: 0,
       planCount: 0,
@@ -3611,7 +3662,8 @@ function prepareSuggestionsForRender({
     dedupedSuggestions
   );
   return {
-    suggestions: planPruned.suggestions,
+    // Planner order is descending for safe text edits; render should paint in document order.
+    suggestions: sortSuggestionsForRenderByVisualOrder(planPruned.suggestions),
     renderDedupDropped: deduped.dropped,
     planDropped: planPruned.dropped,
     planCount: planPruned.planCount,
