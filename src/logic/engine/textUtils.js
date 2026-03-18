@@ -1,6 +1,16 @@
 const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
-const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'“”„()«»]+/g;
-const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?'"“”„()«»]+$/g;
+const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'`\u201C\u201D\u201E()\u00AB\u00BB]+/gu;
+const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?"'`\u201C\u201D\u201E()\u00AB\u00BB]+$/gu;
+
+// Helper to strip leading/trailing quotes and punctuation from API tokens
+// so they can be found in paragraph text (critical fix for quote-containing tokens)
+export function stripTokenBoundaryPunctuation(text) {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(/^[\s"'`\u201C\u201D\u201E()\u00AB\u00BB]+/gu, "")
+    .replace(/[\s,.;:!?"'`\u201C\u201D\u201E()\u00AB\u00BB]+$/gu, "")
+    .trim();
+}
 
 export function normalizeParagraphWhitespace(text) {
   if (typeof text !== "string" || !text.length) return typeof text === "string" ? text : "";
@@ -25,7 +35,7 @@ export function normalizeTokenRepeatKey(text) {
     .toLowerCase();
 }
 
-export const QUOTES = new Set(['"', "'", "“", "”", "„", "«", "»"]);
+export const QUOTES = new Set(['"', "'", "\u201C", "\u201D", "\u201E", "\u00AB", "\u00BB"]);
 
 export const isDigit = (ch) => ch >= "0" && ch <= "9";
 export const charAtSafe = (s, i) => (i >= 0 && i < s.length ? s[i] : "");

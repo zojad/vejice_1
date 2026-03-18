@@ -200,16 +200,56 @@ function mockCorrectSentence(sentence = "") {
 function tokenizeForMock(text = "", prefix = "t") {
   if (typeof text !== "string" || !text.length) return [];
   const tokens = [];
-  const regex = /[^\s]+/g;
-  let match;
+  const isWordChar = (char) => /[\p{L}\p{N}]/u.test(char || "");
+  const isInnerWordJoiner = (char) => /['\u2019`-]/u.test(char || "");
+  // Define ONLY true quotation marks - NOT apostrophes which are inner word joiners
+  // Include: straight double quotes ("), curly quotes (""), guillemets («»)
+  // Exclude: apostrophes (') and right single quote (\u2019) which are word joiners
+  const isQuoteChar = (char) => /[""\u201C\u201D\u00AB\u00BB]/u.test(char || "");
   let idx = 1;
-  while ((match = regex.exec(text))) {
+  let cursor = 0;
+  while (cursor < text.length) {
+    while (cursor < text.length && /\s/u.test(text[cursor])) cursor++;
+    if (cursor >= text.length) break;
+    const start = cursor;
+    let end = cursor + 1;
+    const first = text[start];
+    // True quotation marks are always separate tokens for Slovenian comma placement
+    if (isQuoteChar(first)) {
+      end = start + 1;
+    } else if (isWordChar(first)) {
+      while (end < text.length) {
+        const next = text[end];
+        if (isWordChar(next)) {
+          end++;
+          continue;
+        }
+        // Stop at true quote characters - they'll be tokenized separately
+        if (isQuoteChar(next)) {
+          break;
+        }
+        // But DO continue through inner word joiners (apostrophes, dashes, backticks)
+        if (
+          isInnerWordJoiner(next) &&
+          end + 1 < text.length &&
+          isWordChar(text[end + 1])
+        ) {
+          end++;
+          continue;
+        }
+        break;
+      }
+    } else if (first === "." && text.slice(start, start + 3) === "...") {
+      end = start + 3;
+    }
+    const tokenText = text.slice(start, end);
     tokens.push({
       token_id: `${prefix}${idx++}`,
-      token: match[0],
-      start_char: match.index,
-      end_char: match.index + match[0].length,
+      token: tokenText,
+      start_char: start,
+      end_char: end,
     });
+    cursor = end;
   }
   return tokens;
 }
@@ -543,7 +583,7 @@ const apiCircuitBreakerState = {
   openedUntilTs: 0,
 };
 const RECENT_SERVER_FAILURE_CACHE_MAX_ENTRIES = 300;
-const RECENT_SERVER_FAILURE_TTL_MS = 5 * 60 * 1000;
+const RECENT_SERVER_FAILURE_TTL_MS = 60 * 1000;
 const recentServerFailureByRequestKey = new Map();
 
 function nowTimestampMs() {
@@ -678,9 +718,10 @@ const TRANSPORT_SPACE_LIKE_CHARS = new Set([
 const TRANSPORT_DASH_LIKE_CHARS = new Set(["\u2013", "\u2014", "\u2212"]);
 const TRANSPORT_QUOTE_LIKE_CHARS = new Set(["\u00AB", "\u00BB"]);
 const TRANSPORT_ZERO_WIDTH_OR_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\u200C\u200D\u2060\uFEFF]/u;
-const PRIVATE_USE_CHAR = /[\uE000-\uF8FF]/u;
-const PRIVATE_USE_CHAR_GLOBAL = /[\uE000-\uF8FF]/gu;
-const PRIVATE_USE_BETWEEN_DIGITS = /(\d)\s*[\uE000-\uF8FF]\s*(\d)/gu;
+const PRIVATE_USE_CHAR = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
+const PRIVATE_USE_CHAR_GLOBAL = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+const PRIVATE_USE_BETWEEN_DIGITS =
+  /(\d)\s*[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]\s*(\d)/gu;
 
 function hasProblematicDotPattern(text = "") {
   if (typeof text !== "string" || !text) return false;
@@ -726,6 +767,8 @@ function normalizeTransportText(text = "") {
       next = "-";
     } else if (TRANSPORT_QUOTE_LIKE_CHARS.has(original)) {
       next = '"';
+    } else if (PRIVATE_USE_CHAR.test(original)) {
+      next = " ";
     } else if (TRANSPORT_ZERO_WIDTH_OR_CONTROL.test(original)) {
       next = " ";
     }
@@ -870,7 +913,7 @@ async function requestPopravek(poved, options = {}) {
   const primaryRequestSentence = primaryPayload.requestSentence;
   const requestFailureKey = buildRequestFailureKey(primaryRequestSentence || poved);
   const recentServerFailure = getRecentServerFailureForRequest(requestFailureKey);
-  if (recentServerFailure && recentServerFailure.failCount >= 1) {
+  if (recentServerFailure && recentServerFailure.failCount >= 2) {
     const nowTs = nowTimestampMs();
     log("FAST-FAIL repeated failing payload", {
       requestKey: requestFailureKey,

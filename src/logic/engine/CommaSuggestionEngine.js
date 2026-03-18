@@ -1,4 +1,4 @@
-import { createSuggestion } from "./Suggestion.js";
+﻿import { createSuggestion } from "./Suggestion.js";
 import {
   normalizeParagraphWhitespace,
   onlyCommasChanged,
@@ -23,7 +23,7 @@ const LEMMA_MIN_SEGMENT_CHARS = 120;
 const LEMMA_SPLIT_CONFIDENCE_THRESHOLD = 0.9;
 const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
-const API_RECHUNK_MIN_CHARS = 260;
+const API_RECHUNK_MIN_CHARS = 120;
 const SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
 const CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
@@ -32,7 +32,7 @@ const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
-const TRAILING_BOUNDARY_CLOSER_REGEX = /["'\u201d\u00bb\u2019)\]]/u;
+const TRAILING_BOUNDARY_CLOSER_REGEX = /["'\u201d\u2019\u00ab\u00bb)\]]/u;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
@@ -1303,10 +1303,13 @@ function splitFailedChunkForRetry(chunk, depth = 0) {
 
   // Retry by sentence units only so failures skip at sentence granularity.
   // We intentionally avoid word/length slicing because it loses context.
-  const splitChunks = splitParagraphIntoChunks(chunk.text, MAX_PARAGRAPH_CHARS, {
+  let splitChunks = splitParagraphIntoChunks(chunk.text, MAX_PARAGRAPH_CHARS, {
     preferWholeParagraph: false,
     conservativePack: false,
   });
+  if (!Array.isArray(splitChunks) || splitChunks.length <= 1) {
+    splitChunks = splitChunkByLength(chunk.text, API_RECHUNK_MIN_CHARS);
+  }
   if (!Array.isArray(splitChunks) || splitChunks.length <= 1) return null;
 
   const parentNormalized = chunk.normalizedText || chunk.text;
@@ -1432,7 +1435,7 @@ function splitParagraphIntoChunks(
   );
   const sentences = [];
   let start = 0;
-  const sentenceLeadClosers = /[\])"'»”’]/;
+  const sentenceLeadClosers = /[\])"'\u00AB\u00BB\u201D\u2019]/u;
   const lowerLetter = /\p{Ll}/u;
   const upperLetter = /\p{Lu}/u;
   const letterOrDigit = /[\p{L}\d]/u;
@@ -1486,7 +1489,7 @@ function splitParagraphIntoChunks(
         continue;
       }
       let contentEnd = i + 1;
-      while (contentEnd < protectedText.length && /[\])"'»”’]+/.test(protectedText[contentEnd])) {
+      while (contentEnd < protectedText.length && /[\])"'\u00AB\u00BB\u201D\u2019]+/u.test(protectedText[contentEnd])) {
         contentEnd++;
       }
       let gapEnd = contentEnd;
@@ -1869,7 +1872,7 @@ function buildChunksFromLemmaTokens(text = "", lemmaTokens = [], maxLen = MAX_PA
 
   const sentences = [];
   let sentenceStart = 0;
-  const closerRegex = /[\])"'»”’]/;
+  const closerRegex = /[\])"'\u00AB\u201D\u2019]/u;
   const pushSentence = (contentEnd, gapEnd = contentEnd) => {
     if (typeof contentEnd !== "number" || contentEnd <= sentenceStart) {
       sentenceStart = Math.max(sentenceStart, gapEnd ?? contentEnd ?? sentenceStart);
@@ -2063,7 +2066,7 @@ function isSentenceBoundaryToken(currentToken, nextToken) {
       return /\p{Lu}/u.test(first);
     }
   }
-  const withoutClosers = trimmed.replace(/[\])"'»”’]+$/g, "");
+  const withoutClosers = trimmed.replace(/[\])"'\u00AB\u201D\u2019]+$/gu, "");
   const endChar = withoutClosers.slice(-1);
   if (!/[.!?]/.test(endChar)) return false;
   if (endChar === "?" || endChar === "!") return true;
@@ -2213,11 +2216,12 @@ function hasCommaAtBoundary(text, pos) {
       return true;
     }
   }
+  const isBoundary = (ch) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()\[\]]/u.test(ch || "");
   let left = safePos - 1;
-  while (left >= 0 && /\s/.test(text[left])) left--;
+  while (left >= 0 && isBoundary(text[left])) left--;
   if (left >= 0 && text[left] === ",") return true;
   let right = safePos;
-  while (right < text.length && /\s/.test(text[right])) right++;
+  while (right < text.length && isBoundary(text[right])) right++;
   if (right < text.length && text[right] === ",") return true;
   return false;
 }
@@ -2276,7 +2280,7 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
       originalPos,
       correctedPos,
       fromApiCommaOps: true,
-      fromCorrections: true,
+      fromCorrections: false,
       viaDiffFallback: false,
     });
   }
@@ -2293,11 +2297,12 @@ function findCommaIndexAtBoundary(text, pos) {
       return idx;
     }
   }
+  const isBoundary = (ch) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()\[\]]/u.test(ch || "");
   let left = safePos - 1;
-  while (left >= 0 && /\s/.test(text[left])) left--;
+  while (left >= 0 && isBoundary(text[left])) left--;
   if (left >= 0 && text[left] === ",") return left;
   let right = safePos;
-  while (right < text.length && /\s/.test(text[right])) right++;
+  while (right < text.length && isBoundary(text[right])) right++;
   if (right < text.length && text[right] === ",") return right;
   return -1;
 }
@@ -2460,7 +2465,7 @@ function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegmen
 function normalizeTokenForComparison(text) {
   if (typeof text !== "string") return "";
   return text
-    .replace(/[.,!?;:“”„'"«»]/g, "")
+    .replace(/[.,!?;:"'\u201C\u201D\u201E\u00AB\u00BB]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -2497,9 +2502,11 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
 
       let placementAnchor = anchor;
       if (entrySource && tokenText) {
+        const rawEntry = entrySource.replace(/\s+/g, " ").trim();
+        const rawToken = tokenText.replace(/\s+/g, " ").trim();
         const normEntry = normalizeTokenForComparison(entrySource);
         const normToken = normalizeTokenForComparison(tokenText);
-        if (normEntry !== normToken) {
+        if (rawEntry !== rawToken || normEntry !== normToken) {
           const merged = mergeAnchorsToMatchSourceText(
             entrySource,
             anchor,
@@ -2557,13 +2564,26 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           fromCorrections: true,
         });
       } else if (analysis.addComma) {
+        const correctedSegment = typeof entry?.text === "string" ? entry.text : "";
         const analysisBase =
           typeof analysis.baseText === "string" && normalizeTokenForComparison(analysis.baseText)
             ? analysis.baseText
             : null;
         const effectiveBase = analysisBase ?? baseText;
-        const relative = resolveCommaInsertBoundaryInSegment(effectiveBase);
+        const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedSegment);
+        const relative =
+          relativeFromCorrected >= 0
+            ? relativeFromCorrected
+            : resolveCommaInsertBoundaryInSegment(effectiveBase);
         const absolutePos = placementAnchor.charStart + relative;
+        const paragraphOriginalText =
+          typeof anchorsEntry?.originalText === "string" ? anchorsEntry.originalText : "";
+        // Correction entries can be token-local and miss trailing quote context.
+        // If the full paragraph already has a comma at this boundary (e.g. ",«"),
+        // suppress a duplicate insert op.
+        if (paragraphOriginalText && hasCommaAtBoundary(paragraphOriginalText, absolutePos)) {
+          continue;
+        }
         const key = `ins-${absolutePos}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -2836,8 +2856,18 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const originalText = typeof entry?.originalText === "string" ? entry.originalText : "";
   const correctedText = typeof entry?.correctedText === "string" ? entry.correctedText : "";
   const buildBoundaryMeta = () => {
-    const quoteCharsClosing = /["'\u201d\u00bb\u2019)\]]/u;
-    const quoteCharsOpening = /["'\u201c\u00ab\u2018(\[]/u;
+    const quoteCharsClosing = /["'\u201D\u2019\u00AB)\]]/u;
+    const quoteCharsOpening = /["'\u201C\u2018\u00BB(\[]/u;
+    const nearestNonSpaceLeft = (startIndex) => {
+      let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+      while (idx >= 0 && /\s/u.test(correctedText[idx] || "")) idx--;
+      return idx >= 0 ? correctedText[idx] || "" : "";
+    };
+    const nearestNonSpaceRight = (startIndex) => {
+      let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+      while (idx < correctedText.length && /\s/u.test(correctedText[idx] || "")) idx++;
+      return idx < correctedText.length ? correctedText[idx] || "" : "";
+    };
     const resolveCommaIndex = () => {
       if (!correctedText || !Number.isFinite(targetIndex) || targetIndex < 0) return -1;
       return findCommaIndexAtBoundary(correctedText, targetIndex);
@@ -2845,8 +2875,8 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     const classifyIntent = () => {
       const commaIndex = resolveCommaIndex();
       if (commaIndex < 0 || commaIndex >= correctedText.length) return "unknown";
-      const leftChar = correctedText[commaIndex - 1] || "";
-      const rightChar = correctedText[commaIndex + 1] || "";
+      const leftChar = nearestNonSpaceLeft(commaIndex - 1);
+      const rightChar = nearestNonSpaceRight(commaIndex + 1);
       if (quoteCharsClosing.test(rightChar)) return "before_closing_quote";
       if (quoteCharsClosing.test(leftChar)) return "after_closing_quote";
       if (quoteCharsOpening.test(rightChar)) return "before_opening_quote";
@@ -2873,13 +2903,27 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       exactApplyWindow: buildExactApplyWindowMeta(originalText, correctedText, srcIndex, targetIndex),
     };
   };
-  const highlightAnchor =
+  const isQuoteBoundaryToken = (value) =>
+    typeof value === "string" && /^[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()\[\]]+$/u.test(value);
+  let highlightAnchor =
     sourceAround.at ??
     sourceAround.before ??
     sourceAround.after ??
     targetAround.at ??
     targetAround.before ??
     targetAround.after;
+  if (isQuoteBoundaryToken(highlightAnchor?.tokenText)) {
+    const adjacentWordAnchor =
+      [
+        sourceAround.before,
+        targetAround.before,
+        sourceAround.after,
+        targetAround.after,
+      ].find((anchor) => /[\p{L}\p{N}]/u.test(anchor?.tokenText || "")) || null;
+    if (adjacentWordAnchor) {
+      highlightAnchor = adjacentWordAnchor;
+    }
+  }
   const highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   let highlightCharEnd = highlightAnchor?.charEnd;
   if (

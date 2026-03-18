@@ -2,6 +2,7 @@ import { AnchorProvider } from "./AnchorProvider.js";
 import {
   normalizeParagraphWhitespace,
   normalizeTokenRepeatKey,
+  stripTokenBoundaryPunctuation,
 } from "../engine/textUtils.js";
 
 export class SyntheticAnchorProvider extends AnchorProvider {
@@ -78,9 +79,11 @@ export function normalizeTokenList(tokens, prefix) {
 export function normalizeToken(rawToken, prefix, index) {
   if (rawToken === null || typeof rawToken === "undefined") return null;
   if (typeof rawToken === "string") {
+    // Strip quotes/punctuation from string tokens (critical for API tokens with quotes)
+    const cleanedText = stripTokenBoundaryPunctuation(rawToken);
     return {
       id: `${prefix}${index + 1}`,
-      text: rawToken,
+      text: cleanedText,
       raw: rawToken,
     };
   }
@@ -124,9 +127,13 @@ export function normalizeToken(rawToken, prefix, index) {
       rawToken.charEnd,
       rawToken.finish,
     ]);
+    // CRITICAL FIX: Strip leading/trailing quotes and punctuation from API tokens
+    // API returns tokens like "word" or "word", but paragraph text is just word
+    // Without this strip, indexOf() fails and anchor charStart becomes -1
+    const cleanedText = typeof textCandidate === "string" ? stripTokenBoundaryPunctuation(textCandidate) : "";
     return {
       id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
-      text: typeof textCandidate === "string" ? textCandidate : "",
+      text: cleanedText,
       trailingWhitespace: typeof trailing === "string" ? trailing : "",
       leadingWhitespace: typeof leading === "string" ? leading : "",
       charStart: startChar,
@@ -342,16 +349,56 @@ function findNextAnchorWithPosition(list, startIndex) {
 export function tokenizeForAnchoring(text = "", prefix = "syn") {
   if (typeof text !== "string" || !text.length) return [];
   const tokens = [];
-  const regex = /[^\s]+/g;
-  let match;
+  const isWordChar = (char) => /[\p{L}\p{N}]/u.test(char || "");
+  const isInnerWordJoiner = (char) => /['\u2019`-]/u.test(char || "");
+  // Define ONLY true quotation marks - NOT apostrophes which are inner word joiners
+  // Include: straight double quotes ("), curly quotes (""), guillemets («»)
+  // Exclude: apostrophes (') and right single quote (\u2019) which are word joiners
+  const isQuoteChar = (char) => /[""\u201C\u201D\u00AB\u00BB]/u.test(char || "");
   let idx = 1;
-  while ((match = regex.exec(text))) {
+  let cursor = 0;
+  while (cursor < text.length) {
+    while (cursor < text.length && /\s/u.test(text[cursor])) cursor++;
+    if (cursor >= text.length) break;
+    const start = cursor;
+    let end = cursor + 1;
+    const first = text[start];
+    // True quotation marks are always separate tokens for Slovenian comma placement
+    if (isQuoteChar(first)) {
+      end = start + 1;
+    } else if (isWordChar(first)) {
+      while (end < text.length) {
+        const next = text[end];
+        if (isWordChar(next)) {
+          end++;
+          continue;
+        }
+        // Stop at true quote characters - they'll be tokenized separately
+        if (isQuoteChar(next)) {
+          break;
+        }
+        // But DO continue through inner word joiners (apostrophes, dashes, backticks)
+        if (
+          isInnerWordJoiner(next) &&
+          end + 1 < text.length &&
+          isWordChar(text[end + 1])
+        ) {
+          end++;
+          continue;
+        }
+        break;
+      }
+    } else if (first === "." && text.slice(start, start + 3) === "...") {
+      end = start + 3;
+    }
+    const tokenText = text.slice(start, end);
     tokens.push({
       token_id: `${prefix}${idx++}`,
-      token: match[0],
-      start_char: match.index,
-      end_char: match.index + match[0].length,
+      token: tokenText,
+      start_char: start,
+      end_char: end,
     });
+    cursor = end;
   }
   return tokens;
 }

@@ -1,4 +1,5 @@
-vejice_1/node_modules/
-vejice_1/.env
+vejice_2/node_modules/
+vejice_2/.env
 node_modules
 .env.local
+vejice_2\QUOTE_PATTERNS_ANALYSIS.md

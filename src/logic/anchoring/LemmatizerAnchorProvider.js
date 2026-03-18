@@ -504,7 +504,7 @@ function normalizeForMatch(value) {
   return typeof value === "string"
     ? value
         .replace(/\s+/g, "")
-        .replace(/[.,!?;:“”„'"«»]/g, "")
+        .replace(/[.,!?;:"'\u201C\u201D\u201E\u00AB\u00BB]/gu, "")
         .toLowerCase()
     : "";
 }

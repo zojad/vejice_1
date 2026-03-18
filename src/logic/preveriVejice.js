@@ -360,22 +360,21 @@ function compareSuggestionsByRenderVisualOrder(left, right) {
 
   const leftBounds = resolveSuggestionVisualBounds(left);
   const rightBounds = resolveSuggestionVisualBounds(right);
-  const leftStart =
-    Number.isFinite(leftBounds?.start) && leftBounds.start >= 0
-      ? leftBounds.start
-      : normalizeSuggestionPositionForOrdering(left);
-  const rightStart =
-    Number.isFinite(rightBounds?.start) && rightBounds.start >= 0
-      ? rightBounds.start
-      : normalizeSuggestionPositionForOrdering(right);
+  const leftHasValidBounds = Number.isFinite(leftBounds?.start) && leftBounds.start >= 0;
+  const rightHasValidBounds = Number.isFinite(rightBounds?.start) && rightBounds.start >= 0;
+  const leftStart = leftHasValidBounds ? leftBounds.start : normalizeSuggestionPositionForOrdering(left);
+  const rightStart = rightHasValidBounds ? rightBounds.start : normalizeSuggestionPositionForOrdering(right);
   if (leftStart !== rightStart) {
     return leftStart - rightStart;
   }
 
-  const leftEnd =
-    Number.isFinite(leftBounds?.end) && leftBounds.end > leftStart ? leftBounds.end : leftStart + 1;
-  const rightEnd =
-    Number.isFinite(rightBounds?.end) && rightBounds.end > rightStart ? rightBounds.end : rightStart + 1;
+  // Only use bounds end if we also used bounds start (consistency)
+  const leftEnd = leftHasValidBounds && Number.isFinite(leftBounds?.end) && leftBounds.end > leftStart
+    ? leftBounds.end
+    : leftStart + 1;
+  const rightEnd = rightHasValidBounds && Number.isFinite(rightBounds?.end) && rightBounds.end > rightStart
+    ? rightBounds.end
+    : rightStart + 1;
   if (leftEnd !== rightEnd) {
     return leftEnd - rightEnd;
   }
@@ -1969,13 +1968,13 @@ function canonicalizeWithBoundaryMap(text, profile = getNormalizationProfile()) 
 
   const normalizeChar = (ch) => {
     if (profile?.normalizeQuotes) {
-      if ("\"â€œâ€â€žÂ«Â»".includes(ch)) return "\"";
-      if ("'`â€™â€˜â€šâ€›â€¹â€º".includes(ch)) return "'";
+      if ("\"\u201C\u201D\u201E\u00AB\u00BB".includes(ch)) return "\"";
+      if ("'`\u2019\u2018\u201A\u2039\u203A".includes(ch)) return "'";
     }
-    if (profile?.normalizeDashes && "â€“â€”âˆ’".includes(ch)) {
+    if (profile?.normalizeDashes && "\u2013\u2014\u2212".includes(ch)) {
       return "-";
     }
-    if (profile?.normalizeEllipsis && ch === "â€¦") {
+    if (profile?.normalizeEllipsis && ch === "\u2026") {
       return "...";
     }
     return ch;
@@ -2923,8 +2922,18 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const originalText = typeof entry?.originalText === "string" ? entry.originalText : "";
   const correctedText = typeof entry?.correctedText === "string" ? entry.correctedText : "";
   const buildBoundaryMeta = () => {
-    const quoteCharsClosing = /["'\u201d\u00bb\u2019)\]]/u;
-    const quoteCharsOpening = /["'\u201c\u00ab\u2018(\[]/u;
+    const quoteCharsClosing = /["'\u201D\u2019\u00AB)\]]/u;
+    const quoteCharsOpening = /["'\u201C\u2018\u00BB(\[]/u;
+    const nearestNonSpaceLeft = (startIndex) => {
+      let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+      while (idx >= 0 && /\s/u.test(correctedText[idx] || "")) idx--;
+      return idx >= 0 ? correctedText[idx] || "" : "";
+    };
+    const nearestNonSpaceRight = (startIndex) => {
+      let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+      while (idx < correctedText.length && /\s/u.test(correctedText[idx] || "")) idx++;
+      return idx < correctedText.length ? correctedText[idx] || "" : "";
+    };
     const resolveCommaIndex = () => {
       if (!correctedText || !Number.isFinite(targetIndex) || targetIndex < 0) return -1;
       const direct = [targetIndex, targetIndex - 1, targetIndex + 1];
@@ -2942,8 +2951,8 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     const classifyIntent = () => {
       const commaIndex = resolveCommaIndex();
       if (commaIndex < 0 || commaIndex >= correctedText.length) return "unknown";
-      const leftChar = correctedText[commaIndex - 1] || "";
-      const rightChar = correctedText[commaIndex + 1] || "";
+      const leftChar = nearestNonSpaceLeft(commaIndex - 1);
+      const rightChar = nearestNonSpaceRight(commaIndex + 1);
       if (quoteCharsClosing.test(rightChar)) return "before_closing_quote";
       if (quoteCharsClosing.test(leftChar)) return "after_closing_quote";
       if (quoteCharsOpening.test(rightChar)) return "before_opening_quote";
@@ -3588,6 +3597,9 @@ function pruneSuggestionsForRenderByPlan(snapshotText, sourceText, suggestions) 
     if (opSuggestions.length > 1) mergedGroupCount++;
     const chosen = pickRepresentativeSuggestionForOperation(operation);
     if (!chosen) continue;
+    if (isSuggestionAppliedInLiveText(snapshotText, sourceText, chosen)) {
+      continue;
+    }
     const renderKey = buildSuggestionRenderDedupKey(chosen) || chosen?.id || `${output.length}`;
     if (seenRenderKeys.has(renderKey)) continue;
     seenRenderKeys.add(renderKey);
@@ -3598,6 +3610,12 @@ function pruneSuggestionsForRenderByPlan(snapshotText, sourceText, suggestions) 
     for (const skippedItem of skipped) {
       const fallbackSuggestion = skippedItem?.suggestion;
       if (!fallbackSuggestion) continue;
+      // Do not re-render skipped suggestions that are already satisfied in live text.
+      // This avoids persistent false highlights around quote boundaries when resolver
+      // cannot produce a concrete op but the comma is already present.
+      if (isSuggestionAppliedInLiveText(snapshotText, sourceText, fallbackSuggestion)) {
+        continue;
+      }
       const renderKey =
         buildSuggestionRenderDedupKey(fallbackSuggestion) ||
         fallbackSuggestion?.id ||
@@ -4073,8 +4091,21 @@ async function findCommaRangeByOrdinal(context, paragraph, original, op) {
 }
 
 function extractLastWord(text) {
+  // Extract the last word, handling quotation marks as separate tokens
+  // For Slovenian, quotes should not be grouped with words
   const match = text.match(/([\p{L}\d]+)[^\p{L}\d]*$/u);
-  return match ? match[1] : "";
+  const word = match ? match[1] : "";
+  return word;
+}
+
+function extractLastWordWithContext(text) {
+  // Extract the last word along with any trailing quotation marks
+  // This helps identify the word and understand comma positioning relative to quotes
+  const match = text.match(/([\p{L}\d]+)(["'\u201C\u201D\u201E\u00AB\u00BB\s]*)$/u);
+  if (!match) return { word: "", trailingChars: "" };
+  const word = match[1];
+  const trailingChars = match[2];
+  return { word, trailingChars };
 }
 
 async function tryApplyDeleteUsingMetadata(context, paragraph, suggestion) {
@@ -4405,7 +4436,7 @@ function resolveTokenPairMatchInText(
     ? Math.max(0, Math.floor(options.maxGapLength))
     : 24;
   const gapPattern = allowQuoteGap
-    ? /^[\s"'`â€œâ€â€žÂ«Â»â€™â€˜()\[\]]*$/u
+    ? /^[\s"'`\u201C\u201D\u201E\u00AB\u00BB\u2019\u2018()\[\]]*$/u
     : /^\s*$/u;
 
   const candidates = [];
@@ -4655,8 +4686,8 @@ async function resolveStrictInsertRangeForSuggestion(
 
   const preferredSide = persistedBoundary?.preferredSide ?? boundary?.preferredSide ?? "after_before_token";
   const quotePolicy = persistedBoundary?.explicitQuoteIntent ?? boundary?.quotePolicy ?? "none";
-  const isClosingQuoteChar = (char) => /["'\u201d\u00bb\u2019)\]]/u.test(char || "");
-  const isOpeningQuoteChar = (char) => /["'\u201c\u00ab\u2018(\[]/u.test(char || "");
+  const isClosingQuoteChar = (char) => /["'\u201D\u2019\u00AB)\]]/u.test(char || "");
+  const isOpeningQuoteChar = (char) => /["'\u201C\u2018\u00BB(\[]/u.test(char || "");
   const isBoundaryQuoteChar = (char) => isClosingQuoteChar(char) || isOpeningQuoteChar(char);
   const explicitGapPosCandidates = [boundary?.resolvedPos, boundary?.requestedPos, preferredLiveHint].filter(
     (value, index, array) => Number.isFinite(value) && value >= 0 && array.indexOf(value) === index
@@ -4687,7 +4718,7 @@ async function resolveStrictInsertRangeForSuggestion(
     const safePos = Math.max(beforeEnd, Math.min(afterStart, explicitGapPos));
     const offset = safePos - beforeEnd;
     const leadingWhitespaceLen = ((gapText || "").match(/^\s+/u) || [""])[0].length;
-    const leadingClosingRun = ((gapText || "").slice(leadingWhitespaceLen).match(/^["'\u201d\u00bb\u2019)\]]+/u) || [
+    const leadingClosingRun = ((gapText || "").slice(leadingWhitespaceLen).match(/^["'\u201D\u2019\u00AB)\]]+/u) || [
       "",
     ])[0];
     if (leadingClosingRun) {
@@ -4696,7 +4727,7 @@ async function resolveStrictInsertRangeForSuggestion(
     }
     const trailingWhitespaceLen = ((gapText || "").match(/\s+$/u) || [""])[0].length;
     const coreGap = (gapText || "").slice(0, Math.max(0, (gapText || "").length - trailingWhitespaceLen));
-    const trailingOpeningRun = (coreGap.match(/["'\u201c\u00ab\u2018(\[]+$/u) || [""])[0];
+    const trailingOpeningRun = (coreGap.match(/["'\u201C\u2018\u00BB(\[]+$/u) || [""])[0];
     if (trailingOpeningRun) {
       const openingRunStart = coreGap.length - trailingOpeningRun.length;
       if (offset <= openingRunStart) return "before_opening_quote";
@@ -4739,7 +4770,7 @@ async function resolveStrictInsertRangeForSuggestion(
             };
           }
           try {
-            const closingRun = (gapText.match(/^[\s]*["'\u201d\u00bb\u2019)\]]+/u) || [""])[0].trimStart();
+            const closingRun = (gapText.match(/^[\s]*["'\u201D\u2019\u00AB)\]]+/u) || [""])[0].trimStart();
             if (closingRun) {
               const quoteSearchBase = beforeRange.expandToOrNullObject(afterRange);
               quoteSearchBase.load("isNullObject");
@@ -5638,15 +5669,15 @@ const HIGHLIGHT_SCRUB_DELIMITERS = [
   "}",
   "\"",
   "'",
-  "«",
-  "»",
-  "“",
-  "”",
-  "‘",
-  "’",
+  "\u00AB",
+  "\u00BB",
+  "\u201C",
+  "\u201D",
+  "\u2018",
+  "\u2019",
   "-",
-  "–",
-  "—",
+  "\u2013",
+  "\u2014",
 ];
 
 const HIGHLIGHT_SCRUB_PUNCTUATION = [
@@ -7160,11 +7191,11 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
 
   const isQuoteOrSpaceBoundary = (value) =>
-    typeof value === "string" && /^[\s"'â€œâ€â€žÂ«Â»â€™â€˜`]+$/.test(value);
+    typeof value === "string" && /^[\s"'`\u201C\u201D\u201E\u00AB\u00BB\u2019\u2018]+$/u.test(value);
   // In Word content, angled quotes can surface in either direction around boundaries.
-  // Treat both Â« and Â» as boundary quotes.
-  const isClosingQuoteOrCloser = (char) => /["'â€Â»â€™)\]]/.test(char || "");
-  const isOpeningQuoteOrOpener = (char) => /["'â€œÂ«â€˜(\[]/.test(char || "");
+  // Treat both \u00AB and \u00BB as boundary quotes.
+  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00AB\u2019)\]]/u.test(char || "");
+  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00BB\u2018(\[]/u.test(char || "");
   const normalizeInsertPosForQuoteBoundary = (pos, options = {}) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
     if (options?.allowHeuristic === false) return pos;
@@ -7280,8 +7311,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (gapText && isQuoteOrSpaceBoundary(gapText)) {
       const trimmedGap = gapText.replace(/\s+/gu, "");
       if (trimmedGap) {
-        const leadingClosers = /^["'â€Â»â€™)\]]+/u.exec(trimmedGap)?.[0] || "";
-        const trailingOpeners = /["'â€œÂ«â€˜(\[]+$/u.exec(trimmedGap)?.[0] || "";
+        const leadingClosers = /^["'\u201D\u00AB\u2019)\]]+/u.exec(trimmedGap)?.[0] || "";
+        const trailingOpeners = /["'\u201C\u00BB\u2018(\[]+$/u.exec(trimmedGap)?.[0] || "";
         if (leadingClosers && (!trailingOpeners || preferredSide === "after_before_token")) {
           quotePolicy = "after_closing_quote";
         } else if (trailingOpeners) {
@@ -7645,8 +7676,8 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
 
   const isQuoteOrSpaceBoundary = (value) =>
     typeof value === "string" && /^[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D]+$/u.test(value);
-  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00BB\u2019)\]]/u.test(char || "");
-  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00AB\u2018(\[]/u.test(char || "");
+  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00AB\u2019)\]]/u.test(char || "");
+  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00BB\u2018(\[]/u.test(char || "");
   const normalizeInsertPosForQuoteBoundary = (pos) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
     let left = pos - 1;
@@ -7844,9 +7875,9 @@ function normalizeDeleteContextToken(rawToken) {
 function isSafeGapBetweenTokenAndComma(gap = "", direction = "before") {
   if (typeof gap !== "string") return false;
   if (direction === "before") {
-    return /^[\s"'â€Â»â€™)\]]*$/.test(gap);
+    return /^[\s"'\u201D\u00AB\u2019)\]]*$/u.test(gap);
   }
-  return /^[\s"'â€œÂ«â€˜(\[]*$/.test(gap);
+  return /^[\s"'\u201C\u00BB\u2018(\[]*$/u.test(gap);
 }
 
 function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex) {
@@ -8053,7 +8084,7 @@ function hasCommaNearMappedHint(snapshotText, mappedHint, radius = 4) {
     if (left >= 0 && snapshotText[left] === ",") return true;
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
   }
-  const isBoundary = (char) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D]/u.test(char || "");
+  const isBoundary = (char) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()[\]]/u.test(char || "");
   let left = mappedHint - 1;
   while (left >= 0 && isBoundary(snapshotText[left])) left--;
   if (left >= 0 && snapshotText[left] === ",") return true;
@@ -8084,11 +8115,12 @@ function findCommaIndexNearMappedHint(snapshotText, mappedHint, radius = 4) {
       return right;
     }
   }
+  const isBoundary = (char) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()[\]]/u.test(char || "");
   let left = Math.min(snapshotText.length - 1, Math.max(0, Math.floor(mappedHint) - 1));
-  while (left >= 0 && /\s/u.test(snapshotText[left])) left--;
+  while (left >= 0 && isBoundary(snapshotText[left])) left--;
   if (left >= 0 && snapshotText[left] === ",") return left;
   let right = Math.max(0, Math.min(snapshotText.length, Math.floor(mappedHint)));
-  while (right < snapshotText.length && /\s/u.test(snapshotText[right])) right++;
+  while (right < snapshotText.length && isBoundary(snapshotText[right])) right++;
   if (right < snapshotText.length && snapshotText[right] === ",") return right;
   return -1;
 }
@@ -8470,6 +8502,16 @@ function isInsertSuggestionBoundaryIntact(liveText, sourceText, suggestion) {
     meta?.targetTokenAfter ??
     null;
   if (!beforeAnchor || !afterAnchor) return true;
+  const beforeWord = getCleanWordTokenFromAnchor(beforeAnchor);
+  const afterWord = getCleanWordTokenFromAnchor(afterAnchor);
+  if (!beforeWord || !afterWord) {
+    const mappedHint = resolveSuggestionMappedCharHint(liveText, sourceText, suggestion);
+    if (!Number.isFinite(mappedHint) || mappedHint < 0 || mappedHint > liveText.length) {
+      return true;
+    }
+    const hintRadius = suggestion?.meta?.lemmaAnchorAuthoritative ? 5 : 4;
+    return hasCommaNearMappedHint(liveText, mappedHint, hintRadius);
+  }
 
   const preferredGapHint = firstFiniteValue([
     boundaryMeta?.sourceBoundaryPos,
@@ -8526,12 +8568,23 @@ function isSuggestionAppliedInLiveText(liveText, sourceText, suggestion, options
       sourceText,
       suggestion
     );
+    if (resolved?.op?.kind === "insert") {
+      if (Number.isFinite(mappedHint) && mappedHint >= 0) {
+        if (
+          hasCommaNearMappedHint(liveText, mappedHint, hintRadius) &&
+          verifyInsertSuggestionAppliedSafely(liveText, sourceText, suggestion)
+        ) {
+          return true;
+        }
+      }
+    }
     const allowFallbackForReason =
       resolved?.skipReason === "insert_before_anchor_lookup_failed" ||
       resolved?.skipReason === "insert_after_anchor_requires_before_pair" ||
       resolved?.skipReason === "insert_after_anchor_lookup_failed" ||
       resolved?.skipReason === "insert_before_after_order_invalid" ||
-      resolved?.skipReason === "insert_gap_contains_nonspace_content";
+      resolved?.skipReason === "insert_gap_contains_nonspace_content" ||
+      resolved?.skipReason === "insert_anchor_token_unresolved";
     if (!resolved?.op && allowFallbackForReason) {
       if (!Number.isFinite(mappedHint) || mappedHint < 0) return false;
       return (
