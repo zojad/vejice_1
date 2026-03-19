@@ -111,7 +111,7 @@ function parseBooleanFlag(value) {
   return undefined;
 }
 
-const QUOTE_TRACE_REGEX = /["'\u00AB\u00BB\u2018\u2019\u201C\u201D]/u;
+const QUOTE_TRACE_REGEX = /["'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E]/u;
 
 function isQuoteTraceEnabled() {
   if (typeof window !== "undefined") {
@@ -2922,8 +2922,8 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const originalText = typeof entry?.originalText === "string" ? entry.originalText : "";
   const correctedText = typeof entry?.correctedText === "string" ? entry.correctedText : "";
   const buildBoundaryMeta = () => {
-    const quoteCharsClosing = /["'\u201D\u2019\u00AB)\]]/u;
-    const quoteCharsOpening = /["'\u201C\u2018\u00BB(\[]/u;
+    const quoteCharsClosing = /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]/u;
+    const quoteCharsOpening = /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]/u;
     const nearestNonSpaceLeft = (startIndex) => {
       let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
       while (idx >= 0 && /\s/u.test(correctedText[idx] || "")) idx--;
@@ -3974,36 +3974,11 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     return candidate.charStart + 1;
   };
 
-  const highlightAnchorCandidate = [
-    anchor.highlightAnchorTarget,
-    anchor.sourceTokenAt,
-    anchor.targetTokenAt,
-    anchor.sourceTokenBefore,
-    anchor.targetTokenBefore,
-  ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
-
-  if (highlightAnchorCandidate) {
-    const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);
-    range = await getRangeForAnchorSpan(
-      context,
-      paragraph,
-      entry,
-      highlightAnchorCandidate.charStart,
-      anchorEnd,
-      "highlight-insert-anchor",
-      highlightAnchorCandidate.tokenText || anchor.highlightText
-    );
-  }
-
-  if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
+  if (Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
     const metaEndCandidate = {
       charStart: anchor.highlightCharStart,
       charEnd: anchor.highlightCharEnd,
-      tokenText:
-        anchor.highlightAnchorTarget?.tokenText ||
-        anchor.sourceTokenAt?.tokenText ||
-        anchor.targetTokenAt?.tokenText ||
-        anchor.highlightText,
+      tokenText: anchor.highlightText,
     };
     const metaEnd = resolveAnchorEnd(metaEndCandidate);
     range = await getRangeForAnchorSpan(
@@ -4014,6 +3989,27 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       metaEnd,
       "highlight-insert-meta",
       anchor.highlightText
+    );
+  }
+
+  const highlightAnchorCandidate = [
+    anchor.highlightAnchorTarget,
+    anchor.sourceTokenAt,
+    anchor.targetTokenAt,
+    anchor.sourceTokenBefore,
+    anchor.targetTokenBefore,
+  ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
+
+  if (!range && highlightAnchorCandidate) {
+    const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);
+    range = await getRangeForAnchorSpan(
+      context,
+      paragraph,
+      entry,
+      highlightAnchorCandidate.charStart,
+      anchorEnd,
+      "highlight-insert-anchor",
+      highlightAnchorCandidate.tokenText || anchor.highlightText
     );
   }
 
@@ -4101,7 +4097,7 @@ function extractLastWord(text) {
 function extractLastWordWithContext(text) {
   // Extract the last word along with any trailing quotation marks
   // This helps identify the word and understand comma positioning relative to quotes
-  const match = text.match(/([\p{L}\d]+)(["'\u201C\u201D\u201E\u00AB\u00BB\s]*)$/u);
+  const match = text.match(/([\p{L}\d]+)(["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB\s]*)$/u);
   if (!match) return { word: "", trailingChars: "" };
   const word = match[1];
   const trailingChars = match[2];
@@ -4686,8 +4682,10 @@ async function resolveStrictInsertRangeForSuggestion(
 
   const preferredSide = persistedBoundary?.preferredSide ?? boundary?.preferredSide ?? "after_before_token";
   const quotePolicy = persistedBoundary?.explicitQuoteIntent ?? boundary?.quotePolicy ?? "none";
-  const isClosingQuoteChar = (char) => /["'\u201D\u2019\u00AB)\]]/u.test(char || "");
-  const isOpeningQuoteChar = (char) => /["'\u201C\u2018\u00BB(\[]/u.test(char || "");
+  const isClosingQuoteChar = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]/u.test(char || "");
+  const isOpeningQuoteChar = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]/u.test(char || "");
   const isBoundaryQuoteChar = (char) => isClosingQuoteChar(char) || isOpeningQuoteChar(char);
   const explicitGapPosCandidates = [boundary?.resolvedPos, boundary?.requestedPos, preferredLiveHint].filter(
     (value, index, array) => Number.isFinite(value) && value >= 0 && array.indexOf(value) === index
@@ -4718,7 +4716,9 @@ async function resolveStrictInsertRangeForSuggestion(
     const safePos = Math.max(beforeEnd, Math.min(afterStart, explicitGapPos));
     const offset = safePos - beforeEnd;
     const leadingWhitespaceLen = ((gapText || "").match(/^\s+/u) || [""])[0].length;
-    const leadingClosingRun = ((gapText || "").slice(leadingWhitespaceLen).match(/^["'\u201D\u2019\u00AB)\]]+/u) || [
+    const leadingClosingRun = ((gapText || "").slice(leadingWhitespaceLen).match(
+      /^["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]+/u
+    ) || [
       "",
     ])[0];
     if (leadingClosingRun) {
@@ -4727,7 +4727,9 @@ async function resolveStrictInsertRangeForSuggestion(
     }
     const trailingWhitespaceLen = ((gapText || "").match(/\s+$/u) || [""])[0].length;
     const coreGap = (gapText || "").slice(0, Math.max(0, (gapText || "").length - trailingWhitespaceLen));
-    const trailingOpeningRun = (coreGap.match(/["'\u201C\u2018\u00BB(\[]+$/u) || [""])[0];
+    const trailingOpeningRun = (
+      coreGap.match(/["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]+$/u) || [""]
+    )[0];
     if (trailingOpeningRun) {
       const openingRunStart = coreGap.length - trailingOpeningRun.length;
       if (offset <= openingRunStart) return "before_opening_quote";
@@ -4770,7 +4772,9 @@ async function resolveStrictInsertRangeForSuggestion(
             };
           }
           try {
-            const closingRun = (gapText.match(/^[\s]*["'\u201D\u2019\u00AB)\]]+/u) || [""])[0].trimStart();
+            const closingRun = (
+              gapText.match(/^[\s]*["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]+/u) || [""]
+            )[0].trimStart();
             if (closingRun) {
               const quoteSearchBase = beforeRange.expandToOrNullObject(afterRange);
               quoteSearchBase.load("isNullObject");
@@ -7194,8 +7198,10 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     typeof value === "string" && /^[\s"'`\u201C\u201D\u201E\u00AB\u00BB\u2019\u2018]+$/u.test(value);
   // In Word content, angled quotes can surface in either direction around boundaries.
   // Treat both \u00AB and \u00BB as boundary quotes.
-  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00AB\u2019)\]]/u.test(char || "");
-  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00BB\u2018(\[]/u.test(char || "");
+  const isClosingQuoteOrCloser = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]/u.test(char || "");
+  const isOpeningQuoteOrOpener = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]/u.test(char || "");
   const normalizeInsertPosForQuoteBoundary = (pos, options = {}) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
     if (options?.allowHeuristic === false) return pos;
@@ -7311,8 +7317,10 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (gapText && isQuoteOrSpaceBoundary(gapText)) {
       const trimmedGap = gapText.replace(/\s+/gu, "");
       if (trimmedGap) {
-        const leadingClosers = /^["'\u201D\u00AB\u2019)\]]+/u.exec(trimmedGap)?.[0] || "";
-        const trailingOpeners = /["'\u201C\u00BB\u2018(\[]+$/u.exec(trimmedGap)?.[0] || "";
+        const leadingClosers =
+          /^["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]+/u.exec(trimmedGap)?.[0] || "";
+        const trailingOpeners =
+          /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]+$/u.exec(trimmedGap)?.[0] || "";
         if (leadingClosers && (!trailingOpeners || preferredSide === "after_before_token")) {
           quotePolicy = "after_closing_quote";
         } else if (trailingOpeners) {
@@ -7675,9 +7683,11 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
   };
 
   const isQuoteOrSpaceBoundary = (value) =>
-    typeof value === "string" && /^[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D]+$/u.test(value);
-  const isClosingQuoteOrCloser = (char) => /["'\u201D\u00AB\u2019)\]]/u.test(char || "");
-  const isOpeningQuoteOrOpener = (char) => /["'\u201C\u00BB\u2018(\[]/u.test(char || "");
+    typeof value === "string" && /^[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E]+$/u.test(value);
+  const isClosingQuoteOrCloser = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]/u.test(char || "");
+  const isOpeningQuoteOrOpener = (char) =>
+    /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]/u.test(char || "");
   const normalizeInsertPosForQuoteBoundary = (pos) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
     let left = pos - 1;
@@ -7875,9 +7885,9 @@ function normalizeDeleteContextToken(rawToken) {
 function isSafeGapBetweenTokenAndComma(gap = "", direction = "before") {
   if (typeof gap !== "string") return false;
   if (direction === "before") {
-    return /^[\s"'\u201D\u00AB\u2019)\]]*$/u.test(gap);
+    return /^[\s"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]*$/u.test(gap);
   }
-  return /^[\s"'\u201C\u00BB\u2018(\[]*$/u.test(gap);
+  return /^[\s"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]*$/u.test(gap);
 }
 
 function hasStrongDeleteContext(snapshotText, sourceText, suggestion, commaIndex) {

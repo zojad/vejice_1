@@ -3,6 +3,7 @@ import {
   normalizeParagraphWhitespace,
   normalizeTokenRepeatKey,
   stripTokenBoundaryPunctuation,
+  extractTokenBoundaryMetadata,
 } from "../engine/textUtils.js";
 
 export class SyntheticAnchorProvider extends AnchorProvider {
@@ -79,11 +80,13 @@ export function normalizeTokenList(tokens, prefix) {
 export function normalizeToken(rawToken, prefix, index) {
   if (rawToken === null || typeof rawToken === "undefined") return null;
   if (typeof rawToken === "string") {
-    // Strip quotes/punctuation from string tokens (critical for API tokens with quotes)
-    const cleanedText = stripTokenBoundaryPunctuation(rawToken);
+    // Extract boundary metadata while stripping quotes from string tokens
+    const { leadingBoundary, trailingBoundary, cleanText } = extractTokenBoundaryMetadata(rawToken);
     return {
       id: `${prefix}${index + 1}`,
-      text: cleanedText,
+      text: cleanText,
+      leadingBoundary,
+      trailingBoundary,
       raw: rawToken,
     };
   }
@@ -127,13 +130,18 @@ export function normalizeToken(rawToken, prefix, index) {
       rawToken.charEnd,
       rawToken.finish,
     ]);
-    // CRITICAL FIX: Strip leading/trailing quotes and punctuation from API tokens
+    // CRITICAL FIX: Extract and preserve quote boundary metadata
     // API returns tokens like "word" or "word", but paragraph text is just word
-    // Without this strip, indexOf() fails and anchor charStart becomes -1
-    const cleanedText = typeof textCandidate === "string" ? stripTokenBoundaryPunctuation(textCandidate) : "";
+    // We strip quotes from text for paragraph matching BUT preserve boundary info separately
+    // This allows comma placement logic to know: "this word had a trailing quote" -> "comma after quote"
+    const { leadingBoundary, trailingBoundary, cleanText } = extractTokenBoundaryMetadata(
+      typeof textCandidate === "string" ? textCandidate : ""
+    );
     return {
       id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
-      text: cleanedText,
+      text: cleanText,
+      leadingBoundary,
+      trailingBoundary,
       trailingWhitespace: typeof trailing === "string" ? trailing : "",
       leadingWhitespace: typeof leading === "string" ? leading : "",
       charStart: startChar,
@@ -200,6 +208,8 @@ export function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, 
       tokenId,
       tokenIndex: i,
       tokenText,
+      leadingBoundary: token?.leadingBoundary ?? "",
+      trailingBoundary: token?.trailingBoundary ?? "",
       length: tokenLength,
       textOccurrence: occurrence,
       trimmedTextOccurrence: trimmedKey ? trimmedOccurrence : occurrence,
