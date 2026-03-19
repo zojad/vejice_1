@@ -364,7 +364,7 @@ export function tokenizeForAnchoring(text = "", prefix = "syn") {
   // Define ONLY true quotation marks - NOT apostrophes which are inner word joiners
   // Include: straight double quotes ("), curly quotes (""), guillemets («»)
   // Exclude: apostrophes (') and right single quote (\u2019) which are word joiners
-  const isQuoteChar = (char) => /[""\u201C\u201D\u00AB\u00BB]/u.test(char || "");
+  const isQuoteChar = (char) => /["\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u.test(char || "");
   let idx = 1;
   let cursor = 0;
   while (cursor < text.length) {
@@ -412,3 +412,4 @@ export function tokenizeForAnchoring(text = "", prefix = "syn") {
   }
   return tokens;
 }
+

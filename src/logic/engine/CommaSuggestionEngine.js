@@ -5,6 +5,7 @@ import {
   isNumericComma,
   charAtSafe,
   QUOTES,
+  extractTokenBoundaryMetadata,
 } from "./textUtils.js";
 import {
   tokenizeForAnchoring,
@@ -32,9 +33,9 @@ const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
 const TRAILING_COMMA_REGEX = /[,\s]+$/;
-const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]/u;
-const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB)\]]/u;
-const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB(\[]/u;
+const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
+const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u;
+const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u;
 const TRAILING_BOUNDARY_CLOSER_REGEX = BOUNDARY_CLOSER_REGEX;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
@@ -1438,7 +1439,7 @@ function splitParagraphIntoChunks(
   );
   const sentences = [];
   let start = 0;
-  const sentenceLeadClosers = /[\])"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]/u;
+  const sentenceLeadClosers = /[\])"'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
   const lowerLetter = /\p{Ll}/u;
   const upperLetter = /\p{Lu}/u;
   const letterOrDigit = /[\p{L}\d]/u;
@@ -1494,7 +1495,7 @@ function splitParagraphIntoChunks(
       let contentEnd = i + 1;
       while (
         contentEnd < protectedText.length &&
-        /[\])"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]+/u.test(protectedText[contentEnd])
+        /[\])"'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]+/u.test(protectedText[contentEnd])
       ) {
         contentEnd++;
       }
@@ -1878,7 +1879,7 @@ function buildChunksFromLemmaTokens(text = "", lemmaTokens = [], maxLen = MAX_PA
 
   const sentences = [];
   let sentenceStart = 0;
-  const closerRegex = /[\])"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]/u;
+  const closerRegex = /[\])"'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
   const pushSentence = (contentEnd, gapEnd = contentEnd) => {
     if (typeof contentEnd !== "number" || contentEnd <= sentenceStart) {
       sentenceStart = Math.max(sentenceStart, gapEnd ?? contentEnd ?? sentenceStart);
@@ -2072,7 +2073,10 @@ function isSentenceBoundaryToken(currentToken, nextToken) {
       return /\p{Lu}/u.test(first);
     }
   }
-  const withoutClosers = trimmed.replace(/[\])"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]+$/gu, "");
+  const withoutClosers = trimmed.replace(
+    /[\])"'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]+$/gu,
+    ""
+  );
   const endChar = withoutClosers.slice(-1);
   if (!/[.!?]/.test(endChar)) return false;
   if (endChar === "?" || endChar === "!") return true;
@@ -2222,7 +2226,8 @@ function hasCommaAtBoundary(text, pos) {
       return true;
     }
   }
-  const isBoundary = (ch) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()\[\]]/u.test(ch || "");
+  const isBoundary = (ch) =>
+    /[\s"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E()\[\]]/u.test(ch || "");
   let left = safePos - 1;
   while (left >= 0 && isBoundary(text[left])) left--;
   if (left >= 0 && text[left] === ",") return true;
@@ -2303,7 +2308,8 @@ function findCommaIndexAtBoundary(text, pos) {
       return idx;
     }
   }
-  const isBoundary = (ch) => /[\s"'`\u00AB\u00BB\u2018\u2019\u201C\u201D\u201E()\[\]]/u.test(ch || "");
+  const isBoundary = (ch) =>
+    /[\s"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E()\[\]]/u.test(ch || "");
   let left = safePos - 1;
   while (left >= 0 && isBoundary(text[left])) left--;
   if (left >= 0 && text[left] === ",") return left;
@@ -2471,9 +2477,22 @@ function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegmen
 function normalizeTokenForComparison(text) {
   if (typeof text !== "string") return "";
   return text
-    .replace(/[.,!?;:"'`\u2018\u2019\u201C\u201D\u201E\u00AB\u00BB]/gu, "")
+    .replace(/[.,!?;:"'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function resolveAnchorRelativeBoundaryIndex(segmentText, relativeIndex) {
+  const safeSegment = typeof segmentText === "string" ? segmentText : "";
+  const boundedRelative = Number.isFinite(relativeIndex)
+    ? Math.max(0, Math.min(Math.floor(relativeIndex), safeSegment.length))
+    : 0;
+  if (!safeSegment) return boundedRelative;
+  const { leadingBoundary } = extractTokenBoundaryMetadata(safeSegment);
+  if (!leadingBoundary) return boundedRelative;
+  // Anchors are mapped to clean token text (without leading quotes/punctuation),
+  // so correction-segment offsets must be rebased to that clean-token coordinate.
+  return Math.max(0, boundedRelative - leadingBoundary.length);
 }
 
 function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
@@ -2550,13 +2569,14 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         tracking.intents.push({ tokenId, anchor: placementAnchor, analysis, baseText });
       }
       if (analysis.removeComma) {
-        const localIndex = baseText.lastIndexOf(",");
-        if (localIndex < 0) {
+        const rawLocalIndex = baseText.lastIndexOf(",");
+        if (rawLocalIndex < 0) {
           if (tracking?.unmatchedTokenIds) {
             tracking.unmatchedTokenIds.add(tokenId);
           }
           continue;
         }
+        const localIndex = resolveAnchorRelativeBoundaryIndex(baseText, rawLocalIndex);
         const absolutePos = placementAnchor.charStart + localIndex;
         const key = `del-${absolutePos}`;
         if (seen.has(key)) continue;
@@ -2577,10 +2597,12 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
             : null;
         const effectiveBase = analysisBase ?? baseText;
         const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedSegment);
-        const relative =
+        const rawRelative =
           relativeFromCorrected >= 0
             ? relativeFromCorrected
             : resolveCommaInsertBoundaryInSegment(effectiveBase);
+        const relativeSource = relativeFromCorrected >= 0 ? correctedSegment : effectiveBase;
+        const relative = resolveAnchorRelativeBoundaryIndex(relativeSource, rawRelative);
         const absolutePos = placementAnchor.charStart + relative;
         const paragraphOriginalText =
           typeof anchorsEntry?.originalText === "string" ? anchorsEntry.originalText : "";
@@ -2615,14 +2637,16 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
       const charStart = anchor.charStart;
       if (typeof charStart !== "number" || charStart < 0 || !baseText) continue;
       if (intent.analysis?.removeComma) {
-        const deleteIndex = baseText.lastIndexOf(",");
-        if (deleteIndex >= 0) {
+        const rawDeleteIndex = baseText.lastIndexOf(",");
+        if (rawDeleteIndex >= 0) {
+          const deleteIndex = resolveAnchorRelativeBoundaryIndex(baseText, rawDeleteIndex);
           tracking.blockedOriginalPositions.add(charStart + deleteIndex);
         }
       }
       if (intent.analysis?.addComma) {
-        const insertBaseLen = baseText.replace(TRAILING_COMMA_REGEX, "").length;
-        tracking.blockedCorrectedPositions.add(charStart + insertBaseLen);
+        const rawInsertBoundary = baseText.replace(TRAILING_COMMA_REGEX, "").length;
+        const insertBoundary = resolveAnchorRelativeBoundaryIndex(baseText, rawInsertBoundary);
+        tracking.blockedCorrectedPositions.add(charStart + insertBoundary);
       }
     }
   }
@@ -2880,11 +2904,14 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     if (!correctedText || !Number.isFinite(targetIndex) || targetIndex < 0) return -1;
     return findCommaIndexAtBoundary(correctedText, targetIndex);
   };
+  const resolvedCommaIndex = resolveCommaIndex();
+  const resolvedInsertBoundaryIndex =
+    resolvedCommaIndex >= 0 ? resolvedCommaIndex : Number.isFinite(targetIndex) ? targetIndex : -1;
   const classifyIntent = () => {
     // For INSERT operations, comma doesn't exist yet - use targetIndex directly
     // For DELETE operations, search for existing comma
     let checkPos = -1;
-    const existingComma = resolveCommaIndex();
+    const existingComma = resolvedCommaIndex;
     
     if (existingComma >= 0) {
       // Comma exists (DELETE case)
@@ -2911,7 +2938,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const explicitQuoteIntent = classifyIntent();
   
   const buildBoundaryMeta = () => {
-    const commaIndex = resolveCommaIndex();
+    const commaIndex = resolvedCommaIndex;
     const beforeAnchor = targetAround.before ?? sourceAround.before ?? null;
     const afterAnchor = targetAround.after ?? sourceAround.after ?? null;
     const preferredSide =
@@ -2920,19 +2947,29 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
         : "after_before_token";
     return {
       sourceBoundaryPos: Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : null,
-      targetBoundaryPos: Number.isFinite(targetIndex) && targetIndex >= 0 ? targetIndex : null,
+      targetBoundaryPos:
+        Number.isFinite(resolvedInsertBoundaryIndex) && resolvedInsertBoundaryIndex >= 0
+          ? resolvedInsertBoundaryIndex
+          : null,
       targetCommaPos: commaIndex >= 0 ? commaIndex : null,
       beforeToken: snapshotAnchor(beforeAnchor),
       afterToken: snapshotAnchor(afterAnchor),
       preferredSide,
       explicitQuoteIntent,
-      leftContext: correctedText.slice(Math.max(0, targetIndex - 12), Math.max(0, targetIndex)),
-      rightContext: correctedText.slice(targetIndex + 1, Math.min(correctedText.length, targetIndex + 13)),
+      leftContext: correctedText.slice(
+        Math.max(0, resolvedInsertBoundaryIndex - 12),
+        Math.max(0, resolvedInsertBoundaryIndex)
+      ),
+      rightContext: correctedText.slice(
+        resolvedInsertBoundaryIndex + 1,
+        Math.min(correctedText.length, resolvedInsertBoundaryIndex + 13)
+      ),
       exactApplyWindow: buildExactApplyWindowMeta(originalText, correctedText, srcIndex, targetIndex),
     };
   };
   const isQuoteBoundaryToken = (value) =>
-    typeof value === "string" && /^[\s"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB\[\]]+$/u.test(value);
+    typeof value === "string" &&
+    /^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A\[\]]+$/u.test(value);
   
   // Check if anchor has quote boundary metadata (from token normalization)
   // Closing quotes: straight quotes, curly closing quotes, right guillemets
@@ -2975,7 +3012,11 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   // CRITICAL: For INSERT operations at quote boundaries, highlight ONLY the quote character
   // at the insertion point, not the whole token
   let quoteHighlightApplied = false;
-  if (explicitQuoteIntent !== "none" && Number.isFinite(targetIndex) && targetIndex >= 0) {
+  if (
+    explicitQuoteIntent !== "none" &&
+    Number.isFinite(resolvedInsertBoundaryIndex) &&
+    resolvedInsertBoundaryIndex >= 0
+  ) {
     // For INSERT operations, targetIndex tells us where comma will be inserted
     // Search for quote characters around that position, skipping zero-width spaces
     let quotePos = -1;
@@ -2983,7 +3024,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     const openingQuoteRegex = BOUNDARY_QUOTE_REGEX;
     
     // Search backwards from targetIndex, skipping invisible characters
-    let searchIdx = targetIndex - 1;
+    let searchIdx = resolvedInsertBoundaryIndex - 1;
     while (searchIdx >= 0 && invisibleCharRegex.test(correctedText[searchIdx])) {
       searchIdx--;
     }
@@ -2993,7 +3034,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     
     // Search forwards from targetIndex, skipping invisible characters (if not found backwards)
     if (quotePos < 0) {
-      searchIdx = targetIndex;
+      searchIdx = resolvedInsertBoundaryIndex;
       while (searchIdx < correctedText.length && invisibleCharRegex.test(correctedText[searchIdx])) {
         searchIdx++;
       }
@@ -3004,7 +3045,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     
     // Search further forwards for opening quote (if not found yet)
     if (quotePos < 0) {
-      searchIdx = targetIndex;
+      searchIdx = resolvedInsertBoundaryIndex;
       while (searchIdx < correctedText.length && invisibleCharRegex.test(correctedText[searchIdx])) {
         searchIdx++;
       }
@@ -3046,10 +3087,17 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   return {
     kind: "insert",
     paragraphIndex: entry?.paragraphIndex ?? -1,
-    targetCharStart: targetIndex,
-    targetCharEnd: targetIndex >= 0 ? targetIndex + 1 : targetIndex,
-    targetDocumentCharStart: targetIndex >= 0 ? documentOffset + targetIndex : targetIndex,
-    targetDocumentCharEnd: targetIndex >= 0 ? documentOffset + targetIndex + 1 : targetIndex,
+    targetCharStart: resolvedInsertBoundaryIndex,
+    targetCharEnd:
+      resolvedInsertBoundaryIndex >= 0 ? resolvedInsertBoundaryIndex + 1 : resolvedInsertBoundaryIndex,
+    targetDocumentCharStart:
+      resolvedInsertBoundaryIndex >= 0
+        ? documentOffset + resolvedInsertBoundaryIndex
+        : resolvedInsertBoundaryIndex,
+    targetDocumentCharEnd:
+      resolvedInsertBoundaryIndex >= 0
+        ? documentOffset + resolvedInsertBoundaryIndex + 1
+        : resolvedInsertBoundaryIndex,
     highlightCharStart,
     highlightCharEnd,
     highlightText,

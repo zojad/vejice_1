@@ -1,6 +1,7 @@
 const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
-const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+/gu;
-const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+$/gu;
+const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu;
+const TOKEN_REPEAT_TRAILING_REGEX =
+  /[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu;
 
 // Helper to strip leading/trailing quotes and punctuation from API tokens
 // so they can be found in paragraph text (critical fix for quote-containing tokens)
@@ -8,8 +9,8 @@ const TOKEN_REPEAT_TRAILING_REGEX = /[\s,.;:!?"'`\u2018\u2019\u201C\u201D\u201E(
 export function stripTokenBoundaryPunctuation(text) {
   if (typeof text !== "string") return "";
   return text
-    .replace(/^[\s"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+/gu, "")
-    .replace(/[\s,.;:!?"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+$/gu, "")
+    .replace(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu, "")
+    .replace(/[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu, "")
     .trim();
 }
 
@@ -19,17 +20,19 @@ export function extractTokenBoundaryMetadata(text) {
   if (typeof text !== "string") return { leadingBoundary: "", trailingBoundary: "", cleanText: "" };
   
   // Extract leading boundary
-  const leadingMatch = text.match(/^[\s"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+/u);
+  const leadingMatch = text.match(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u);
   const leadingBoundary = leadingMatch ? leadingMatch[0] : "";
   
   // Extract trailing boundary
-  const trailingMatch = text.match(/[\s,.;:!?"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+$/u);
+  const trailingMatch = text.match(
+    /[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u
+  );
   const trailingBoundary = trailingMatch ? trailingMatch[0] : "";
   
   // Get clean text
   const cleanText = text
-    .replace(/^[\s"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+/u, "")
-    .replace(/[\s,.;:!?"'`\u2018\u2019\u201C\u201D\u201E()\u00AB\u00BB]+$/u, "")
+    .replace(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u, "")
+    .replace(/[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u, "")
     .trim();
   
   return { leadingBoundary, trailingBoundary, cleanText };
@@ -64,11 +67,14 @@ export const QUOTES = new Set([
   "`",
   "\u2018",
   "\u2019",
+  "\u201A",
   "\u201C",
   "\u201D",
   "\u201E",
   "\u00AB",
   "\u00BB",
+  "\u2039",
+  "\u203A",
 ]);
 
 export const isDigit = (ch) => ch >= "0" && ch <= "9";
