@@ -735,6 +735,11 @@ export class CommaSuggestionEngine {
           if (!correctionsPresent || ops.length) {
             fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
           }
+          const hasCorrectionInsertOps =
+            correctionsPresent && Array.isArray(ops) && ops.some((candidate) => candidate?.kind === "insert");
+          if (hasCorrectionInsertOps) {
+            fallbackOps = fallbackOps.filter((candidate) => candidate?.kind !== "insert");
+          }
           if (entry.metaRef?.forceSyntheticAnchoring && correctionsPresent && ops.length) {
             // In salvage mode prefer correction-derived comma ops when available;
             // diff ops are often position-noisy after non-comma drift.
@@ -2496,6 +2501,157 @@ function resolveAnchorRelativeBoundaryIndex(segmentText, relativeIndex) {
   return Math.max(0, boundedRelative - leadingBoundary.length);
 }
 
+function collapseWhitespaceWithSpanMap(text = "") {
+  const safeText = typeof text === "string" ? text : "";
+  const spans = [];
+  const chars = [];
+  let cursor = 0;
+  while (cursor < safeText.length) {
+    const current = safeText[cursor] || "";
+    if (INVISIBLE_GAP_REGEX.test(current)) {
+      let end = cursor + 1;
+      while (end < safeText.length && INVISIBLE_GAP_REGEX.test(safeText[end] || "")) end++;
+      chars.push(" ");
+      spans.push({ start: cursor, end });
+      cursor = end;
+      continue;
+    }
+    chars.push(current);
+    spans.push({ start: cursor, end: cursor + 1 });
+    cursor++;
+  }
+  return {
+    canonical: chars.join(""),
+    spans,
+  };
+}
+
+function findAllSubstringIndices(text = "", needle = "") {
+  const out = [];
+  if (!text || !needle) return out;
+  let fromIndex = 0;
+  while (fromIndex <= text.length - needle.length) {
+    const idx = text.indexOf(needle, fromIndex);
+    if (idx < 0) break;
+    out.push(idx);
+    fromIndex = idx + 1;
+  }
+  return out;
+}
+
+function findSourceTextSpanInParagraph(paragraphText, entrySource, hintPos = -1) {
+  const safeParagraph = typeof paragraphText === "string" ? paragraphText : "";
+  const safeSource = typeof entrySource === "string" ? entrySource : "";
+  if (!safeParagraph || !safeSource) return null;
+  const candidates = [];
+  const addCandidate = (start, end, label, matchedText) => {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    candidates.push({
+      start,
+      end,
+      text: typeof matchedText === "string" && matchedText.length ? matchedText : safeParagraph.slice(start, end),
+      label,
+    });
+  };
+
+  for (const idx of findAllSubstringIndices(safeParagraph, safeSource)) {
+    addCandidate(idx, idx + safeSource.length, "exact", safeSource);
+  }
+
+  const trimmedSource = safeSource.trim();
+  if (trimmedSource && trimmedSource !== safeSource) {
+    for (const idx of findAllSubstringIndices(safeParagraph, trimmedSource)) {
+      addCandidate(idx, idx + trimmedSource.length, "trim", trimmedSource);
+    }
+  }
+
+  const paragraphCollapsed = collapseWhitespaceWithSpanMap(safeParagraph);
+  const sourceCollapsed = collapseWhitespaceWithSpanMap(safeSource);
+  const sourceCanonicalTrimmed = sourceCollapsed.canonical.trim();
+  if (sourceCanonicalTrimmed) {
+    for (const canonStart of findAllSubstringIndices(paragraphCollapsed.canonical, sourceCanonicalTrimmed)) {
+      const canonEnd = canonStart + sourceCanonicalTrimmed.length;
+      const startSpan = paragraphCollapsed.spans[canonStart];
+      const endSpan = paragraphCollapsed.spans[canonEnd - 1];
+      if (!startSpan || !endSpan) continue;
+      addCandidate(
+        startSpan.start,
+        endSpan.end,
+        "whitespace_normalized",
+        safeParagraph.slice(startSpan.start, endSpan.end)
+      );
+    }
+  }
+
+  if (!candidates.length) return null;
+  const hint = Number.isFinite(hintPos) ? Math.max(0, hintPos) : null;
+  const labelPenalty = {
+    exact: 0,
+    trim: 1,
+    whitespace_normalized: 2,
+  };
+  candidates.sort((left, right) => {
+    const leftPenalty = labelPenalty[left.label] ?? 3;
+    const rightPenalty = labelPenalty[right.label] ?? 3;
+    if (leftPenalty !== rightPenalty) return leftPenalty - rightPenalty;
+    if (hint !== null) {
+      const leftDist = Math.abs(left.start - hint);
+      const rightDist = Math.abs(right.start - hint);
+      if (leftDist !== rightDist) return leftDist - rightDist;
+    }
+    const leftLen = left.end - left.start;
+    const rightLen = right.end - right.start;
+    if (leftLen !== rightLen) return leftLen - rightLen;
+    return left.start - right.start;
+  });
+  return candidates[0];
+}
+
+function resolveAnchorEndForBoundary(anchor) {
+  if (!anchor || !Number.isFinite(anchor.charStart) || anchor.charStart < 0) return -1;
+  if (Number.isFinite(anchor.charEnd) && anchor.charEnd > anchor.charStart) {
+    return anchor.charEnd;
+  }
+  if (typeof anchor.tokenText === "string" && anchor.tokenText.length > 0) {
+    return anchor.charStart + anchor.tokenText.length;
+  }
+  return anchor.charStart + 1;
+}
+
+function findNextBoundaryAnchor(orderedAnchors, fromTokenIndex) {
+  if (!Array.isArray(orderedAnchors) || !Number.isFinite(fromTokenIndex)) return null;
+  for (let i = fromTokenIndex + 1; i < orderedAnchors.length; i++) {
+    const candidate = orderedAnchors[i];
+    if (!candidate || !Number.isFinite(candidate.charStart) || candidate.charStart < 0) continue;
+    if (typeof candidate.tokenText === "string" && !candidate.tokenText.trim()) continue;
+    return candidate;
+  }
+  return null;
+}
+
+function resolveInsertBoundaryFromAnchorPair(anchor, orderedAnchors) {
+  const anchorEnd = resolveAnchorEndForBoundary(anchor);
+  if (!Number.isFinite(anchorEnd) || anchorEnd < 0) return null;
+  const nextAnchor = findNextBoundaryAnchor(orderedAnchors, anchor?.tokenIndex);
+  if (!nextAnchor || !Number.isFinite(nextAnchor.charStart) || nextAnchor.charStart < 0) {
+    return {
+      pos: anchorEnd,
+      anchorEnd,
+      nextStart: null,
+      nextTokenId: null,
+      nextTokenText: null,
+    };
+  }
+  const nextStart = nextAnchor.charStart;
+  return {
+    pos: Math.min(anchorEnd, nextStart),
+    anchorEnd,
+    nextStart,
+    nextTokenId: nextAnchor.tokenId ?? null,
+    nextTokenText: nextAnchor.tokenText ?? null,
+  };
+}
+
 function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tracking) {
   if (!detail?.corrections || !anchorsEntry) return [];
   const groups = Array.isArray(detail.corrections)
@@ -2597,16 +2753,52 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
             ? analysis.baseText
             : null;
         const effectiveBase = analysisBase ?? baseText;
-        const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedSegment);
-        const rawRelative =
-          relativeFromCorrected >= 0
-            ? relativeFromCorrected
-            : resolveCommaInsertBoundaryInSegment(effectiveBase);
-        const relativeSource = relativeFromCorrected >= 0 ? correctedSegment : effectiveBase;
-        const relative = resolveAnchorRelativeBoundaryIndex(relativeSource, rawRelative);
-        const absolutePos = placementAnchor.charStart + relative;
         const paragraphOriginalText =
           typeof anchorsEntry?.originalText === "string" ? anchorsEntry.originalText : "";
+        const sourceSpan = paragraphOriginalText
+          ? findSourceTextSpanInParagraph(
+              paragraphOriginalText,
+              entrySource || effectiveBase,
+              Number.isFinite(anchor?.charStart) ? anchor.charStart : -1
+            )
+          : null;
+        const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedSegment);
+        const orderedAnchors = anchorsEntry?.sourceAnchors?.ordered;
+        const pairBoundary = resolveInsertBoundaryFromAnchorPair(anchor, orderedAnchors);
+        let rawRelative = relativeFromCorrected;
+        let relativeSource = correctedSegment;
+        let relative = -1;
+        let absolutePos = -1;
+        if (sourceSpan && relativeFromCorrected >= 0) {
+          const safeRelative = Math.max(
+            0,
+            Math.min(Math.floor(relativeFromCorrected), sourceSpan.text.length)
+          );
+          relative = safeRelative;
+          absolutePos = sourceSpan.start + safeRelative;
+        } else if (sourceSpan) {
+          const spanRelative = resolveCommaInsertBoundaryInSegment(sourceSpan.text);
+          rawRelative = spanRelative;
+          relativeSource = sourceSpan.text;
+          relative = spanRelative;
+          absolutePos = sourceSpan.start + spanRelative;
+        } else if (relativeFromCorrected >= 0) {
+          relative = resolveAnchorRelativeBoundaryIndex(relativeSource, rawRelative);
+          absolutePos = placementAnchor.charStart + relative;
+        } else if (pairBoundary && Number.isFinite(pairBoundary.pos) && pairBoundary.pos >= 0) {
+          absolutePos = pairBoundary.pos;
+        } else {
+          rawRelative = resolveCommaInsertBoundaryInSegment(effectiveBase);
+          relativeSource = effectiveBase;
+          relative = resolveAnchorRelativeBoundaryIndex(relativeSource, rawRelative);
+          absolutePos = placementAnchor.charStart + relative;
+        }
+        if (!Number.isFinite(absolutePos) || absolutePos < 0) {
+          if (tracking?.unmatchedTokenIds) {
+            tracking.unmatchedTokenIds.add(tokenId);
+          }
+          continue;
+        }
         // Correction entries can be token-local and miss trailing quote context.
         // If the full paragraph already has a comma at this boundary (e.g. ",«"),
         // suppress a duplicate insert op.

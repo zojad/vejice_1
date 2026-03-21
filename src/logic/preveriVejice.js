@@ -4072,11 +4072,10 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         candidate.charStart >= 0 &&
         /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
     );
+    const shouldForceQuoteBoundary =
+      boundaryIntent === "after_closing_quote" || boundaryIntent === "after_opening_quote";
     const shouldPreferQuoteBoundary =
-      !lexicalAnchorCandidate &&
-      (boundaryIntent !== "none" && boundaryIntent !== "unknown" && boundaryIntent !== "whitespace_only"
-        ? true
-        : quotePosFromBoundary >= 0);
+      shouldForceQuoteBoundary || (!lexicalAnchorCandidate && quotePosFromBoundary >= 0);
 
   const resolveAnchorEnd = (candidate) => {
     if (!Number.isFinite(candidate?.charStart) || candidate.charStart < 0) return null;
@@ -7384,31 +7383,10 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u.test(char || "");
   const isOpeningQuoteOrOpener = (char) =>
     /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u.test(char || "");
-  const normalizeInsertPosForQuoteBoundary = (pos, options = {}) => {
-    if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
-    if (options?.allowHeuristic === false) return pos;
-    let left = pos - 1;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
-    let right = pos;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
-    if (
-      left >= 0 &&
-      right < snapshotText.length &&
-      isClosingQuoteOrCloser(snapshotText[left]) &&
-      isOpeningQuoteOrOpener(snapshotText[right])
-    ) {
-      return left + 1;
-    }
-    // Also catch insert positions that land at the start of the next word:
-    // ...'<space>'Word  -> move comma after the closing quote.
-    if (left >= 0 && isOpeningQuoteOrOpener(snapshotText[left])) {
-      let prev = left - 1;
-      while (prev >= 0 && /\s/.test(snapshotText[prev])) prev--;
-      if (prev >= 0 && isClosingQuoteOrCloser(snapshotText[prev])) {
-        return prev + 1;
-      }
-    }
-    return pos;
+  // Keep insert boundary as planned (API-driven); do not auto-shift across quote boundaries.
+  const normalizeInsertPosForQuoteBoundary = (pos, _options = {}) => {
+    if (!Number.isFinite(pos)) return pos;
+    return Math.max(0, Math.min(snapshotText.length, Math.floor(pos)));
   };
 
   const hasCompanyAbbreviationNear = (center, radius = 72) => {
@@ -7630,7 +7608,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     }
     const left = snapshotText.slice(Math.max(0, pos - 3), pos);
     const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
-    if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
+    if (/,\s*$/.test(left) || /^\s*,/.test(right)) {
       if (authoritativeInsert) {
         traceAuthoritativeDecision("duplicate_comma_detected", {
           rawPos: clampedRawPos,
@@ -7713,36 +7691,16 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
         }
         // Quote boundary adjacency (e.g. "'foo' 'bar'"): insert after closing quote.
         if (isQuoteOrSpaceBoundary(gap)) {
+          const quoteBoundaryPos = preferredInsertHint >= 0 ? preferredInsertHint : beforeEnd;
           if (authoritativeInsert && preferredInsertHint >= 0) {
             traceAuthoritativeDecision("quote_gap_preserved_api_boundary", {
               beforeEnd,
               afterStart: after.start,
               preferredInsertHint,
             });
-            return createInsertOpResult(preferredInsertHint, gap || before.token, {
-              allowQuoteBoundaryHeuristic: false,
-              boundaryContext: {
-                beforeAnchor,
-                afterAnchor,
-                beforeStart: before.start,
-                beforeTokenLength: before.token.length,
-                afterStart: after.start,
-              },
-            });
           }
-          let insertPos = beforeEnd;
-          while (
-            insertPos < after.start &&
-            isClosingQuoteOrCloser(snapshotText[insertPos])
-          ) {
-            insertPos++;
-          }
-          const boundarySegment = snapshotText.slice(insertPos, after.start);
-          if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
-            return { op: { kind: "noop" }, skipReason: null };
-          }
-          return createInsertOpResult(insertPos, gap || before.token, {
-            allowQuoteBoundaryHeuristic: true,
+          return createInsertOpResult(quoteBoundaryPos, gap || before.token, {
+            allowQuoteBoundaryHeuristic: false,
             boundaryContext: {
               beforeAnchor,
               afterAnchor,
@@ -7838,9 +7796,30 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
   const meta = suggestion?.meta?.anchor;
   if (!meta) return { op: null, skipReason: "insert_missing_anchor_meta" };
   let skipReason = "insert_unresolved";
+  const opMeta = suggestion?.meta?.op || {};
 
   const beforeAnchor = meta.sourceTokenBefore ?? meta.targetTokenBefore;
   const afterAnchor = meta.sourceTokenAfter ?? meta.targetTokenAfter;
+  const resolvePreferredInsertHint = () => {
+    const candidates = [
+      opMeta.correctedPos,
+      suggestion?.kind === "insert" ? opMeta.pos : null,
+      suggestion?.charHint?.start,
+      meta?.targetCharStart,
+      meta?.charStart,
+      opMeta.originalPos,
+    ]
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .filter((value, idx, arr) => arr.indexOf(value) === idx);
+    for (const candidate of candidates) {
+      const mapped = mapIndexAcrossCanonical(sourceText, snapshotText, candidate);
+      if (Number.isFinite(mapped) && mapped >= 0 && mapped <= snapshotText.length) {
+        return mapped;
+      }
+    }
+    return -1;
+  };
+  const preferredInsertHint = resolvePreferredInsertHint();
 
   const findStartForAnchor = (anchor, preferEnd = false, reasonOnMissing = "insert_anchor_token_unresolved") => {
     if (!anchor?.tokenText) return { start: -1, token: null };
@@ -7871,28 +7850,10 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
     /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u.test(char || "");
   const isOpeningQuoteOrOpener = (char) =>
     /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u.test(char || "");
+  // Keep insert boundary as planned (API-driven); do not auto-shift across quote boundaries.
   const normalizeInsertPosForQuoteBoundary = (pos) => {
-    if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return pos;
-    let left = pos - 1;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
-    let right = pos;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
-    if (
-      left >= 0 &&
-      right < snapshotText.length &&
-      isClosingQuoteOrCloser(snapshotText[left]) &&
-      isOpeningQuoteOrOpener(snapshotText[right])
-    ) {
-      return left + 1;
-    }
-    if (left >= 0 && isOpeningQuoteOrOpener(snapshotText[left])) {
-      let prev = left - 1;
-      while (prev >= 0 && /\s/.test(snapshotText[prev])) prev--;
-      if (prev >= 0 && isClosingQuoteOrCloser(snapshotText[prev])) {
-        return prev + 1;
-      }
-    }
-    return pos;
+    if (!Number.isFinite(pos)) return pos;
+    return Math.max(0, Math.min(snapshotText.length, Math.floor(pos)));
   };
 
   const hasCompanyAbbreviationNear = (center, radius = 72) => {
@@ -7933,7 +7894,7 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
     );
     const left = snapshotText.slice(Math.max(0, pos - 3), pos);
     const right = snapshotText.slice(pos, Math.min(snapshotText.length, pos + 3));
-    if (/,\s*$/.test(left) || /^\s*,/.test(right) || hasCommaAcrossQuoteBoundary(pos)) {
+    if (/,\s*$/.test(left) || /^\s*,/.test(right)) {
       return { kind: "noop" };
     }
     return {
@@ -7988,15 +7949,8 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
           return { op: buildInsertOp(beforeEnd, gap || before.token), skipReason: null };
         }
         if (isQuoteOrSpaceBoundary(gap)) {
-          let insertPos = beforeEnd;
-          while (insertPos < after.start && isClosingQuoteOrCloser(snapshotText[insertPos])) {
-            insertPos++;
-          }
-          const boundarySegment = snapshotText.slice(insertPos, after.start);
-          if (/,\s*$/.test(boundarySegment) || /^\s*,/.test(boundarySegment)) {
-            return { op: { kind: "noop" }, skipReason: null };
-          }
-          return { op: buildInsertOp(insertPos, gap || before.token), skipReason: null };
+          const quoteBoundaryPos = preferredInsertHint >= 0 ? preferredInsertHint : beforeEnd;
+          return { op: buildInsertOp(quoteBoundaryPos, gap || before.token), skipReason: null };
         }
         skipReason = "insert_gap_contains_nonspace_content";
       }

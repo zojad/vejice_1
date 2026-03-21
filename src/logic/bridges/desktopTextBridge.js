@@ -7,11 +7,11 @@ export class DesktopTextBridge extends TextBridge {
       applyDeleteSuggestion,
       forceSpacingCleanup: false,
       normalizationProfile: {
-        // Keep canonical mapping profile aligned with Word Online to reduce
-        // cross-host index drift during snapshot remapping.
+        // Keep canonical mapping profile aligned with Word Online.
+        // Preserve quote/dash distinction to reduce ambiguous remapping.
         collapseWhitespace: true,
-        normalizeQuotes: true,
-        normalizeDashes: true,
+        normalizeQuotes: false,
+        normalizeDashes: false,
         normalizeEllipsis: true,
       },
     });
