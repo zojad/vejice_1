@@ -1982,7 +1982,7 @@ function canonicalizeWithBoundaryMap(text, profile = getNormalizationProfile()) 
 
   for (let i = 0; i < source.length; i++) {
     const ch = source[i];
-    const isSpace = /[\s\u00A0\u202F\u2007]/.test(ch);
+    const isSpace = /[\s\u00A0\u202F\u2007\u200B-\u200D\uFEFF]/.test(ch);
     if (isSpace) {
       if (profile?.collapseWhitespace !== false) {
         if (!prevWasSpace) {
@@ -4045,10 +4045,38 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       }
       return null;
     };
+    const preferAfterLexical =
+      boundaryIntent === "before_opening_quote" || boundaryIntent === "after_opening_quote";
+    const lexicalAnchorPriority = preferAfterLexical
+      ? [
+          anchor.sourceTokenAfter,
+          anchor.targetTokenAfter,
+          anchor.sourceTokenAt,
+          anchor.targetTokenAt,
+          anchor.sourceTokenBefore,
+          anchor.targetTokenBefore,
+          anchor.highlightAnchorTarget,
+        ]
+      : [
+          anchor.sourceTokenBefore,
+          anchor.targetTokenBefore,
+          anchor.sourceTokenAt,
+          anchor.targetTokenAt,
+          anchor.sourceTokenAfter,
+          anchor.targetTokenAfter,
+          anchor.highlightAnchorTarget,
+        ];
+    const lexicalAnchorCandidate = lexicalAnchorPriority.find(
+      (candidate) =>
+        Number.isFinite(candidate?.charStart) &&
+        candidate.charStart >= 0 &&
+        /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
+    );
     const shouldPreferQuoteBoundary =
-      boundaryIntent !== "none" && boundaryIntent !== "unknown" && boundaryIntent !== "whitespace_only"
+      !lexicalAnchorCandidate &&
+      (boundaryIntent !== "none" && boundaryIntent !== "unknown" && boundaryIntent !== "whitespace_only"
         ? true
-        : quotePosFromBoundary >= 0;
+        : quotePosFromBoundary >= 0);
 
   const resolveAnchorEnd = (candidate) => {
     if (!Number.isFinite(candidate?.charStart) || candidate.charStart < 0) return null;
@@ -4139,13 +4167,17 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     );
   }
 
-  const highlightAnchorCandidate = [
-    anchor.highlightAnchorTarget,
-    anchor.sourceTokenAt,
-    anchor.targetTokenAt,
-    anchor.sourceTokenBefore,
-    anchor.targetTokenBefore,
-  ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
+  const highlightAnchorCandidate =
+    lexicalAnchorCandidate ||
+    [
+      anchor.highlightAnchorTarget,
+      anchor.sourceTokenAt,
+      anchor.targetTokenAt,
+      anchor.sourceTokenBefore,
+      anchor.targetTokenBefore,
+      anchor.sourceTokenAfter,
+      anchor.targetTokenAfter,
+    ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
 
   if (!range && !shouldPreferQuoteBoundary && highlightAnchorCandidate) {
     const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);

@@ -114,7 +114,7 @@ export function normalizeToken(rawToken, prefix, index) {
       "";
     const leading =
       rawToken.leading_ws ?? rawToken.leadingWhitespace ?? rawToken.before ?? rawToken.prefix ?? "";
-    const startChar = pickTokenOffset([
+    const startCharRaw = pickTokenOffset([
       rawToken.start_char,
       rawToken.startChar,
       rawToken.start,
@@ -123,7 +123,7 @@ export function normalizeToken(rawToken, prefix, index) {
       rawToken.offset,
       rawToken.position,
     ]);
-    const endChar = pickTokenOffset([
+    const endCharRaw = pickTokenOffset([
       rawToken.end_char,
       rawToken.endChar,
       rawToken.end,
@@ -137,6 +137,14 @@ export function normalizeToken(rawToken, prefix, index) {
     const { leadingBoundary, trailingBoundary, cleanText } = extractTokenBoundaryMetadata(
       typeof textCandidate === "string" ? textCandidate : ""
     );
+    const { charStart, charEnd } = rebaseTokenOffsetsForCleanText({
+      rawText: typeof textCandidate === "string" ? textCandidate : "",
+      cleanText,
+      leadingBoundary,
+      trailingBoundary,
+      startChar: startCharRaw,
+      endChar: endCharRaw,
+    });
     return {
       id: typeof idCandidate === "string" ? idCandidate : `${prefix}${index + 1}`,
       text: cleanText,
@@ -144,12 +152,66 @@ export function normalizeToken(rawToken, prefix, index) {
       trailingBoundary,
       trailingWhitespace: typeof trailing === "string" ? trailing : "",
       leadingWhitespace: typeof leading === "string" ? leading : "",
-      charStart: startChar,
-      charEnd: endChar,
+      charStart,
+      charEnd,
       raw: rawToken,
     };
   }
   return null;
+}
+
+function rebaseTokenOffsetsForCleanText({
+  rawText = "",
+  cleanText = "",
+  leadingBoundary = "",
+  trailingBoundary = "",
+  startChar,
+  endChar,
+}) {
+  const hasStart = Number.isFinite(startChar);
+  const hasEnd = Number.isFinite(endChar);
+  if (!hasStart && !hasEnd) {
+    return { charStart: startChar, charEnd: endChar };
+  }
+
+  const raw = typeof rawText === "string" ? rawText : "";
+  const clean = typeof cleanText === "string" ? cleanText : "";
+  const leadingLen = typeof leadingBoundary === "string" ? leadingBoundary.length : 0;
+  const trailingLen = typeof trailingBoundary === "string" ? trailingBoundary.length : 0;
+  const hasBoundaryTrim = raw !== clean && (leadingLen > 0 || trailingLen > 0);
+  if (!hasBoundaryTrim) {
+    return { charStart: startChar, charEnd: endChar };
+  }
+
+  const rawLen = raw.length;
+  const cleanLen = clean.length;
+  const spanLen = hasStart && hasEnd ? Math.max(0, endChar - startChar) : null;
+  let shouldRebase = false;
+  if (spanLen === null) {
+    shouldRebase = true;
+  } else if (spanLen === cleanLen && cleanLen <= rawLen) {
+    shouldRebase = false;
+  } else if (spanLen === rawLen) {
+    shouldRebase = true;
+  } else {
+    shouldRebase = spanLen > cleanLen;
+  }
+
+  if (!shouldRebase) {
+    return { charStart: startChar, charEnd: endChar };
+  }
+
+  const rebasedStart = hasStart ? startChar + leadingLen : startChar;
+  let rebasedEnd = hasEnd ? endChar - trailingLen : endChar;
+
+  if (Number.isFinite(rebasedStart) && Number.isFinite(rebasedEnd) && rebasedEnd < rebasedStart) {
+    rebasedEnd = rebasedStart;
+  }
+  if (Number.isFinite(rebasedStart) && (!Number.isFinite(rebasedEnd) || rebasedEnd < rebasedStart)) {
+    rebasedEnd = rebasedStart + cleanLen;
+  }
+
+  return { charStart: rebasedStart, charEnd: rebasedEnd };
 }
 
 export function mapTokensToParagraphText(paragraphIndex, paragraphText, tokens, documentOffset = 0) {
@@ -359,6 +421,7 @@ function findNextAnchorWithPosition(list, startIndex) {
 export function tokenizeForAnchoring(text = "", prefix = "syn") {
   if (typeof text !== "string" || !text.length) return [];
   const tokens = [];
+  const isSkippableGapChar = (char) => /[\s\u200B-\u200D\uFEFF]/u.test(char || "");
   const isWordChar = (char) => /[\p{L}\p{N}]/u.test(char || "");
   const isInnerWordJoiner = (char) => /['\u2019`-]/u.test(char || "");
   // Define ONLY true quotation marks - NOT apostrophes which are inner word joiners
@@ -368,7 +431,7 @@ export function tokenizeForAnchoring(text = "", prefix = "syn") {
   let idx = 1;
   let cursor = 0;
   while (cursor < text.length) {
-    while (cursor < text.length && /\s/u.test(text[cursor])) cursor++;
+    while (cursor < text.length && isSkippableGapChar(text[cursor])) cursor++;
     if (cursor >= text.length) break;
     const start = cursor;
     let end = cursor + 1;

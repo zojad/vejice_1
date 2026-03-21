@@ -32,11 +32,12 @@ const CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
 const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
-const TRAILING_COMMA_REGEX = /[,\s]+$/;
+const TRAILING_COMMA_REGEX = /[,\s\u200B-\u200D\uFEFF]+$/;
 const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
 const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u;
 const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u;
 const TRAILING_BOUNDARY_CLOSER_REGEX = BOUNDARY_CLOSER_REGEX;
+const INVISIBLE_GAP_REGEX = /[\s\u200B-\u200D\uFEFF]/u;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
 const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
@@ -2309,7 +2310,7 @@ function findCommaIndexAtBoundary(text, pos) {
     }
   }
   const isBoundary = (ch) =>
-    /[\s"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E()\[\]]/u.test(ch || "");
+    /[\s\u200B-\u200D\uFEFF"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E()\[\]]/u.test(ch || "");
   let left = safePos - 1;
   while (left >= 0 && isBoundary(text[left])) left--;
   if (left >= 0 && text[left] === ",") return left;
@@ -2410,7 +2411,7 @@ function findCommaAfterWhitespace(text, startIndex) {
   }
   let idx = startIndex;
   let sawWhitespace = false;
-  while (idx < text.length && /\s/.test(text[idx])) {
+  while (idx < text.length && INVISIBLE_GAP_REGEX.test(text[idx] || "")) {
     sawWhitespace = true;
     idx++;
   }
@@ -2443,9 +2444,9 @@ function stripTrailingCommaAndSpace(text) {
 function findTrailingCommaBoundaryIndex(text) {
   const safe = typeof text === "string" ? text : "";
   let end = safe.length;
-  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && INVISIBLE_GAP_REGEX.test(safe[end - 1] || "")) end--;
   while (end > 0 && TRAILING_BOUNDARY_CLOSER_REGEX.test(safe[end - 1])) end--;
-  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && INVISIBLE_GAP_REGEX.test(safe[end - 1] || "")) end--;
   const commaIndex = end - 1;
   return commaIndex >= 0 && safe[commaIndex] === "," ? commaIndex : -1;
 }
@@ -2453,9 +2454,9 @@ function findTrailingCommaBoundaryIndex(text) {
 function resolveCommaInsertBoundaryInSegment(text) {
   const safe = typeof text === "string" ? text : "";
   let end = safe.length;
-  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && INVISIBLE_GAP_REGEX.test(safe[end - 1] || "")) end--;
   while (end > 0 && TRAILING_BOUNDARY_CLOSER_REGEX.test(safe[end - 1])) end--;
-  while (end > 0 && /\s/.test(safe[end - 1])) end--;
+  while (end > 0 && INVISIBLE_GAP_REGEX.test(safe[end - 1] || "")) end--;
   return Math.max(0, end);
 }
 
@@ -2967,110 +2968,93 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       exactApplyWindow: buildExactApplyWindowMeta(originalText, correctedText, srcIndex, targetIndex),
     };
   };
-  const isQuoteBoundaryToken = (value) =>
-    typeof value === "string" &&
-    /^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A\[\]]+$/u.test(value);
-  
-  // Check if anchor has quote boundary metadata (from token normalization)
-  // Closing quotes: straight quotes, curly closing quotes, right guillemets
-  const hasTrailingQuote = (anchor) =>
-    anchor?.trailingBoundary && BOUNDARY_QUOTE_REGEX.test(anchor.trailingBoundary);
-  // Opening quotes: straight quotes, curly opening quotes, left guillemets  
-  const hasLeadingQuote = (anchor) =>
-    anchor?.leadingBoundary && BOUNDARY_QUOTE_REGEX.test(anchor.leadingBoundary);
-  
-  let highlightAnchor =
+  const isLexicalAnchor = (anchor) =>
+    Number.isFinite(anchor?.charStart) && anchor.charStart >= 0 && /[\p{L}\p{N}]/u.test(anchor?.tokenText || "");
+  const pickFirstLexicalAnchor = (candidates) => {
+    if (!Array.isArray(candidates)) return null;
+    for (const candidate of candidates) {
+      if (isLexicalAnchor(candidate)) return candidate;
+    }
+    return null;
+  };
+
+  const defaultHighlightAnchor =
     sourceAround.at ??
     sourceAround.before ??
     sourceAround.after ??
     targetAround.at ??
     targetAround.before ??
     targetAround.after;
-  
-  // CRITICAL: The anchor might have quote boundaries from metadata even if tokenText is stripped
-  // If comma is at quote boundary, keep the quote anchor (don't swap to word)
-  // If anchor has trailing quote and intent is "after_closing_quote" or "before_opening_quote" after quote:
-  //   highlight the quote position by selecting the token that contains it
-  if ((hasTrailingQuote(highlightAnchor) || hasLeadingQuote(highlightAnchor)) && explicitQuoteIntent !== "none") {
-    // Keep this anchor - it has the quote we need to highlight
-  } else if (isQuoteBoundaryToken(highlightAnchor?.tokenText)) {
-    // Fallback: if tokenText itself is only quotes/brackets, try adjacent word
-    const adjacentWordAnchor =
-      [
-        sourceAround.before,
-        targetAround.before,
+
+  const preferAfterLexical =
+    explicitQuoteIntent === "before_opening_quote" || explicitQuoteIntent === "after_opening_quote";
+  let highlightAnchor = preferAfterLexical
+    ? pickFirstLexicalAnchor([
         sourceAround.after,
         targetAround.after,
-      ].find((anchor) => /[\p{L}\p{N}]/u.test(anchor?.tokenText || "")) || null;
-    if (adjacentWordAnchor) {
-      highlightAnchor = adjacentWordAnchor;
-    }
+        sourceAround.at,
+        targetAround.at,
+        sourceAround.before,
+        targetAround.before,
+      ])
+    : pickFirstLexicalAnchor([
+        sourceAround.before,
+        targetAround.before,
+        sourceAround.at,
+        targetAround.at,
+        sourceAround.after,
+        targetAround.after,
+      ]);
+
+  if (!highlightAnchor) {
+    highlightAnchor =
+      pickFirstLexicalAnchor([
+        sourceAround.at,
+        sourceAround.before,
+        sourceAround.after,
+        targetAround.at,
+        targetAround.before,
+        targetAround.after,
+      ]) || defaultHighlightAnchor;
   }
+
   let highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   let highlightCharEnd = highlightAnchor?.charEnd;
-  
-  // CRITICAL: For INSERT operations at quote boundaries, highlight ONLY the quote character
-  // at the insertion point, not the whole token
-  let quoteHighlightApplied = false;
+  const shouldHighlightQuoteOnly =
+    explicitQuoteIntent === "after_closing_quote" || explicitQuoteIntent === "after_opening_quote";
   if (
-    explicitQuoteIntent !== "none" &&
+    shouldHighlightQuoteOnly &&
     Number.isFinite(resolvedInsertBoundaryIndex) &&
     resolvedInsertBoundaryIndex >= 0
   ) {
-    // For INSERT operations, targetIndex tells us where comma will be inserted
-    // Search for quote characters around that position, skipping zero-width spaces
+    const quoteSearchText = typeof originalText === "string" && originalText.length ? originalText : correctedText;
+    const boundaryHint = Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : resolvedInsertBoundaryIndex;
     let quotePos = -1;
-    const closingQuoteRegex = BOUNDARY_QUOTE_REGEX;
-    const openingQuoteRegex = BOUNDARY_QUOTE_REGEX;
-    
-    // Search backwards from targetIndex, skipping invisible characters
-    let searchIdx = resolvedInsertBoundaryIndex - 1;
-    while (searchIdx >= 0 && invisibleCharRegex.test(correctedText[searchIdx])) {
-      searchIdx--;
+    let left = Math.min(quoteSearchText.length - 1, Math.floor(boundaryHint) - 1);
+    while (left >= 0 && invisibleCharRegex.test(quoteSearchText[left] || "")) left--;
+    if (left >= 0 && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[left] || "")) {
+      quotePos = left;
     }
-    if (searchIdx >= 0 && closingQuoteRegex.test(correctedText[searchIdx])) {
-      quotePos = searchIdx;
-    }
-    
-    // Search forwards from targetIndex, skipping invisible characters (if not found backwards)
     if (quotePos < 0) {
-      searchIdx = resolvedInsertBoundaryIndex;
-      while (searchIdx < correctedText.length && invisibleCharRegex.test(correctedText[searchIdx])) {
-        searchIdx++;
-      }
-      if (searchIdx < correctedText.length && closingQuoteRegex.test(correctedText[searchIdx])) {
-        quotePos = searchIdx;
+      let right = Math.max(0, Math.floor(boundaryHint));
+      while (right < quoteSearchText.length && invisibleCharRegex.test(quoteSearchText[right] || "")) right++;
+      if (right < quoteSearchText.length && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[right] || "")) {
+        quotePos = right;
       }
     }
-    
-    // Search further forwards for opening quote (if not found yet)
-    if (quotePos < 0) {
-      searchIdx = resolvedInsertBoundaryIndex;
-      while (searchIdx < correctedText.length && invisibleCharRegex.test(correctedText[searchIdx])) {
-        searchIdx++;
-      }
-      if (searchIdx < correctedText.length && openingQuoteRegex.test(correctedText[searchIdx])) {
-        quotePos = searchIdx;
-      }
-    }
-    
     if (quotePos >= 0) {
       highlightCharStart = quotePos;
       highlightCharEnd = quotePos + 1;
-      quoteHighlightApplied = true;
     }
   }
-  
-  if (!quoteHighlightApplied) {
-    if (
-      !(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) &&
-      typeof highlightCharStart === "number" &&
-      highlightCharStart >= 0 &&
-      typeof highlightAnchor?.tokenText === "string" &&
-      highlightAnchor.tokenText.length > 0
-    ) {
-      highlightCharEnd = highlightCharStart + highlightAnchor.tokenText.length;
-    }
+  if (
+    !(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) &&
+    typeof highlightCharStart === "number" &&
+    highlightCharStart >= 0 &&
+    typeof highlightAnchor?.tokenText === "string" &&
+    highlightAnchor.tokenText.length > 0
+  ) {
+    highlightCharEnd = highlightCharStart + highlightAnchor.tokenText.length;
   }
   if (!(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart)) {
     highlightCharEnd = highlightCharStart;

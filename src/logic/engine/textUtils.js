@@ -1,7 +1,8 @@
-const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007]/g;
-const TOKEN_REPEAT_LEADING_REGEX = /^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu;
+const SPACE_EQUIVALENTS_REGEX = /[\u00A0\u202F\u2007\u200B-\u200D\uFEFF]/g;
+const TOKEN_REPEAT_LEADING_REGEX =
+  /^[\s\u200B-\u200D\uFEFF"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu;
 const TOKEN_REPEAT_TRAILING_REGEX =
-  /[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu;
+  /[\s\u200B-\u200D\uFEFF,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu;
 
 // Helper to strip leading/trailing quotes and punctuation from API tokens
 // so they can be found in paragraph text (critical fix for quote-containing tokens)
@@ -9,8 +10,8 @@ const TOKEN_REPEAT_TRAILING_REGEX =
 export function stripTokenBoundaryPunctuation(text) {
   if (typeof text !== "string") return "";
   return text
-    .replace(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu, "")
-    .replace(/[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu, "")
+    .replace(/^[\s\u200B-\u200D\uFEFF"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/gu, "")
+    .replace(/[\s\u200B-\u200D\uFEFF,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/gu, "")
     .trim();
 }
 
@@ -20,19 +21,21 @@ export function extractTokenBoundaryMetadata(text) {
   if (typeof text !== "string") return { leadingBoundary: "", trailingBoundary: "", cleanText: "" };
   
   // Extract leading boundary
-  const leadingMatch = text.match(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u);
+  const leadingMatch = text.match(
+    /^[\s\u200B-\u200D\uFEFF"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u
+  );
   const leadingBoundary = leadingMatch ? leadingMatch[0] : "";
   
   // Extract trailing boundary
   const trailingMatch = text.match(
-    /[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u
+    /[\s\u200B-\u200D\uFEFF,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u
   );
   const trailingBoundary = trailingMatch ? trailingMatch[0] : "";
   
   // Get clean text
   const cleanText = text
-    .replace(/^[\s"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u, "")
-    .replace(/[\s,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u, "")
+    .replace(/^[\s\u200B-\u200D\uFEFF"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+/u, "")
+    .replace(/[\s\u200B-\u200D\uFEFF,.;:!?"'`\u2018\u2019\u201A\u201C\u201D\u201E()\u00AB\u00BB\u2039\u203A]+$/u, "")
     .trim();
   
   return { leadingBoundary, trailingBoundary, cleanText };
@@ -115,7 +118,7 @@ export function findCommaAfterWhitespace(text, startIndex) {
   }
   let idx = startIndex;
   let sawWhitespace = false;
-  while (idx < text.length && /\s/.test(text[idx])) {
+  while (idx < text.length && /[\s\u200B-\u200D\uFEFF]/u.test(text[idx])) {
     sawWhitespace = true;
     idx++;
   }
