@@ -2,4 +2,6 @@ vejice_2/node_modules/
 vejice_2/.env
 node_modules
 .env.local
-vejice_2\QUOTE_PATTERNS_ANALYSIS.md
+vejice_2/QUOTE_PATTERNS_ANALYSIS.md
+vejice_2/scripts
+vejice_2/reports

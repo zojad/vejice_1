@@ -3962,6 +3962,11 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
     const searchOpts = { matchCase: false, matchWholeWord: false };
     const boundaryIntent = anchor?.boundaryMeta?.explicitQuoteIntent ?? "none";
+    const boundaryPunctuationChar =
+      typeof anchor?.boundaryMeta?.punctuationBoundaryChar === "string"
+        ? anchor.boundaryMeta.punctuationBoundaryChar
+        : "";
+    const dashBoundaryRegex = /[-\u2013\u2014\u2212]/u;
     const quoteCharRegex = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
     const invisibleOrGapRegex = /[\s,\u200B-\u200D\uFEFF]/u;
     let range = null;
@@ -3995,7 +4000,62 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       }
       return -1;
     };
+    const resolveDashPosFromCandidates = (text, candidates) => {
+      if (!text || !Array.isArray(candidates) || !candidates.length) return -1;
+      for (const candidate of candidates) {
+        if (!Number.isFinite(candidate) || candidate < 0 || candidate > text.length) continue;
+        let left = Math.min(text.length - 1, Math.floor(candidate) - 1);
+        while (left >= 0 && invisibleOrGapRegex.test(text[left] || "")) left--;
+        if (left >= 0 && dashBoundaryRegex.test(text[left] || "")) {
+          return left;
+        }
+        const at = Math.max(0, Math.min(text.length - 1, Math.floor(candidate)));
+        if (dashBoundaryRegex.test(text[at] || "")) {
+          return at;
+        }
+        let right = Math.max(0, Math.floor(candidate));
+        while (right < text.length && invisibleOrGapRegex.test(text[right] || "")) right++;
+        if (right < text.length && dashBoundaryRegex.test(text[right] || "")) {
+          return right;
+        }
+      }
+      return -1;
+    };
     const quotePosFromBoundary = resolveQuotePosFromCandidates(baseText, boundaryCandidates);
+    const opBoundaryPos = Number.isFinite(suggestion?.meta?.op?.correctedPos)
+      ? Math.floor(suggestion.meta.op.correctedPos)
+      : Number.isFinite(suggestion?.meta?.op?.pos)
+        ? Math.floor(suggestion.meta.op.pos)
+        : -1;
+    const deriveDashPosFromOpSnippets = () => {
+      if (!baseText || !Number.isFinite(opBoundaryPos) || opBoundaryPos < 0) return [];
+      const hints = [];
+      if (typeof rawRight === "string" && rawRight.length) {
+        const rightDashOffset = rawRight.search(dashBoundaryRegex);
+        if (rightDashOffset >= 0) {
+          hints.push(opBoundaryPos + rightDashOffset);
+        }
+      }
+      if (typeof rawLeft === "string" && rawLeft.length) {
+        const leftDashRelative = rawLeft.search(/[-\u2013\u2014\u2212][^\S\r\n]*$/u);
+        if (leftDashRelative >= 0) {
+          hints.push(opBoundaryPos - Math.max(0, rawLeft.length - leftDashRelative));
+        } else {
+          const leftLastDash = rawLeft.lastIndexOf("-");
+          if (leftLastDash >= 0) {
+            hints.push(opBoundaryPos - Math.max(0, rawLeft.length - leftLastDash));
+          }
+        }
+      }
+      return hints
+        .filter((value, index, arr) => Number.isFinite(value) && value >= 0 && value <= baseText.length && arr.indexOf(value) === index);
+    };
+    const dashBoundaryCandidates = [
+      ...boundaryCandidates,
+      opBoundaryPos,
+      ...deriveDashPosFromOpSnippets(),
+    ];
+    const dashPosFromBoundary = resolveDashPosFromCandidates(baseText, dashBoundaryCandidates);
     const resolveQuoteRangeNearPos = async (quotePosHint) => {
       if (!Number.isFinite(quotePosHint) || quotePosHint < 0 || quotePosHint >= baseText.length) return null;
       const liveText = typeof paragraph.text === "string" ? paragraph.text : baseText;
@@ -4045,6 +4105,54 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       }
       return null;
     };
+    const resolveDashRangeNearPos = async (dashPosHint) => {
+      if (!Number.isFinite(dashPosHint) || dashPosHint < 0 || dashPosHint >= baseText.length) return null;
+      const liveText = typeof paragraph.text === "string" ? paragraph.text : baseText;
+      const mappedStart = mapIndexAcrossCanonical(baseText, liveText, dashPosHint);
+      const hintChar = baseText[dashPosHint] || "";
+      const variants = [];
+      if (dashBoundaryRegex.test(hintChar)) variants.push(hintChar);
+      for (const dashVariant of ["-", "\u2013", "\u2014", "\u2212"]) {
+        if (!variants.includes(dashVariant)) variants.push(dashVariant);
+      }
+      for (const dashVariant of variants) {
+        const matches = await searchParagraphForSnippet(context, paragraph, dashVariant);
+        if (!matches?.items?.length) continue;
+        const occurrence = countSnippetOccurrencesBefore(liveText, dashVariant, mappedStart);
+        const idx = Math.min(occurrence, matches.items.length - 1);
+        return matches.items[idx] || null;
+      }
+      return null;
+    };
+    const resolveDashContextRangeNearPos = async (dashPosHint) => {
+      if (!Number.isFinite(dashPosHint) || dashPosHint < 0 || dashPosHint >= baseText.length) return null;
+      const safePos = Math.max(0, Math.min(Math.floor(dashPosHint), baseText.length - 1));
+      const liveText = typeof paragraph.text === "string" ? paragraph.text : baseText;
+      const contextWindows = [
+        [1, 1],
+        [2, 1],
+        [1, 2],
+        [2, 2],
+      ];
+      for (const [leftSpan, rightSpan] of contextWindows) {
+        const start = Math.max(0, safePos - leftSpan);
+        const end = Math.min(baseText.length, safePos + rightSpan + 1);
+        const snippet = baseText.slice(start, end);
+        if (!snippet || !dashBoundaryRegex.test(snippet)) continue;
+        if (![...snippet].some((ch) => /[\p{L}\p{N}]/u.test(ch))) continue;
+        const mappedHint = mapIndexAcrossCanonical(baseText, liveText, start);
+        const resolved = await findExactSnippetRangeNearIndex(
+          context,
+          paragraph,
+          liveText,
+          snippet,
+          mappedHint,
+          "highlight-insert-dash-context"
+        );
+        if (resolved) return resolved;
+      }
+      return null;
+    };
     const preferAfterLexical =
       boundaryIntent === "before_opening_quote" || boundaryIntent === "after_opening_quote";
     const lexicalAnchorPriority = preferAfterLexical
@@ -4072,6 +4180,26 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         candidate.charStart >= 0 &&
         /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
     );
+    const shouldForcePunctuationBoundary =
+      anchor?.boundaryMeta?.forcePunctuationHighlight === true ||
+      dashBoundaryRegex.test(boundaryPunctuationChar || "") ||
+      dashPosFromBoundary >= 0;
+    const punctuationAnchorCandidate = shouldForcePunctuationBoundary
+      ? [
+          anchor.highlightAnchorTarget,
+          anchor.sourceTokenAt,
+          anchor.targetTokenAt,
+          anchor.sourceTokenBefore,
+          anchor.targetTokenBefore,
+          anchor.sourceTokenAfter,
+          anchor.targetTokenAfter,
+        ].find(
+          (candidate) =>
+            Number.isFinite(candidate?.charStart) &&
+            candidate.charStart >= 0 &&
+            dashBoundaryRegex.test(candidate?.tokenText || "")
+        )
+      : null;
     const shouldForceQuoteBoundary =
       boundaryIntent === "after_closing_quote" || boundaryIntent === "after_opening_quote";
     const shouldPreferQuoteBoundary =
@@ -4148,6 +4276,42 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       });
       return false;
     }
+  } else if (shouldForcePunctuationBoundary) {
+    if (!range && dashPosFromBoundary >= 0) {
+      range = await resolveDashRangeNearPos(dashPosFromBoundary);
+    }
+    if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
+      const dashPosFromHighlight = resolveDashPosFromCandidates(baseText, [anchor.highlightCharStart]);
+      if (dashPosFromHighlight >= 0) {
+        range = await resolveDashRangeNearPos(dashPosFromHighlight);
+      }
+    }
+    if (!range) {
+      const fallbackHints = [
+        dashPosFromBoundary,
+        anchor?.highlightCharStart,
+        ...dashBoundaryCandidates,
+      ].filter((value, index, arr) => Number.isFinite(value) && value >= 0 && arr.indexOf(value) === index);
+      for (const hint of fallbackHints) {
+        const dashPos = resolveDashPosFromCandidates(baseText, [hint]);
+        if (dashPos < 0) continue;
+        range = await resolveDashContextRangeNearPos(dashPos);
+        if (range) break;
+      }
+    }
+    if (!range) {
+      const unresolvedPayload = {
+        suggestionId: suggestion?.id ?? null,
+        paragraphIndex: suggestion?.paragraphIndex,
+        boundaryPunctuationChar,
+        dashPosFromBoundary,
+        opPos: suggestion?.meta?.op?.pos,
+        opCorrectedPos: suggestion?.meta?.op?.correctedPos,
+        boundaryCandidates: dashBoundaryCandidates,
+      };
+      warn("highlightInsertSuggestion: punctuation boundary unresolved", unresolvedPayload);
+      return false;
+    }
   } else if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
     const metaEndCandidate = {
       charStart: anchor.highlightCharStart,
@@ -4166,19 +4330,29 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     );
   }
 
-  const highlightAnchorCandidate =
-    lexicalAnchorCandidate ||
-    [
-      anchor.highlightAnchorTarget,
-      anchor.sourceTokenAt,
-      anchor.targetTokenAt,
-      anchor.sourceTokenBefore,
-      anchor.targetTokenBefore,
-      anchor.sourceTokenAfter,
-      anchor.targetTokenAfter,
-    ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
+  const highlightAnchorCandidate = shouldForcePunctuationBoundary
+    ? punctuationAnchorCandidate ||
+      [
+        anchor.highlightAnchorTarget,
+        anchor.sourceTokenAt,
+        anchor.targetTokenAt,
+        anchor.sourceTokenBefore,
+        anchor.targetTokenBefore,
+        anchor.sourceTokenAfter,
+        anchor.targetTokenAfter,
+      ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0)
+    : lexicalAnchorCandidate ||
+      [
+        anchor.highlightAnchorTarget,
+        anchor.sourceTokenAt,
+        anchor.targetTokenAt,
+        anchor.sourceTokenBefore,
+        anchor.targetTokenBefore,
+        anchor.sourceTokenAfter,
+        anchor.targetTokenAfter,
+      ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
 
-  if (!range && !shouldPreferQuoteBoundary && highlightAnchorCandidate) {
+  if (!range && !shouldPreferQuoteBoundary && !shouldForcePunctuationBoundary && highlightAnchorCandidate) {
     const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);
     range = await getRangeForAnchorSpan(
       context,
@@ -4189,6 +4363,10 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       "highlight-insert-anchor",
       highlightAnchorCandidate.tokenText || anchor.highlightText
     );
+  }
+
+  if (!range && shouldForcePunctuationBoundary) {
+    return false;
   }
 
   if (!range && lastWord) {

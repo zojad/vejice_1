@@ -36,6 +36,7 @@ const TRAILING_COMMA_REGEX = /[,\s\u200B-\u200D\uFEFF]+$/;
 const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
 const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u;
 const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u;
+const BOUNDARY_DASH_REGEX = /[-\u2013\u2014\u2212]/u;
 const TRAILING_BOUNDARY_CLOSER_REGEX = BOUNDARY_CLOSER_REGEX;
 const INVISIBLE_GAP_REGEX = /[\s\u200B-\u200D\uFEFF]/u;
 const LOG_PREFIX = "[Vejice DEBUG DUMP]";
@@ -2132,17 +2133,22 @@ function rekeyTokensWithMap(tokens, prefix) {
 
 function remapCorrections(corrections, idMap) {
   if (!corrections || !idMap?.size) return corrections;
+  const remapCorrectionEntry = (entry) => {
+    if (Array.isArray(entry)) {
+      return entry.map((nested) => remapCorrectionEntry(nested));
+    }
+    if (!entry || typeof entry !== "object") return entry;
+    const mappedId = idMap.get(entry.source_id) ?? entry.source_id;
+    if (mappedId === entry.source_id) return entry;
+    return { ...entry, source_id: mappedId };
+  };
   const remapGroup = (group) => {
     if (!group) return group;
     const remapped = { ...group };
     const mappedStart = idMap.get(group.source_start) ?? group.source_start;
     remapped.source_start = mappedStart;
     if (Array.isArray(group.corrections)) {
-      remapped.corrections = group.corrections.map((corr) => {
-        if (!corr) return corr;
-        const mappedId = idMap.get(corr.source_id) ?? corr.source_id;
-        return { ...corr, source_id: mappedId };
-      });
+      remapped.corrections = group.corrections.map((corr) => remapCorrectionEntry(corr));
     }
     return remapped;
   };
@@ -2161,15 +2167,89 @@ function remapCorrections(corrections, idMap) {
 
 function correctionsHaveEntries(corrections) {
   if (!corrections) return false;
-  if (Array.isArray(corrections)) {
-    return corrections.some((group) => Array.isArray(group?.corrections) && group.corrections.length);
+  const groups = Array.isArray(corrections)
+    ? corrections
+    : typeof corrections === "object"
+      ? Object.values(corrections)
+      : [];
+  if (!groups.length) return false;
+  return groups.some((group) => {
+    if (!group || typeof group !== "object") return false;
+    const entries = flattenCorrectionEntries(group.corrections);
+    if (entries.length) return true;
+    return Boolean(normalizeCorrectionOperationKind(group.operation ?? group.type ?? group.op));
+  });
+}
+
+function flattenCorrectionEntries(rawEntries, out = []) {
+  if (Array.isArray(rawEntries)) {
+    for (const entry of rawEntries) {
+      flattenCorrectionEntries(entry, out);
+    }
+    return out;
   }
-  if (typeof corrections === "object") {
-    return Object.values(corrections).some(
-      (group) => Array.isArray(group?.corrections) && group.corrections.length
-    );
+  if (rawEntries && typeof rawEntries === "object") {
+    out.push(rawEntries);
   }
-  return false;
+  return out;
+}
+
+function normalizeCorrectionOperationKind(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "add" || normalized === "insert") return "insert";
+  if (normalized === "remove" || normalized === "delete") return "delete";
+  return null;
+}
+
+function looksLikeCommaCorrectionGroup(group, anchorsEntry) {
+  if (!group || typeof group !== "object") return false;
+  const sourceTokenId = group.source_start ?? group.sourceStart ?? group.source_id ?? group.sourceId;
+  const targetTokenId =
+    group.target_start ??
+    group.targetStart ??
+    group.target_pos ??
+    group.targetPos ??
+    group.target_id ??
+    group.targetId;
+  const sourceTokenText =
+    sourceTokenId && anchorsEntry?.sourceAnchors?.byId?.[sourceTokenId]
+      ? anchorsEntry.sourceAnchors.byId[sourceTokenId].tokenText
+      : "";
+  const targetTokenText =
+    targetTokenId && anchorsEntry?.targetAnchors?.byId?.[targetTokenId]
+      ? anchorsEntry.targetAnchors.byId[targetTokenId].tokenText
+      : "";
+  if (
+    (typeof sourceTokenText === "string" && sourceTokenText.includes(",")) ||
+    (typeof targetTokenText === "string" && targetTokenText.includes(","))
+  ) {
+    return true;
+  }
+  const label = typeof group.label === "string" ? group.label.toLowerCase() : "";
+  return /comma|vejic/.test(label);
+}
+
+function resolveCorrectionSourceTokenId(entry, group, anchorsEntry) {
+  const entryTokenId = entry?.source_id ?? entry?.sourceId ?? entry?.token_id ?? entry?.tokenId;
+  if (entryTokenId && anchorsEntry?.sourceAnchors?.byId?.[entryTokenId]) return entryTokenId;
+  return (
+    group?.source_start ??
+    group?.sourceStart ??
+    group?.source_id ??
+    group?.sourceId ??
+    entryTokenId ??
+    null
+  );
+}
+
+function pickCorrectionEntryText(entry, keys = []) {
+  if (!entry || typeof entry !== "object") return "";
+  for (const key of keys) {
+    const value = entry[key];
+    if (typeof value === "string" && value.length) return value;
+  }
+  return "";
 }
 
 function collapseDuplicateDiffOps(ops) {
@@ -2663,11 +2743,28 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
   const ops = [];
   const seen = new Set();
   for (const group of groups) {
-    const entries = Array.isArray(group?.corrections) ? group.corrections : [];
+    const entries = flattenCorrectionEntries(group?.corrections);
+    const operationKind = normalizeCorrectionOperationKind(group?.operation ?? group?.type ?? group?.op);
     for (const entry of entries) {
-      const analysis = analyzeCommaChangeFromCorrections(entry?.source_text, entry?.text);
+      const entrySource = pickCorrectionEntryText(entry, [
+        "source_text",
+        "sourceText",
+        "source",
+        "original_text",
+        "originalText",
+      ]);
+      const correctedSegment = pickCorrectionEntryText(entry, [
+        "text",
+        "target_text",
+        "targetText",
+        "corrected_text",
+        "correctedText",
+        "suggested_text",
+        "suggestedText",
+      ]);
+      const analysis = analyzeCommaChangeFromCorrections(entrySource, correctedSegment);
       if (!analysis) continue;
-      const tokenId = entry?.source_id ?? group?.source_start;
+      const tokenId = resolveCorrectionSourceTokenId(entry, group, anchorsEntry);
       if (!tokenId) continue;
       if (tracking?.tokenIds) {
         tracking.tokenIds.add(tokenId);
@@ -2680,7 +2777,6 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         continue;
       }
       const tokenText = anchor.tokenText ?? "";
-      const entrySource = typeof entry?.source_text === "string" ? entry.source_text : "";
 
       let placementAnchor = anchor;
       if (entrySource && tokenText) {
@@ -2818,6 +2914,74 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         });
       }
     }
+    if (entries.length || !operationKind || !looksLikeCommaCorrectionGroup(group, anchorsEntry)) continue;
+    const tokenId = resolveCorrectionSourceTokenId(null, group, anchorsEntry);
+    if (!tokenId) continue;
+    if (tracking?.tokenIds) {
+      tracking.tokenIds.add(tokenId);
+    }
+    const anchor = anchorsEntry?.sourceAnchors?.byId?.[tokenId];
+    if (!anchor || !anchor.matched || anchor.charStart < 0) {
+      if (tracking?.unmatchedTokenIds) {
+        tracking.unmatchedTokenIds.add(tokenId);
+      }
+      continue;
+    }
+    const baseText = typeof anchor.tokenText === "string" ? anchor.tokenText : "";
+    if (tracking?.intents) {
+      tracking.intents.push({
+        tokenId,
+        anchor,
+        analysis: {
+          addComma: operationKind === "insert",
+          removeComma: operationKind === "delete",
+          baseText,
+        },
+        baseText,
+      });
+    }
+    if (operationKind === "delete") {
+      const rawLocalIndex = baseText.lastIndexOf(",");
+      if (rawLocalIndex < 0) continue;
+      const localIndex = resolveAnchorRelativeBoundaryIndex(baseText, rawLocalIndex);
+      const absolutePos = anchor.charStart + localIndex;
+      const key = `del-${absolutePos}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ops.push({
+        kind: "delete",
+        pos: absolutePos,
+        originalPos: absolutePos,
+        correctedPos: absolutePos,
+        paragraphIndex,
+        fromCorrections: true,
+      });
+      continue;
+    }
+    const orderedAnchors = anchorsEntry?.sourceAnchors?.ordered;
+    const pairBoundary = resolveInsertBoundaryFromAnchorPair(anchor, orderedAnchors);
+    const fallbackRelative = resolveCommaInsertBoundaryInSegment(baseText);
+    const absolutePos =
+      pairBoundary && Number.isFinite(pairBoundary.pos) && pairBoundary.pos >= 0
+        ? pairBoundary.pos
+        : anchor.charStart + fallbackRelative;
+    if (!Number.isFinite(absolutePos) || absolutePos < 0) continue;
+    const paragraphOriginalText =
+      typeof anchorsEntry?.originalText === "string" ? anchorsEntry.originalText : "";
+    if (paragraphOriginalText && hasCommaAtBoundary(paragraphOriginalText, absolutePos)) {
+      continue;
+    }
+    const key = `ins-${absolutePos}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ops.push({
+      kind: "insert",
+      pos: absolutePos,
+      originalPos: absolutePos,
+      correctedPos: absolutePos,
+      paragraphIndex,
+      fromCorrections: true,
+    });
   }
 
   if (tracking && tracking.intents?.length) {
@@ -3129,6 +3293,18 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   };
   
   const explicitQuoteIntent = classifyIntent();
+  const resolveDashBoundaryInfo = () => {
+    if (!correctedText || !Number.isFinite(resolvedInsertBoundaryIndex) || resolvedInsertBoundaryIndex < 0) {
+      return { isDashBoundary: false, dashChar: null };
+    }
+    const boundaryPos = Math.max(0, Math.min(correctedText.length, Math.floor(resolvedInsertBoundaryIndex)));
+    const leftChar = nearestNonSpaceLeft(boundaryPos - 1);
+    const atChar = boundaryPos < correctedText.length ? correctedText[boundaryPos] || "" : "";
+    const rightChar = nearestNonSpaceRight(boundaryPos);
+    const dashChar = [atChar, leftChar, rightChar].find((ch) => BOUNDARY_DASH_REGEX.test(ch || "")) || "";
+    return { isDashBoundary: Boolean(dashChar), dashChar: dashChar || null };
+  };
+  const dashBoundaryInfo = resolveDashBoundaryInfo();
   
   const buildBoundaryMeta = () => {
     const commaIndex = resolvedCommaIndex;
@@ -3149,6 +3325,8 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       afterToken: snapshotAnchor(afterAnchor),
       preferredSide,
       explicitQuoteIntent,
+      forcePunctuationHighlight: dashBoundaryInfo.isDashBoundary,
+      punctuationBoundaryChar: dashBoundaryInfo.dashChar,
       leftContext: correctedText.slice(
         Math.max(0, resolvedInsertBoundaryIndex - 12),
         Math.max(0, resolvedInsertBoundaryIndex)
@@ -3169,6 +3347,17 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     }
     return null;
   };
+  const isDashAnchor = (anchor) =>
+    Number.isFinite(anchor?.charStart) &&
+    anchor.charStart >= 0 &&
+    BOUNDARY_DASH_REGEX.test(anchor?.tokenText || "");
+  const pickFirstDashAnchor = (candidates) => {
+    if (!Array.isArray(candidates)) return null;
+    for (const candidate of candidates) {
+      if (isDashAnchor(candidate)) return candidate;
+    }
+    return null;
+  };
 
   const defaultHighlightAnchor =
     sourceAround.at ??
@@ -3178,25 +3367,38 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     targetAround.before ??
     targetAround.after;
 
+  const boundaryDashAnchor = dashBoundaryInfo.isDashBoundary
+    ? pickFirstDashAnchor([
+        sourceAround.at,
+        targetAround.at,
+        sourceAround.before,
+        targetAround.before,
+        sourceAround.after,
+        targetAround.after,
+      ])
+    : null;
   const preferAfterLexical =
     explicitQuoteIntent === "before_opening_quote" || explicitQuoteIntent === "after_opening_quote";
-  let highlightAnchor = preferAfterLexical
-    ? pickFirstLexicalAnchor([
-        sourceAround.after,
-        targetAround.after,
-        sourceAround.at,
-        targetAround.at,
-        sourceAround.before,
-        targetAround.before,
-      ])
-    : pickFirstLexicalAnchor([
-        sourceAround.before,
-        targetAround.before,
-        sourceAround.at,
-        targetAround.at,
-        sourceAround.after,
-        targetAround.after,
-      ]);
+  let highlightAnchor = boundaryDashAnchor;
+  if (!highlightAnchor) {
+    highlightAnchor = preferAfterLexical
+      ? pickFirstLexicalAnchor([
+          sourceAround.after,
+          targetAround.after,
+          sourceAround.at,
+          targetAround.at,
+          sourceAround.before,
+          targetAround.before,
+        ])
+      : pickFirstLexicalAnchor([
+          sourceAround.before,
+          targetAround.before,
+          sourceAround.at,
+          targetAround.at,
+          sourceAround.after,
+          targetAround.after,
+        ]);
+  }
 
   if (!highlightAnchor) {
     highlightAnchor =

@@ -10,6 +10,8 @@ const LEMMA_INDEX_WINDOW = 14;
 const LEMMA_CHAR_WINDOW = 140;
 const LEMMA_CACHE_MAX_ENTRIES = 1200;
 const LEMMA_CACHE_TTL_MS = 10 * 60 * 1000;
+const LEMMA_FAILURE_BACKOFF_BASE_MS = 1500;
+const LEMMA_FAILURE_BACKOFF_MAX_MS = 45000;
 const snip = (value) =>
   typeof value === "string" && value.length > MAX_LOG_LENGTH
     ? `${value.slice(0, MAX_LOG_LENGTH)}…`
@@ -99,6 +101,9 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
     this.fallbackProvider = new SyntheticAnchorProvider();
     this._didLogLemmaShapeThisRun = false;
     this.lemmaTokenCache = new Map();
+    this.lemmaFetchInFlight = new Map();
+    this.lemmaFailureCount = 0;
+    this.lemmaFailureBackoffUntil = 0;
   }
 
   supportsCharHints() {
@@ -108,6 +113,9 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
   reset() {
     this.paragraphAnchors.length = 0;
     this._didLogLemmaShapeThisRun = false;
+    this.lemmaFetchInFlight.clear();
+    this.lemmaFailureCount = 0;
+    this.lemmaFailureBackoffUntil = 0;
   }
 
   isLemmaTokenCacheEnabled() {
@@ -146,6 +154,31 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
       if (typeof oldestKey === "undefined") break;
       this.lemmaTokenCache.delete(oldestKey);
     }
+  }
+
+  isLemmaBackoffActive() {
+    return Number.isFinite(this.lemmaFailureBackoffUntil) && Date.now() < this.lemmaFailureBackoffUntil;
+  }
+
+  markLemmaFetchSuccess() {
+    this.lemmaFailureCount = 0;
+    this.lemmaFailureBackoffUntil = 0;
+  }
+
+  markLemmaFetchFailure(error) {
+    const previous = Number.isFinite(this.lemmaFailureCount) ? this.lemmaFailureCount : 0;
+    const nextCount = Math.max(1, previous + 1);
+    this.lemmaFailureCount = nextCount;
+    const delay = Math.min(
+      LEMMA_FAILURE_BACKOFF_MAX_MS,
+      LEMMA_FAILURE_BACKOFF_BASE_MS * Math.pow(2, Math.max(0, nextCount - 1))
+    );
+    this.lemmaFailureBackoffUntil = Date.now() + delay;
+    logWarn("Lemma request failed", {
+      failures: nextCount,
+      backoffMs: delay,
+      message: error?.message || String(error || "unknown-error"),
+    });
   }
 
   setAnchors(paragraphIndex, anchors) {
@@ -191,10 +224,18 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
       target: null,
     };
     try {
-      const [sourceLemmaTokens, targetLemmaTokens] = await Promise.all([
-        this.fetchLemmaTokens(originalText),
-        this.fetchLemmaTokens(correctedText),
-      ]);
+      let sourceLemmaTokens = [];
+      let targetLemmaTokens = [];
+      if (originalText === correctedText) {
+        const sharedTokens = await this.fetchLemmaTokens(originalText);
+        sourceLemmaTokens = sharedTokens;
+        targetLemmaTokens = sharedTokens;
+      } else {
+        [sourceLemmaTokens, targetLemmaTokens] = await Promise.all([
+          this.fetchLemmaTokens(originalText),
+          this.fetchLemmaTokens(correctedText),
+        ]);
+      }
       const sourceQuality = this.applyLemmaOffsets({
         collection: fallbackEntry.sourceAnchors,
         lemmas: sourceLemmaTokens,
@@ -244,25 +285,50 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
       logInfo("Lemma cache hit", "| tokens:", cachedTokens.length);
       return cachedTokens;
     }
+    if (this.isLemmaBackoffActive()) {
+      throw new Error("Lemmatizer temporarily in backoff window");
+    }
+    const requestKey = this.buildLemmaCacheKey(safeText);
+    const inflight = this.lemmaFetchInFlight.get(requestKey);
+    if (inflight?.text === safeText && inflight?.promise) {
+      return inflight.promise;
+    }
     const timerLabel = `${LOG_PREFIX} fetch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    logInfo("Fetching lemmas", "| url:", this.endpoint, "| snippet:", snip(safeText));
-    console.time?.(timerLabel);
-    const response = await this.client.post(
-      this.endpoint,
-      {
-        lang: "sl",
-        text: safeText,
-      },
-      {
-        timeout: this.client.defaults?.timeout,
+    const requestPromise = (async () => {
+      logInfo("Fetching lemmas", "| url:", this.endpoint, "| snippet:", snip(safeText));
+      console.time?.(timerLabel);
+      try {
+        const response = await this.client.post(
+          this.endpoint,
+          {
+            lang: "sl",
+            text: safeText,
+          },
+          {
+            timeout: this.client.defaults?.timeout,
+          }
+        );
+        const lemmaTokens = normalizeLemmaPayload(response?.data);
+        logInfo("Lemma response", "| tokens:", lemmaTokens.length);
+        this.setCachedLemmaTokens(safeText, lemmaTokens);
+        this.logLemmaPayloadShapeOnce(response?.data, lemmaTokens);
+        this.markLemmaFetchSuccess();
+        return lemmaTokens;
+      } catch (error) {
+        this.markLemmaFetchFailure(error);
+        throw error;
+      } finally {
+        console.timeEnd?.(timerLabel);
       }
-    );
-    console.timeEnd?.(timerLabel);
-    const lemmaTokens = normalizeLemmaPayload(response?.data);
-    logInfo("Lemma response", "| tokens:", lemmaTokens.length);
-    this.setCachedLemmaTokens(safeText, lemmaTokens);
-    this.logLemmaPayloadShapeOnce(response?.data, lemmaTokens);
-    return lemmaTokens;
+    })();
+    this.lemmaFetchInFlight.set(requestKey, { text: safeText, promise: requestPromise });
+    requestPromise.finally(() => {
+      const current = this.lemmaFetchInFlight.get(requestKey);
+      if (current?.promise === requestPromise) {
+        this.lemmaFetchInFlight.delete(requestKey);
+      }
+    });
+    return requestPromise;
   }
 
   logLemmaPayloadShapeOnce(rawPayload, normalizedTokens = []) {

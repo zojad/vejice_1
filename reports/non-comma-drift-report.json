@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "timestamp": "2026-03-22T13:20:15.552Z",
+    "endpoint": "https://localhost:4001/api/postavi_vejice",
+    "inputFile": "C:\\Users\\zojad\\vejice_2\\scripts\\test_text.txt",
+    "totalRequested": 13,
+    "ok": 6,
+    "failed": 7,
+    "changed": 6,
+    "unchanged": 0,
+    "commaOnlyAppRule": 4,
+    "nonCommaDriftByAppRule": 2,
+    "commaOnlyStrict": 3,
+    "nonCommaDriftStrict": 3,
+    "percentages": {
+      "nonCommaDriftByAppRule_over_changed": 33.33,
+      "nonCommaDriftStrict_over_changed": 50,
+      "failures_over_total": 53.85
+    },
+    "durationMs": 2923
+  },
+  "examples": {
+    "nonCommaDriftByAppRule": [
+      {
+        "index": 4,
+        "sentence": "Kot kaže zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4.093.454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju, bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne ki se znižuje za 1 %. Ta ukrep bo v proračun letos prinesel 1,35 milijona evrov manj (2,71 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 55,93 milijona evrov (117,27 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 5,79 milijona evrov (letno 10,43 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 20,3 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov, tem pa je nato v petek zeleno luč prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga o novem socialnem sporazumu po zgledu ustave, ki je bil med pogajanji sindikatov in vlade, postavljen v ozadje.",
+        "corrected": "Kot kaže, zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4. 093. 454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne, ki se znižuje za 1 %.Ta ukrep bo v proračun letos prinesel 135 milijona evrov manj (271 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 5593 milijona evrov (11727 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 579 milijona evrov (letno 1043 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 203 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih, sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov tem pa je nato v petek zeleno luč, prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga",
+        "status": 200,
+        "attempt": 1
+      },
+      {
+        "index": 12,
+        "sentence": "V intervjuju, objavljenem v Oni 25. 3. 2008, z Andrejem Rozmanom Rozo me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega, množično uvažanega francoskega karavana v katerih ob pogledu na nemški avto v vzvratnem ogledalu, kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka, in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo pa se jim niti sanja ne da bi po svojem vedenju, bolj kot na voznikovega sodili na Recarov sedež pripet na zadnji klopi. Ker se sedaj študentje lahko prijavijo na izpit tri dni pred izpitom to pomeni, da če je izpit v ponedeljek zjutraj, se študentje prijavljajo še do polnoči v petek. Prišli so oče pa mama pa sestra pa nihče jih ni povabil.",
+        "corrected": "V intervjuju, objavljenem v Oni 25. 3. 2008 z Andrejem Rozmanom Rozo, me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega množično uvažanega francoskega karavana, v katerih ob pogledu na nemški avto v vzvratnem ogledalu kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi, da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo, pa se jim niti sanja ne, da bi po svojem vedenju bolj kot na voznikovega sodili na Recarov sedež, pripet na zadnji klopi. Ker se sedaj, študentje lahko, prijavijo na, izpit tri dni pred izpitom",
+        "status": 200,
+        "attempt": 2
+      }
+    ],
+    "nonCommaDriftStrict": [
+      {
+        "index": 0,
+        "sentence": "»Miš ki rjove kot zmaj.«",
+        "corrected": "»Miš, ki rjove kot zmaj. «",
+        "status": 200,
+        "attempt": 2
+      },
+      {
+        "index": 4,
+        "sentence": "Kot kaže zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4.093.454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju, bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne ki se znižuje za 1 %. Ta ukrep bo v proračun letos prinesel 1,35 milijona evrov manj (2,71 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 55,93 milijona evrov (117,27 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 5,79 milijona evrov (letno 10,43 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 20,3 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov, tem pa je nato v petek zeleno luč prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga o novem socialnem sporazumu po zgledu ustave, ki je bil med pogajanji sindikatov in vlade, postavljen v ozadje.",
+        "corrected": "Kot kaže, zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4. 093. 454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne, ki se znižuje za 1 %.Ta ukrep bo v proračun letos prinesel 135 milijona evrov manj (271 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 5593 milijona evrov (11727 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 579 milijona evrov (letno 1043 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 203 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih, sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov tem pa je nato v petek zeleno luč, prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga",
+        "status": 200,
+        "attempt": 1
+      },
+      {
+        "index": 12,
+        "sentence": "V intervjuju, objavljenem v Oni 25. 3. 2008, z Andrejem Rozmanom Rozo me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega, množično uvažanega francoskega karavana v katerih ob pogledu na nemški avto v vzvratnem ogledalu, kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka, in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo pa se jim niti sanja ne da bi po svojem vedenju, bolj kot na voznikovega sodili na Recarov sedež pripet na zadnji klopi. Ker se sedaj študentje lahko prijavijo na izpit tri dni pred izpitom to pomeni, da če je izpit v ponedeljek zjutraj, se študentje prijavljajo še do polnoči v petek. Prišli so oče pa mama pa sestra pa nihče jih ni povabil.",
+        "corrected": "V intervjuju, objavljenem v Oni 25. 3. 2008 z Andrejem Rozmanom Rozo, me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega množično uvažanega francoskega karavana, v katerih ob pogledu na nemški avto v vzvratnem ogledalu kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi, da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo, pa se jim niti sanja ne, da bi po svojem vedenju bolj kot na voznikovega sodili na Recarov sedež, pripet na zadnji klopi. Ker se sedaj, študentje lahko, prijavijo na, izpit tri dni pred izpitom",
+        "status": 200,
+        "attempt": 2
+      }
+    ],
+    "failures": [
+      {
+        "index": 1,
+        "sentence": "S temi besedami so pri popotniški bibliji Lonely Planet opisali Slovenijo, o kateri povedo da je velika komaj za polovico Švice, da pa velikost več kot nadoknadi z drugimi dobrotami. »Slovenija si je od svoje neodvisnosti, leta 1991 pridelala veliko oznak: 'Evropa v malem' 'Sončna stran alp' 'Zeleni košček Evrope' itd., in čeprav morda zvenijo kot reklamne krilatice iz turističnih brošur, vse držijo« piše Lonely Planet.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 3,
+        "sentence": "Pa cerkev sv. Jakoba baročne palače, stavbe iz starega veka in secesijske meščanske hiše ... »Slovenija nudi več raznolikosti, kot kar nekajkrat večje države.« Pri Lonelyju menijo, da so med največjimi zakladi Slovenije kar Slovenci sami – »gostoljubni, velikodušni poligloti, odprtega duha«. »Kar zadeva njih, niti čustveno, niti geografsko ne živijo v Vzhodni Evropi – njihov dom je v srcu celine.« Pri spletnem opisu Slovenije, »znane po lipicancih, pršutu Blejskem jezeru in smučanju«, so izpostavljene fotografije Julijskih Alp, Zmajskega mosta, Plečnikovih Križank in nabrežja Ljubljanice. Ob tem priporočajo treking po Sloveniji, pa pohod po Julijskih Alpah in obisk »svetovno znane« Postojnske jame, in t. i. človeške ribice. Spodaj objavljajo še svoj izbor najboljših 12 destinacij v Sloveniji. Na prvo mesto so postavili Bohinjsko jezero (»idilično, neokrnjeno alpsko jezero pod Triglavom«), na drugo Logarsko dolino (»najlepša alpska dolina s prostranimi livadami, obrobljenimi s skalnatimi vrhovi«), na tretje Šempeter z nekropolo, preživelo še iz antike. Sledijo vas Bogojina s Plečnikovo cerkvijo Sv. Duha Ptuj, frančiškanski samostan, Kočevski rog (»deviški gozd, po katerem tavajo medvedi in duhovi partizanov«) in ljubljanska stolnica. Dvanajsterico zaključujejo Predjamski grad, Škocjanske jame in partizanska bolnica Franja, ki spada tudi v Unescovo spomeniškovarstveno dediščino.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 5,
+        "sentence": "A rojstvo Panenke sega nekaj let nazaj v okolje praškega kluba Sparta. »Po vsakem treningu sva se z vratarjem pomerila kdo bo boljši pri 11-metrovkah. Igrala sva za čokolado ali pivo. Ker je bil Zdenek Hruška dober vratar, me je ta igra stala preveč. Tako sem razmišljal, na kakšen način ga lahko premagam da mu vrnem za svoje poraze,« se zdaj 63-letni Čeh spominja rojstva »panenke«. »Če zakasnim z udarcem in žogo le rahlo spodkopljem, bo vratar, ki se vrže v kot, nemočen, saj ne bo mogel še enkrat skočiti. Začel sem preizkušati udarec v igrah s Hruško. Zaradi toliko piva in čokolade sem se začel rediti« se pošali Panenka.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 6,
+        "sentence": "Preden se začne šolsko leto 2017/18, je morda pravi čas da spremenite katero izmed navad, vezanih na zdravo življenje. Učenci, ki nimajo tovrstnih navad – ugotavljajo na Inštitutu za javno zdravje Republike Slovenije in pri Evropski Uniji – se težje učijo, so bolj nagnjeni k debelosti, ter imajo slabšo samopodobo, poveča se jim tudi tveganje za razvoj parkinsonove bolezni ter diabetesa tipa 2 – zlasti če nezdrave navade, pridobljene v šoloobveznem obdobju, nadaljujejo v odraslosti, predvsem med 31. in 40. letom starosti ter tudi v svojih 50. letih oz. po abrahamu. V času najstništva namreč hitro rastemo. Zraste vse kar vidimo, kot so na primer roke in noge, pa tudi vse, česar ne vidimo kot so pljuča in srce. Obenem se naše telo neprestano obnavlja, zato v težavnem obdobju najstništva (12.–20. rojstnega dne) potrebujemo veliko C- in D-vitamina (vsaj 12 mg/kg telesne teže). V puberteti tako potrebujemo okoli 2800 kcal/dan, predvsem aminokislin nastalih s posttranslacijsko transmodifikacijo. Če pojemo več, kot porabimo, se zredimo, če je pojemo manj, kot porabimo, pa hujšamo. Prav tako naj bi dnevno popili 3,2 litra tekočine, če pa se ukvarjamo s športom je treba za vsako 2. uro športne dejavnosti, kot je denimo tek dodati načeloma še 1,5 l tekočine z elektroliti, npr. izotonik. Prav tako pa je pomemben spanec: obstajata dve ključni fazi spanja: tj. t. i. REM- in non-REM-faza – med REM-fazo sanjamo. Šolarji potrebujejo 9–10 ur spanca na dan, medtem ko odraslim, večinoma zadošča 7,5 ure. Nasvet: vedno pojdite spat in se zbujajte ob isti uri, tudi v težko pričakovanem času počitnic in ko je vikend. Na ta način boste svoje telo navadili na ustrezni bioritem, in na omiljene pravopisne vaje (7.10–8.45) na Filozofski fakulteti, ki so vaša biblija.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 7,
+        "sentence": "Slovenj Gradec je sedež edine mestne občine v koroški statistični regiji in središče Mislinjske do line in širšega območja. Starodavno mesto v kotlini med Pohorjem Uršljo goro in Kozjim hrbtom, ki s svojo zaobljenostjo spominja na Olševo s Potočko zijalko, je tudi sinonim za kulturno središče povezano tako s preteklostjo, kot s sedanjostjo. Živa vez s spomeniškovarstveno dediščino je te melj kulturnega razvoja in osrednja poteza lokalne identitete. Mesto je odraz slavne srednjeveške zgodovine, izpričane v mestni župnijski cerkvi, zgrajeni leta 1251. Kot 1. na svetu je bila posvečena ogrski princesi in turingijski vojvodinji sv. Elizabeti. Krona kulturnih prizadevanj Slovenj Gradca je listina s katero je leta 1989 generalni sekretar Organizacije združenih narodov Slovenj Gradec uvrstil med nosilce naziva glasnik miru. 1. 1. 2014 je imela občina 16.839 prebivalcev (8.414 moških in 8.425 žensk). Po številu prebivalcev se je uvrstila na 25. mesto. Na kvadratnem kilometru površine občine živi povprečno 97,4 prebivalca – torej je gostota naseljenosti tu manjša, kot v celotni državi (102 prebivalca na km2). Povprečna starost znaša 41,5 leta in je tako nižja, kot znaša povprečna starost Slovencev (42,21 leta). Med prebivalci občine je bilo število najmlajših – kar je redko – večje od števila najstarejših: na 100 oseb starih 0–14 let, je prebivalo 98 oseb, starih 65 let ali več. Brezposelnost je 14,2-odstotna, kar je več od povprečja v državi (13,4 %). Povprečna brutoplača znaša 1.450,03 evra in je bila za 5,3 % nižja od povprečne plače v Sloveniji, v neto znesku pa 951,44 evra, tj. 5,0 % manj od povprečne. Vsak 2. prebivalec v občini ima osebni avto (51/100 prebivalcev); ta je v povprečju star 8,5 leta. V občini je zbranih 220 kg odpadkov na prebivalca, tj. 107 kg manj kot v Sloveniji. Počutila se je \"zelo pasivno agresivno\" zato se je je izogibal.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 8,
+        "sentence": "Upal bi si dejati da imamo v mnogih pogledih več kot drugje, šele ko greš v svet, vidiš, kaj imaš doma, in začneš to tudi ceniti. Osnovno vprašanje na katerega želimo odgovoriti s pričujočo monografijo, je, ali je zele no gospodarstvo, tj. vodenje gospodarske politike na način, da ohranjamo in izboljšujemo okolje sočasno pa zagotavljamo trajnostni razvoj držav in celotnega planeta, pravilna pot za gospodarski razvoj držav in mednarodne skupnosti sedaj in v prihodnje. Spraševali so se zakaj je moralo umreti toliko ljudi v prometnih nesrečah preden so se odločili za urejanje cestnega odseka. »Mnogokaj sem študiral v svojem življenju ali take bogate učenosti, kakor jo daje enajsta šola pod mostom, nisem zadobil nikjer.« (Ivan Cankar, Moje življenje) Ob večerih in ko dežuje, ga muči revma. Potem ko je višje sodišče decembra 2013 razveljavilo prvotno sodbo – po tej bi morala Berglund in televizija plačati Janši 15.000 evrov in umakniti izjavo, da je človek, ki je v Patrijinih dokumentih označen z J, Janša in da je Patria podkupila predsednika slovenske vlade, Po točnik pa bi moral odšteti 6500 evrov in umakniti svoje mnenje, da je Janša oviral policijsko preiskavo nakupa osemkolesnikov – je okrožno sodišče v ponovnem odločanju, tožbo aprila lani v celoti zavrnilo.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      },
+      {
+        "index": 11,
+        "sentence": "»Da na nekaterih fotografijah sem popolnoma gol, seveda so fotografije estetske in smešne tako da verjamem da se bodo vsi zabavali, ob gledanju slik in z neučakanostjo obračali liste koledarja, na katerih sem več pokazal kot skril,« nam je zaupal. Vem, da ne potrebujem pravega terenca ampak če te nekaj osrečuje, pa četudi nekaj več stane mislim, da je v tem primeru dobro zapravljen denar, kajti nič ni lepšega kot to, da se lahko, ko ti je dolgčas enostavno usedeš v avto, ki ti je v veliko zadovoljstvo, in se pelješ na vožnjo, in ko prideš nazaj, si bolj nasmejan kot pa takrat, ko si se usedel v avto. Nisem niti približno tako pijan kot bom čez nekaj ur. Pri členu, ki določa svetovanje zakonskim skupnostim, je France Cukjati (SDS) izrazil dvom o smotrnosti določanja ravnanja skupnostim brez otrok, saj je prepričan, da se država ne bi smela vtikati, v zunajzakonske skupnosti meni pa, da je povsem drugače, če imata partnerja, ki nista poročena, otroke, v tem primeru pa bi država morala nuditi svetovanje, ki bi temeljilo na prostovoljni osnovi in ne na obveznostih, meni Cukjati. Oči imajo, in ne vidijo.",
+        "ok": false,
+        "status": null,
+        "error": "HTTP 500"
+      }
+    ]
+  },
+  "results": [
+    {
+      "index": 0,
+      "sentence": "»Miš ki rjove kot zmaj.«",
+      "corrected": "»Miš, ki rjove kot zmaj. «",
+      "ok": true,
+      "status": 200,
+      "attempt": 2,
+      "changed": true,
+      "commaOnlyApp": true,
+      "commaOnlyStrict": false,
+      "nonCommaDriftByAppRule": false,
+      "nonCommaDriftStrict": true
+    },
+    {
+      "index": 1,
+      "sentence": "S temi besedami so pri popotniški bibliji Lonely Planet opisali Slovenijo, o kateri povedo da je velika komaj za polovico Švice, da pa velikost več kot nadoknadi z drugimi dobrotami. »Slovenija si je od svoje neodvisnosti, leta 1991 pridelala veliko oznak: 'Evropa v malem' 'Sončna stran alp' 'Zeleni košček Evrope' itd., in čeprav morda zvenijo kot reklamne krilatice iz turističnih brošur, vse držijo« piše Lonely Planet.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 2,
+      "sentence": "Ob tem vodič izpostavlja plaže zasnežene gore, z vinogradi porasle griče in prostrana polja sončnic.",
+      "corrected": "Ob tem vodič izpostavlja plaže, zasnežene gore, z vinogradi porasle griče in prostrana polja sončnic.",
+      "ok": true,
+      "status": 200,
+      "attempt": 1,
+      "changed": true,
+      "commaOnlyApp": true,
+      "commaOnlyStrict": true,
+      "nonCommaDriftByAppRule": false,
+      "nonCommaDriftStrict": false
+    },
+    {
+      "index": 3,
+      "sentence": "Pa cerkev sv. Jakoba baročne palače, stavbe iz starega veka in secesijske meščanske hiše ... »Slovenija nudi več raznolikosti, kot kar nekajkrat večje države.« Pri Lonelyju menijo, da so med največjimi zakladi Slovenije kar Slovenci sami – »gostoljubni, velikodušni poligloti, odprtega duha«. »Kar zadeva njih, niti čustveno, niti geografsko ne živijo v Vzhodni Evropi – njihov dom je v srcu celine.« Pri spletnem opisu Slovenije, »znane po lipicancih, pršutu Blejskem jezeru in smučanju«, so izpostavljene fotografije Julijskih Alp, Zmajskega mosta, Plečnikovih Križank in nabrežja Ljubljanice. Ob tem priporočajo treking po Sloveniji, pa pohod po Julijskih Alpah in obisk »svetovno znane« Postojnske jame, in t. i. človeške ribice. Spodaj objavljajo še svoj izbor najboljših 12 destinacij v Sloveniji. Na prvo mesto so postavili Bohinjsko jezero (»idilično, neokrnjeno alpsko jezero pod Triglavom«), na drugo Logarsko dolino (»najlepša alpska dolina s prostranimi livadami, obrobljenimi s skalnatimi vrhovi«), na tretje Šempeter z nekropolo, preživelo še iz antike. Sledijo vas Bogojina s Plečnikovo cerkvijo Sv. Duha Ptuj, frančiškanski samostan, Kočevski rog (»deviški gozd, po katerem tavajo medvedi in duhovi partizanov«) in ljubljanska stolnica. Dvanajsterico zaključujejo Predjamski grad, Škocjanske jame in partizanska bolnica Franja, ki spada tudi v Unescovo spomeniškovarstveno dediščino.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 4,
+      "sentence": "Kot kaže zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4.093.454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju, bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne ki se znižuje za 1 %. Ta ukrep bo v proračun letos prinesel 1,35 milijona evrov manj (2,71 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 55,93 milijona evrov (117,27 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 5,79 milijona evrov (letno 10,43 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 20,3 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov, tem pa je nato v petek zeleno luč prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga o novem socialnem sporazumu po zgledu ustave, ki je bil med pogajanji sindikatov in vlade, postavljen v ozadje.",
+      "corrected": "Kot kaže, zakon o varčevalnih ukrepih ne bo zadostoval za pokritje celotnega 70-milijonskega primanjkljaja Zavoda za zdravstveno zavarovanje (ZZZS). Na zavodu so izračunali, da bodo z zakonom privarčevali zgolj 64,4 milijona evrov. Prihodki zavoda bodo zaradi znižanja plač in znižanja starševskega nadomestila nanesli toliko, kot je bilo pričakovano, torej 10 milijonov evrov. Z 10-odstotnim znižanjem nadomestil za bolniško odsotnost, daljšo od 90 dni, bo zdravstvena blagajna pri hranila 4. 093. 454 evrov. Bo pa zbrala za 0,73 milijona evrov manj prihodkov, kot bo prispevkov, kar na letni ravni znaša 1,47 milijona evrov. Zaradi osemodstotnega znižanja plač v javnem sektorju bo iz zdravstvene blagajne za plače zaposlenih v zdravstvu šlo letos 48,04 milijona evrov manj (na letni ravni pa 82,35 milijona evrov), a se bo tako letos tudi zbralo za 7,92 milijona evrov prispevkov manj (letno 15,83 milijona evrov), opozarjajo v šentviški enoti ZZZS in na ministrstvu za delo. Spreminja pa se tudi prispevna stopnja za brezposelne, ki se znižuje za 1 %.Ta ukrep bo v proračun letos prinesel 135 milijona evrov manj (271 milijona evrov letno). Z zmanjševanjem zdravstvenih pravic bo tako ZZZS letos prihranil 5593 milijona evrov (11727 milijona evrov na letni ravni), z ukrepi na infrastrukturnih področjih pa letos 579 milijona evrov (letno 1043 milijona evrov). S prostimi sredstvi lahko ZZZS pokrije le primanjkljaj v višini 203 milijona evrov piše Slovenska tiskovna agencija (STA). Zato bo po njihovem mnenju morala vlada z aneksom k splošne mu dogovoru sprejeti dodatne varčevalne ukrepe na področju zdravstvenega varstva. Vlada je z večino stavkajočih, sindikatov javnega sektorja in Zvezo svobodnih sindikatov Slovenije (ZSSS) ta teden dosegla dogovor o ublažitvi nekaterih varčevalnih ukrepov tem pa je nato v petek zeleno luč, prižgal tudi državni zbor. Tako je v kratkem pričakovati nadaljevanje dialoga",
+      "ok": true,
+      "status": 200,
+      "attempt": 1,
+      "changed": true,
+      "commaOnlyApp": false,
+      "commaOnlyStrict": false,
+      "nonCommaDriftByAppRule": true,
+      "nonCommaDriftStrict": true
+    },
+    {
+      "index": 5,
+      "sentence": "A rojstvo Panenke sega nekaj let nazaj v okolje praškega kluba Sparta. »Po vsakem treningu sva se z vratarjem pomerila kdo bo boljši pri 11-metrovkah. Igrala sva za čokolado ali pivo. Ker je bil Zdenek Hruška dober vratar, me je ta igra stala preveč. Tako sem razmišljal, na kakšen način ga lahko premagam da mu vrnem za svoje poraze,« se zdaj 63-letni Čeh spominja rojstva »panenke«. »Če zakasnim z udarcem in žogo le rahlo spodkopljem, bo vratar, ki se vrže v kot, nemočen, saj ne bo mogel še enkrat skočiti. Začel sem preizkušati udarec v igrah s Hruško. Zaradi toliko piva in čokolade sem se začel rediti« se pošali Panenka.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 6,
+      "sentence": "Preden se začne šolsko leto 2017/18, je morda pravi čas da spremenite katero izmed navad, vezanih na zdravo življenje. Učenci, ki nimajo tovrstnih navad – ugotavljajo na Inštitutu za javno zdravje Republike Slovenije in pri Evropski Uniji – se težje učijo, so bolj nagnjeni k debelosti, ter imajo slabšo samopodobo, poveča se jim tudi tveganje za razvoj parkinsonove bolezni ter diabetesa tipa 2 – zlasti če nezdrave navade, pridobljene v šoloobveznem obdobju, nadaljujejo v odraslosti, predvsem med 31. in 40. letom starosti ter tudi v svojih 50. letih oz. po abrahamu. V času najstništva namreč hitro rastemo. Zraste vse kar vidimo, kot so na primer roke in noge, pa tudi vse, česar ne vidimo kot so pljuča in srce. Obenem se naše telo neprestano obnavlja, zato v težavnem obdobju najstništva (12.–20. rojstnega dne) potrebujemo veliko C- in D-vitamina (vsaj 12 mg/kg telesne teže). V puberteti tako potrebujemo okoli 2800 kcal/dan, predvsem aminokislin nastalih s posttranslacijsko transmodifikacijo. Če pojemo več, kot porabimo, se zredimo, če je pojemo manj, kot porabimo, pa hujšamo. Prav tako naj bi dnevno popili 3,2 litra tekočine, če pa se ukvarjamo s športom je treba za vsako 2. uro športne dejavnosti, kot je denimo tek dodati načeloma še 1,5 l tekočine z elektroliti, npr. izotonik. Prav tako pa je pomemben spanec: obstajata dve ključni fazi spanja: tj. t. i. REM- in non-REM-faza – med REM-fazo sanjamo. Šolarji potrebujejo 9–10 ur spanca na dan, medtem ko odraslim, večinoma zadošča 7,5 ure. Nasvet: vedno pojdite spat in se zbujajte ob isti uri, tudi v težko pričakovanem času počitnic in ko je vikend. Na ta način boste svoje telo navadili na ustrezni bioritem, in na omiljene pravopisne vaje (7.10–8.45) na Filozofski fakulteti, ki so vaša biblija.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 7,
+      "sentence": "Slovenj Gradec je sedež edine mestne občine v koroški statistični regiji in središče Mislinjske do line in širšega območja. Starodavno mesto v kotlini med Pohorjem Uršljo goro in Kozjim hrbtom, ki s svojo zaobljenostjo spominja na Olševo s Potočko zijalko, je tudi sinonim za kulturno središče povezano tako s preteklostjo, kot s sedanjostjo. Živa vez s spomeniškovarstveno dediščino je te melj kulturnega razvoja in osrednja poteza lokalne identitete. Mesto je odraz slavne srednjeveške zgodovine, izpričane v mestni župnijski cerkvi, zgrajeni leta 1251. Kot 1. na svetu je bila posvečena ogrski princesi in turingijski vojvodinji sv. Elizabeti. Krona kulturnih prizadevanj Slovenj Gradca je listina s katero je leta 1989 generalni sekretar Organizacije združenih narodov Slovenj Gradec uvrstil med nosilce naziva glasnik miru. 1. 1. 2014 je imela občina 16.839 prebivalcev (8.414 moških in 8.425 žensk). Po številu prebivalcev se je uvrstila na 25. mesto. Na kvadratnem kilometru površine občine živi povprečno 97,4 prebivalca – torej je gostota naseljenosti tu manjša, kot v celotni državi (102 prebivalca na km2). Povprečna starost znaša 41,5 leta in je tako nižja, kot znaša povprečna starost Slovencev (42,21 leta). Med prebivalci občine je bilo število najmlajših – kar je redko – večje od števila najstarejših: na 100 oseb starih 0–14 let, je prebivalo 98 oseb, starih 65 let ali več. Brezposelnost je 14,2-odstotna, kar je več od povprečja v državi (13,4 %). Povprečna brutoplača znaša 1.450,03 evra in je bila za 5,3 % nižja od povprečne plače v Sloveniji, v neto znesku pa 951,44 evra, tj. 5,0 % manj od povprečne. Vsak 2. prebivalec v občini ima osebni avto (51/100 prebivalcev); ta je v povprečju star 8,5 leta. V občini je zbranih 220 kg odpadkov na prebivalca, tj. 107 kg manj kot v Sloveniji. Počutila se je \"zelo pasivno agresivno\" zato se je je izogibal.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 8,
+      "sentence": "Upal bi si dejati da imamo v mnogih pogledih več kot drugje, šele ko greš v svet, vidiš, kaj imaš doma, in začneš to tudi ceniti. Osnovno vprašanje na katerega želimo odgovoriti s pričujočo monografijo, je, ali je zele no gospodarstvo, tj. vodenje gospodarske politike na način, da ohranjamo in izboljšujemo okolje sočasno pa zagotavljamo trajnostni razvoj držav in celotnega planeta, pravilna pot za gospodarski razvoj držav in mednarodne skupnosti sedaj in v prihodnje. Spraševali so se zakaj je moralo umreti toliko ljudi v prometnih nesrečah preden so se odločili za urejanje cestnega odseka. »Mnogokaj sem študiral v svojem življenju ali take bogate učenosti, kakor jo daje enajsta šola pod mostom, nisem zadobil nikjer.« (Ivan Cankar, Moje življenje) Ob večerih in ko dežuje, ga muči revma. Potem ko je višje sodišče decembra 2013 razveljavilo prvotno sodbo – po tej bi morala Berglund in televizija plačati Janši 15.000 evrov in umakniti izjavo, da je človek, ki je v Patrijinih dokumentih označen z J, Janša in da je Patria podkupila predsednika slovenske vlade, Po točnik pa bi moral odšteti 6500 evrov in umakniti svoje mnenje, da je Janša oviral policijsko preiskavo nakupa osemkolesnikov – je okrožno sodišče v ponovnem odločanju, tožbo aprila lani v celoti zavrnilo.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 9,
+      "sentence": "Baje da pride. Pozimi in kadar je mraz moramo zakuriti. Najraje vozim nemške avtomobile, če je le možno limuzine. To, kar vemo, je kapljica, to, česar ne vemo je morje. Ravnali bomo tako, kot je bilo dogovorjeno. Ponuja jim priložnost, da zdravijo svoje frustracije, da zdravijo svoje rane, ki so nastale ker se je svet spremenil, oni pa so – nezmožni storiti enako – ostali ujeti nekje v preteklosti, ne kje, kjer ena plus ena ni dve, pač pa toliko, kot jim je vrsto let, iz dneva v dan vsiljeval nekdo, ki je prepričan, da mu je bilo življenje dano zgolj zato da bi popravil krivico, spremenil to s čimer se strinja celotna zemeljska obla, le on ne.",
+      "corrected": "Baje, da pride. Pozimi in kadar je mraz, moramo zakuriti. Najraje vozim nemške avtomobile, če je le možno, limuzine. To, kar vemo, je kapljica, to, česar ne vemo, je morje. Ravnali bomo tako, kot je bilo dogovorjeno. Ponuja jim priložnost, da zdravijo svoje frustracije, da zdravijo svoje rane, ki so nastale, ker se je svet spremenil, oni pa so – nezmožni storiti enako – ostali ujeti nekje v preteklosti, ne kje, kjer ena plus ena ni dve, pač pa toliko, kot jim je vrsto let iz dneva v dan vsiljeval nekdo, ki je prepričan, da mu je bilo življenje dano zgolj zato, da bi popravil krivico, spremenil to, s čimer se strinja celotna zemeljska obla, le on ne.",
+      "ok": true,
+      "status": 200,
+      "attempt": 1,
+      "changed": true,
+      "commaOnlyApp": true,
+      "commaOnlyStrict": true,
+      "nonCommaDriftByAppRule": false,
+      "nonCommaDriftStrict": false
+    },
+    {
+      "index": 10,
+      "sentence": "Kljub temu, da so novi motorji do okolja morda res nekoliko prijaznejši, pa vseeno velja, da poanta tehnologije ni v nižji porabi, in da se moramo v končni fazi začeti voziti nekoliko manj in če nam to ne uspe, bodo težave. Ne da sovražim da ljubim, sem na svetu. Kjer ni druge možnosti in na neravnih tleh, moramo uporabiti vijačne vzmeti. Učence, ki so igro končali pred vsemi vprašajte, ob katerih izjavah so obstali pri miru, tiste, ki so ostali zadaj, pa, kdaj so vendarle stopili naprej. Za to pa je potrebna informiranost akterjev – dokler je premalo jasnih informacij o dogajanju, na trgih zelenega gospodarstva, bodo investicije vanj omejene tržno gospodarstvo pa bo ostalo močan tekmec, saj je večja verjetnost, da se bo investiralo v aktivnosti, ki so že regulirane, konsistentne, jasne in za katere se že ve kakšne rezultate prinašajo.",
+      "corrected": "Kljub temu, da so novi motorji do okolja morda res nekoliko prijaznejši, pa vseeno velja, da poanta tehnologije ni v nižji porabi in da se moramo v končni fazi začeti voziti nekoliko manj, in če nam to ne uspe, bodo težave. Ne da sovražim, da ljubim sem na svetu. Kjer ni druge možnosti in na neravnih tleh, moramo uporabiti vijačne vzmeti. Učence, ki so igro končali pred vsemi, vprašajte, ob katerih izjavah so obstali pri miru, tiste, ki so ostali zadaj, pa kdaj so vendarle stopili naprej. Za to pa je potrebna informiranost akterjev – dokler je premalo jasnih informacij o dogajanju na trgih zelenega gospodarstva, bodo investicije vanj omejene, tržno gospodarstvo pa bo ostalo močan tekmec, saj je večja verjetnost, da se bo investiralo v aktivnosti, ki so že regulirane, konsistentne, jasne in za katere se že ve, kakšne rezultate prinašajo.",
+      "ok": true,
+      "status": 200,
+      "attempt": 1,
+      "changed": true,
+      "commaOnlyApp": true,
+      "commaOnlyStrict": true,
+      "nonCommaDriftByAppRule": false,
+      "nonCommaDriftStrict": false
+    },
+    {
+      "index": 11,
+      "sentence": "»Da na nekaterih fotografijah sem popolnoma gol, seveda so fotografije estetske in smešne tako da verjamem da se bodo vsi zabavali, ob gledanju slik in z neučakanostjo obračali liste koledarja, na katerih sem več pokazal kot skril,« nam je zaupal. Vem, da ne potrebujem pravega terenca ampak če te nekaj osrečuje, pa četudi nekaj več stane mislim, da je v tem primeru dobro zapravljen denar, kajti nič ni lepšega kot to, da se lahko, ko ti je dolgčas enostavno usedeš v avto, ki ti je v veliko zadovoljstvo, in se pelješ na vožnjo, in ko prideš nazaj, si bolj nasmejan kot pa takrat, ko si se usedel v avto. Nisem niti približno tako pijan kot bom čez nekaj ur. Pri členu, ki določa svetovanje zakonskim skupnostim, je France Cukjati (SDS) izrazil dvom o smotrnosti določanja ravnanja skupnostim brez otrok, saj je prepričan, da se država ne bi smela vtikati, v zunajzakonske skupnosti meni pa, da je povsem drugače, če imata partnerja, ki nista poročena, otroke, v tem primeru pa bi država morala nuditi svetovanje, ki bi temeljilo na prostovoljni osnovi in ne na obveznostih, meni Cukjati. Oči imajo, in ne vidijo.",
+      "ok": false,
+      "status": null,
+      "error": "HTTP 500"
+    },
+    {
+      "index": 12,
+      "sentence": "V intervjuju, objavljenem v Oni 25. 3. 2008, z Andrejem Rozmanom Rozo me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega, množično uvažanega francoskega karavana v katerih ob pogledu na nemški avto v vzvratnem ogledalu, kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka, in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo pa se jim niti sanja ne da bi po svojem vedenju, bolj kot na voznikovega sodili na Recarov sedež pripet na zadnji klopi. Ker se sedaj študentje lahko prijavijo na izpit tri dni pred izpitom to pomeni, da če je izpit v ponedeljek zjutraj, se študentje prijavljajo še do polnoči v petek. Prišli so oče pa mama pa sestra pa nihče jih ni povabil.",
+      "corrected": "V intervjuju, objavljenem v Oni 25. 3. 2008 z Andrejem Rozmanom Rozo, me je zmotilo dvoje: vprašanje K. M. ki napeljuje na razpredanje o osovraženosti šolskega predmeta slovenščina, in odgovor, v katerem vprašani pritrjujoče meni, da bi otroci morali imeti več sodobnega čtiva in da povesti, kot je Pestrna, ne razumejo. Nočem biti nesramen, ampak to se mi zdi še en populističen članek z bogatim besediščem in dokaj skromno vsebino, namenjen predvsem bogaboječim voznikom pri nas nadpovprečno popularnega množično uvažanega francoskega karavana, v katerih ob pogledu na nemški avto v vzvratnem ogledalu kar naenkrat zavre dirkaški duh, ki se ga ne bi sramoval niti sam Fernando Alonso in ki se začnejo neumorno truditi, da bi ubranili svojo od boga dano pozicijo pred (po njihovem mnenju) do vratu zadolženim zlodejem v preplačanem avtu vsaj s takšno vnemo, kot da je v igri naslov svetovnega prvaka in s tem vzpostaviti ravnovesje v vesolju; medtem ko se po večkilometrski vožnji 60–80 km/h brez možnosti prehitevanja na prvi prosti ravnini trudijo izcimiti še zadnji atom moči iz svojih šob, preden jih pošljejo na prepotrebno obnovo, pa se jim niti sanja ne, da bi po svojem vedenju bolj kot na voznikovega sodili na Recarov sedež, pripet na zadnji klopi. Ker se sedaj, študentje lahko, prijavijo na, izpit tri dni pred izpitom",
+      "ok": true,
+      "status": 200,
+      "attempt": 2,
+      "changed": true,
+      "commaOnlyApp": false,
+      "commaOnlyStrict": false,
+      "nonCommaDriftByAppRule": true,
+      "nonCommaDriftStrict": true
+    }
+  ]
+}

@@ -272,19 +272,133 @@ async function mockRequestPopravljenPoved(poved = "") {
 }
 
 function pickCorrectedText(fallback, payload = {}) {
+  const targetTextFromTokens = tokensToSentenceText(
+    pickFirstArray([payload.target_tokens, payload.targetTokens, payload.target])
+  );
+  const correctionArray = Array.isArray(payload.corrections) ? payload.corrections : [];
+  const applyCorrections = Array.isArray(payload.apply_corrections) ? payload.apply_corrections : [];
+  const firstApplyCorrection = applyCorrections[0];
   const candidateTexts = [
     payload.popravljeno_besedilo,
+    payload.corrected_text,
     payload.target_text,
+    targetTextFromTokens,
     payload.popravki?.[0]?.predlog,
-    Array.isArray(payload.corrections) ? payload.corrections[0]?.suggested_text : undefined,
-    Array.isArray(payload.apply_corrections)
-      ? payload.apply_corrections[0]?.suggested_text
+    correctionArray[0]?.suggested_text,
+    firstApplyCorrection && typeof firstApplyCorrection === "object"
+      ? firstApplyCorrection.suggested_text
       : undefined,
   ];
   return (
     candidateTexts.map((txt) => (typeof txt === "string" ? txt.trim() : "")).find((txt) => txt) ||
     fallback
   );
+}
+
+function pickFirstArray(values = []) {
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function tokensToSentenceText(tokens) {
+  if (!Array.isArray(tokens) || !tokens.length) return "";
+  const parts = [];
+  for (const token of tokens) {
+    if (typeof token === "string") {
+      parts.push(token);
+      continue;
+    }
+    if (!token || typeof token !== "object") continue;
+    const base = firstDefinedValue([
+      token.token,
+      token.text,
+      token.form,
+      token.value,
+      token.surface,
+      token.word,
+    ]);
+    if (typeof base !== "string" || !base.length) continue;
+    const trailing = firstDefinedValue([
+      token.whitespace,
+      token.trailing_ws,
+      token.trailingWhitespace,
+      token.after,
+      token.space,
+    ]);
+    if (typeof trailing === "string" && trailing.length && !/\s$/.test(base) && !base.endsWith(trailing)) {
+      parts.push(`${base}${trailing}`);
+    } else {
+      parts.push(base);
+    }
+  }
+  return parts.join("");
+}
+
+function normalizePayloadTokenArrays(raw) {
+  if (!raw || typeof raw !== "object") return raw;
+  const sourceTokens = pickFirstArray([raw.source_tokens, raw.sourceTokens, raw.source]);
+  const targetTokens = pickFirstArray([raw.target_tokens, raw.targetTokens, raw.target]);
+  if (!Array.isArray(raw.source_tokens) && sourceTokens.length) {
+    raw.source_tokens = sourceTokens;
+  }
+  if (!Array.isArray(raw.target_tokens) && targetTokens.length) {
+    raw.target_tokens = targetTokens;
+  }
+  return raw;
+}
+
+function isCorrectionGroupPayload(value) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => entry && typeof entry === "object");
+  }
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some((entry) => entry && typeof entry === "object");
+}
+
+function mergeCorrectionGroups(primary, secondary) {
+  const merged = {};
+  let syntheticIndex = 1;
+  const appendCollection = (collection, prefix = "") => {
+    if (Array.isArray(collection)) {
+      for (const group of collection) {
+        if (!group || typeof group !== "object") continue;
+        let key = `${prefix}${syntheticIndex++}`;
+        while (Object.prototype.hasOwnProperty.call(merged, key)) {
+          key = `${prefix}${syntheticIndex++}`;
+        }
+        merged[key] = group;
+      }
+      return;
+    }
+    if (!collection || typeof collection !== "object") return;
+    for (const [rawKey, group] of Object.entries(collection)) {
+      if (!group || typeof group !== "object") continue;
+      let key = String(rawKey || `${prefix}${syntheticIndex++}`);
+      if (prefix) key = `${prefix}${key}`;
+      while (Object.prototype.hasOwnProperty.call(merged, key)) {
+        key = `${prefix}${syntheticIndex++}`;
+      }
+      merged[key] = group;
+    }
+  };
+  appendCollection(primary);
+  appendCollection(secondary, "applied_");
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+function pickCorrectionsPayload(rawPayload = {}) {
+  const baseCorrections = isCorrectionGroupPayload(rawPayload?.corrections)
+    ? rawPayload.corrections
+    : undefined;
+  const appliedCorrections = isCorrectionGroupPayload(rawPayload?.applied_corrections)
+    ? rawPayload.applied_corrections
+    : undefined;
+  if (baseCorrections && appliedCorrections) {
+    return mergeCorrectionGroups(baseCorrections, appliedCorrections);
+  }
+  return baseCorrections ?? appliedCorrections;
 }
 
 function isTransientError(info) {
@@ -864,10 +978,23 @@ function unprotectStringsDeep(value) {
 
 function normalizeResponsePayload(inputSentence, payload) {
   const raw = unprotectStringsDeep({ ...(payload || {}) });
-  const correctedText = unprotectText(pickCorrectedText(inputSentence, raw));
-  if (typeof raw.source_text !== "string") raw.source_text = inputSentence;
+  normalizePayloadTokenArrays(raw);
+  const sourceTextFromTokens = tokensToSentenceText(raw.source_tokens);
+  const targetTextFromTokens = tokensToSentenceText(raw.target_tokens);
+  if (typeof raw.source_text !== "string") raw.source_text = sourceTextFromTokens || inputSentence;
+  let correctedText = unprotectText(pickCorrectedText(raw.source_text || inputSentence, raw));
+  if (
+    (!correctedText || correctedText === raw.source_text) &&
+    typeof targetTextFromTokens === "string" &&
+    targetTextFromTokens.trim()
+  ) {
+    correctedText = unprotectText(targetTextFromTokens);
+  }
   if (typeof raw.target_text !== "string") raw.target_text = correctedText;
-  return { correctedText, raw };
+  if ((!raw.target_text || raw.target_text === raw.source_text) && targetTextFromTokens.trim()) {
+    raw.target_text = unprotectText(targetTextFromTokens);
+  }
+  return { correctedText: raw.target_text || correctedText, raw };
 }
 
 function buildRequestData(sentence) {
@@ -1219,16 +1346,21 @@ export async function popraviPoved(poved) {
 
 export async function popraviPovedDetailed(poved, options = {}) {
   const { correctedText, raw } = await requestPopravek(poved, options);
-  const sourceText = typeof raw?.source_text === "string" ? raw.source_text : poved;
-  const targetText = typeof raw?.target_text === "string" ? raw.target_text : correctedText;
-  const corrections =
-    raw?.corrections ?? raw?.apply_corrections ?? raw?.applied_corrections ?? undefined;
+  const sourceTokens = Array.isArray(raw?.source_tokens) ? raw.source_tokens : [];
+  const targetTokens = Array.isArray(raw?.target_tokens) ? raw.target_tokens : [];
+  const sourceText =
+    typeof raw?.source_text === "string" ? raw.source_text : tokensToSentenceText(sourceTokens) || poved;
+  const targetText =
+    typeof raw?.target_text === "string"
+      ? raw.target_text
+      : tokensToSentenceText(targetTokens) || correctedText;
+  const corrections = pickCorrectionsPayload(raw);
   const commaOps = extractCommaOps(raw, sourceText, targetText);
   return {
     correctedText,
     raw,
-    sourceTokens: Array.isArray(raw?.source_tokens) ? raw.source_tokens : [],
-    targetTokens: Array.isArray(raw?.target_tokens) ? raw.target_tokens : [],
+    sourceTokens,
+    targetTokens,
     sourceText,
     targetText,
     corrections,
