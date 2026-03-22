@@ -306,10 +306,10 @@ function pickCorrectedText(fallback, payload = {}) {
       ? firstApplyCorrection.suggested_text
       : undefined,
   ];
-  return (
-    candidateTexts.map((txt) => (typeof txt === "string" ? txt.trim() : "")).find((txt) => txt) ||
-    fallback
-  );
+  for (const candidate of candidateTexts) {
+    if (hasNonWhitespaceText(candidate)) return candidate;
+  }
+  return fallback;
 }
 
 function pickFirstArray(values = []) {
@@ -321,10 +321,10 @@ function pickFirstArray(values = []) {
 
 function tokensToSentenceText(tokens) {
   if (!Array.isArray(tokens) || !tokens.length) return "";
-  const parts = [];
+  let out = "";
   for (const token of tokens) {
     if (typeof token === "string") {
-      parts.push(token);
+      out = appendFragmentWithBoundaryDedup(out, token);
       continue;
     }
     if (!token || typeof token !== "object") continue;
@@ -337,6 +337,12 @@ function tokensToSentenceText(tokens) {
       token.word,
     ]);
     if (typeof base !== "string" || !base.length) continue;
+    const leading = firstDefinedValue([
+      token.leading_ws,
+      token.leadingWhitespace,
+      token.before,
+      token.prefix,
+    ]);
     const trailing = firstDefinedValue([
       token.whitespace,
       token.trailing_ws,
@@ -344,13 +350,31 @@ function tokensToSentenceText(tokens) {
       token.after,
       token.space,
     ]);
-    if (typeof trailing === "string" && trailing.length && !/\s$/.test(base) && !base.endsWith(trailing)) {
-      parts.push(`${base}${trailing}`);
-    } else {
-      parts.push(base);
+    let fragment = base;
+    if (typeof leading === "string" && leading.length && !fragment.startsWith(leading)) {
+      fragment = `${leading}${fragment}`;
     }
+    if (typeof trailing === "string" && trailing.length && !fragment.endsWith(trailing)) {
+      fragment = `${fragment}${trailing}`;
+    }
+    out = appendFragmentWithBoundaryDedup(out, fragment);
   }
-  return parts.join("");
+  return out;
+}
+
+function appendFragmentWithBoundaryDedup(currentText = "", fragment = "") {
+  if (typeof fragment !== "string" || !fragment.length) return currentText;
+  if (typeof currentText !== "string" || !currentText.length) return fragment;
+  const trailingWhitespace = currentText.match(/[\s\u200B-\u200D\uFEFF]+$/u)?.[0] || "";
+  const leadingWhitespace = fragment.match(/^[\s\u200B-\u200D\uFEFF]+/u)?.[0] || "";
+  if (trailingWhitespace && leadingWhitespace) {
+    return `${currentText}${fragment.slice(leadingWhitespace.length)}`;
+  }
+  return `${currentText}${fragment}`;
+}
+
+function hasNonWhitespaceText(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function normalizePayloadTokenArrays(raw) {
@@ -421,8 +445,11 @@ function pickCorrectionsPayload(rawPayload = {}) {
 function isTransientError(info) {
   const status = info?.status;
   if (typeof status === "number") {
-    if (status >= 500 && status < 600) return true;
-    if (status === 408 || status === 429) return true;
+    // Retry only on infrastructure/rate/timeout statuses.
+    // Treat hard 500 payload failures as non-transient to fail fast.
+    if (status === 408 || status === 429 || status === 502 || status === 503 || status === 504) {
+      return true;
+    }
   }
   const code = typeof info?.code === "string" ? info.code.toUpperCase() : "";
   if (!code) return false;
@@ -1003,12 +1030,15 @@ function normalizeResponsePayload(inputSentence, payload) {
   if (
     (!correctedText || correctedText === raw.source_text) &&
     typeof targetTextFromTokens === "string" &&
-    targetTextFromTokens.trim()
+    hasNonWhitespaceText(targetTextFromTokens)
   ) {
     correctedText = unprotectText(targetTextFromTokens);
   }
   if (typeof raw.target_text !== "string") raw.target_text = correctedText;
-  if ((!raw.target_text || raw.target_text === raw.source_text) && targetTextFromTokens.trim()) {
+  if (
+    (!raw.target_text || raw.target_text === raw.source_text) &&
+    hasNonWhitespaceText(targetTextFromTokens)
+  ) {
     raw.target_text = unprotectText(targetTextFromTokens);
   }
   return { correctedText: raw.target_text || correctedText, raw };

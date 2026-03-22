@@ -1826,8 +1826,49 @@ function notifySentenceTooLong(paragraphIndex, length) {
   queueScanNotification(msg, "warn");
 }
 
-function notifyChunkApiFailure(paragraphIndex, chunkIndex) {
-  warn("Sentence skipped due to API error", { paragraphIndex, chunkIndex });
+function extractApiFailureMeta(error) {
+  const meta = error?.meta || {};
+  const info = meta?.info || {};
+  const status =
+    Number.isFinite(info?.status) && info.status > 0
+      ? info.status
+      : Number.isFinite(error?.response?.status) && error.response.status > 0
+        ? error.response.status
+        : null;
+  const code =
+    typeof info?.code === "string" && info.code
+      ? info.code
+      : typeof error?.code === "string" && error.code
+        ? error.code
+        : null;
+  const reason =
+    typeof error?.message === "string" && error.message
+      ? error.message
+      : typeof info?.msg === "string" && info.msg
+        ? info.msg
+        : null;
+  return { status, code, reason };
+}
+
+function notifyChunkApiFailure(paragraphIndex, chunkIndex, error = null) {
+  const paragraphLabel = Number.isFinite(paragraphIndex) ? paragraphIndex + 1 : paragraphIndex;
+  const sentenceLabel = Number.isFinite(chunkIndex) ? chunkIndex + 1 : chunkIndex;
+  const failure = extractApiFailureMeta(error);
+  const details = [];
+  if (Number.isFinite(failure.status)) details.push(`status=${failure.status}`);
+  if (failure.code) details.push(`code=${failure.code}`);
+  if (failure.reason) details.push(`reason=${failure.reason}`);
+  const detailSuffix = details.length ? ` | ${details.join(" | ")}` : "";
+  console.log(
+    `[Vejice CHECK] API chunk failed | paragraph=${paragraphLabel} | sentence=${sentenceLabel}${detailSuffix}`
+  );
+  warn("Sentence skipped due to API error", {
+    paragraphIndex,
+    chunkIndex,
+    status: failure.status,
+    code: failure.code,
+    reason: failure.reason,
+  });
   if (chunkApiFailureNotified) return;
   chunkApiFailureNotified = true;
   queueScanNotification(CHUNK_API_ERROR_MESSAGE, "warn");

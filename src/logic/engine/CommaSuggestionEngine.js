@@ -32,6 +32,8 @@ const CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
 const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
+const API_FAILURE_RETRY_COOLDOWN_MS = 12000;
+const API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN = 2;
 const TRAILING_COMMA_REGEX = /[,\s\u200B-\u200D\uFEFF]+$/;
 const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
 const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u;
@@ -318,7 +320,11 @@ export class CommaSuggestionEngine {
           nonCommaSalvagedCount++;
         }
         if (meta.detail) continue;
-        if (meta.skipReason === "apiError" || meta.skipReason === "apiErrorCooldown") {
+        if (
+          meta.skipReason === "apiError" ||
+          meta.skipReason === "apiErrorCooldown" ||
+          meta.skipReason === "apiErrorMaxAttempts"
+        ) {
           apiErrorsCount++;
         } else if (meta.skipReason === "nonCommaChange") {
           nonCommaSkipsCount++;
@@ -385,9 +391,11 @@ export class CommaSuggestionEngine {
       return merged;
     };
 
-    const processChunk = async (chunk, depth = 0, options = {}) => {
+    const chunkFailureAttemptsThisRun = new Map();
+    const chunkHardFailedThisRun = new Set();
+
+    const processChunk = async (chunk, depth = 0) => {
       throwIfAborted(abortSignal);
-      const ignoreCooldown = Boolean(options?.ignoreCooldown);
       const chunkInputText = chunk.normalizedText || chunk.text || "";
       const meta = {
         chunk,
@@ -420,8 +428,31 @@ export class CommaSuggestionEngine {
       let detail = null;
       const chunkRequestText = chunkInputText;
       const chunkFailureKey = buildChunkFailureKey(paragraphIndex, chunkRequestText);
+      const failureAttempts = chunkFailureAttemptsThisRun.get(chunkFailureKey) || 0;
+      if (
+        chunkHardFailedThisRun.has(chunkFailureKey) ||
+        failureAttempts >= API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN
+      ) {
+        meta.skipReason = "apiErrorMaxAttempts";
+        logSkippedChunk("apiErrorMaxAttempts", chunk, {
+          depth,
+          attempts: failureAttempts,
+          maxAttempts: API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN,
+        });
+        chunkResult.apiErrors++;
+        this.notifiers.onChunkApiFailure(
+          paragraphIndex,
+          chunk.index,
+          new Error("Chunk skipped due to retry budget exhaustion")
+        );
+        meta.syntheticTokens = tokenizeForAnchoring(
+          chunk.text,
+          `p${paragraphIndex}_c${chunk.index}_syn_`
+        );
+        return chunkResult;
+      }
       const cooldownUntil = this.apiChunkFailureCooldownUntil.get(chunkFailureKey) || 0;
-      if (!ignoreCooldown && cooldownUntil > Date.now()) {
+      if (cooldownUntil > Date.now()) {
         meta.skipReason = "apiErrorCooldown";
         logSkippedChunk("apiErrorCooldown", chunk, {
           depth,
@@ -454,7 +485,19 @@ export class CommaSuggestionEngine {
           if (isAbortLikeError(apiErr, abortSignal)) {
             throw apiErr;
           }
-          const retryChunks = splitFailedChunkForRetry(chunk, depth);
+          const updatedFailureAttempts = failureAttempts + 1;
+          chunkFailureAttemptsThisRun.set(chunkFailureKey, updatedFailureAttempts);
+          const exhaustedRetryBudget =
+            updatedFailureAttempts >= API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN;
+          if (exhaustedRetryBudget) {
+            chunkHardFailedThisRun.add(chunkFailureKey);
+          }
+          const cooldownMs = exhaustedRetryBudget
+            ? API_FAILURE_COOLDOWN_MS
+            : API_FAILURE_RETRY_COOLDOWN_MS;
+          this.apiChunkFailureCooldownUntil.set(chunkFailureKey, Date.now() + cooldownMs);
+
+          const retryChunks = exhaustedRetryBudget ? null : splitFailedChunkForRetry(chunk, depth);
           if (Array.isArray(retryChunks) && retryChunks.length > 1) {
             const retryResults = [];
             for (const retryChunk of retryChunks) {
@@ -462,15 +505,13 @@ export class CommaSuggestionEngine {
             }
             return mergeChunkProcessResults(retryResults);
           }
-          this.apiChunkFailureCooldownUntil.set(
-            chunkFailureKey,
-            Date.now() + API_FAILURE_COOLDOWN_MS
-          );
-          meta.skipReason = "apiError";
-          logSkippedChunk("apiError", chunk, {
+          meta.skipReason = exhaustedRetryBudget ? "apiErrorMaxAttempts" : "apiError";
+          logSkippedChunk(meta.skipReason, chunk, {
             depth,
             apiError: apiErr?.message || String(apiErr || "API error"),
-            cooldownMs: API_FAILURE_COOLDOWN_MS,
+            attempts: updatedFailureAttempts,
+            maxAttempts: API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN,
+            cooldownMs,
           });
           chunkResult.apiErrors++;
           this.notifiers.onChunkApiFailure(paragraphIndex, chunk.index, apiErr);
@@ -622,24 +663,32 @@ export class CommaSuggestionEngine {
         throwIfAborted(abortSignal);
         const failedChunkText = failedChunk.normalizedText || failedChunk.text || "";
         const failedChunkKey = buildChunkFailureKey(paragraphIndex, failedChunkText);
-        this.apiChunkFailureCooldownUntil.delete(failedChunkKey);
-        retryResults.push(await processChunk(failedChunk, 0, { ignoreCooldown: true }));
+        const attempts = chunkFailureAttemptsThisRun.get(failedChunkKey) || 0;
+        if (
+          chunkHardFailedThisRun.has(failedChunkKey) ||
+          attempts >= API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN
+        ) {
+          continue;
+        }
+        retryResults.push(await processChunk(failedChunk, 0));
       }
-      const retryMerged = mergeChunkProcessResults(retryResults);
-      const mergedAfterRetry = mergeRetryArtifacts(
-        processedMeta,
-        chunkDetails,
-        retryMerged.processedMeta,
-        retryMerged.chunkDetails
-      );
-      processedMeta = mergedAfterRetry.processedMeta;
-      chunkDetails = mergedAfterRetry.chunkDetails;
-      const recomputedStats = summarizeProcessedMeta(processedMeta);
-      apiErrors = recomputedStats.apiErrors;
-      nonCommaChunkSkips = recomputedStats.nonCommaSkips;
-      nonCommaChunkSalvaged = recomputedStats.nonCommaSalvaged;
-      processedMeta.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
-      chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+      if (retryResults.length > 0) {
+        const retryMerged = mergeChunkProcessResults(retryResults);
+        const mergedAfterRetry = mergeRetryArtifacts(
+          processedMeta,
+          chunkDetails,
+          retryMerged.processedMeta,
+          retryMerged.chunkDetails
+        );
+        processedMeta = mergedAfterRetry.processedMeta;
+        chunkDetails = mergedAfterRetry.chunkDetails;
+        const recomputedStats = summarizeProcessedMeta(processedMeta);
+        apiErrors = recomputedStats.apiErrors;
+        nonCommaChunkSkips = recomputedStats.nonCommaSkips;
+        nonCommaChunkSalvaged = recomputedStats.nonCommaSalvaged;
+        processedMeta.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+        chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
+      }
     }
 
     const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
