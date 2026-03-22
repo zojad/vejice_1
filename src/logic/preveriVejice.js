@@ -29,14 +29,54 @@ import {
 const envIsProd = () =>
   (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
   (typeof window !== "undefined" && window.__VEJICE_ENV__ === "production");
+const parseQuietBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+};
+const QUIET_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_QUIET_LOGS__ === "boolean"
+    ? window.__VEJICE_QUIET_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
+      : undefined;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
-const log = (...a) => DEBUG && console.log("[Vejice CHECK]", ...a);
-const warn = (...a) => DEBUG && console.warn("[Vejice CHECK]", ...a);
-const errL = (...a) => console.error("[Vejice CHECK]", ...a);
+const isFinalCheckSummaryLog = (args = []) => {
+  const first = args[0];
+  if (typeof first !== "string") return false;
+  return (
+    first.startsWith("DONE checkDocumentText()") ||
+    first.startsWith("DONE checkDocumentTextOnline()")
+  );
+};
+const log = (...a) => {
+  if (isFinalCheckSummaryLog(a)) {
+    console.log("[Vejice CHECK]", ...a);
+    return;
+  }
+  if (!QUIET_LOGS && DEBUG) {
+    console.log("[Vejice CHECK]", ...a);
+  }
+};
+const warn = (...a) => {
+  if (!QUIET_LOGS && DEBUG) {
+    console.warn("[Vejice CHECK]", ...a);
+  }
+};
+const errL = (...a) => {
+  if (!QUIET_LOGS) {
+    console.error("[Vejice CHECK]", ...a);
+  }
+};
 
 const tnow = () => performance?.now?.() ?? Date.now();
 const roundMs = (ms) => (Number.isFinite(ms) ? Math.round(ms * 10) / 10 : 0);

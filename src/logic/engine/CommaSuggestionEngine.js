@@ -44,6 +44,22 @@ const DEBUG_DUMP_STORAGE_KEY = "vejice:debug:dumps";
 const DEBUG_DUMP_LAST_STORAGE_KEY = "vejice:debug:lastDump";
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
+const parseQuietBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (BOOLEAN_TRUE.has(normalized)) return true;
+  if (BOOLEAN_FALSE.has(normalized)) return false;
+  return undefined;
+};
+const QUIET_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_QUIET_LOGS__ === "boolean"
+    ? window.__VEJICE_QUIET_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
+      : undefined;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -88,6 +104,7 @@ if (typeof window !== "undefined") {
 }
 
 function isDeepDebugEnabled() {
+  if (QUIET_LOGS) return false;
   if (typeof window === "undefined") return false;
   const isTruthyFlag = (value) =>
     value === true || value === 1 || value === "1" || value === "true";

@@ -5,12 +5,29 @@ import axios from "axios";
 const envIsProd = () =>
   (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
   (typeof window !== "undefined" && window.__VEJICE_ENV__ === "production");
+const parseQuietBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return undefined;
+    if (["1", "true", "yes", "on"].includes(trimmed)) return true;
+    if (["0", "false", "no", "off"].includes(trimmed)) return false;
+  }
+  return undefined;
+};
+const QUIET_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_QUIET_LOGS__ === "boolean"
+    ? window.__VEJICE_QUIET_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
+      : undefined;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
-const log = (...a) => DEBUG && console.log("[Vejice API]", ...a);
+const log = (...a) => !QUIET_LOGS && DEBUG && console.log("[Vejice API]", ...a);
 const MAX_SNIPPET = 120;
 const snip = (s) => (typeof s === "string" ? s.slice(0, MAX_SNIPPET) : s);
 

@@ -12,18 +12,36 @@ const LEMMA_CACHE_MAX_ENTRIES = 1200;
 const LEMMA_CACHE_TTL_MS = 10 * 60 * 1000;
 const LEMMA_FAILURE_BACKOFF_BASE_MS = 1500;
 const LEMMA_FAILURE_BACKOFF_MAX_MS = 45000;
+const parseQuietBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+};
+const QUIET_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_QUIET_LOGS__ === "boolean"
+    ? window.__VEJICE_QUIET_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
+      : undefined;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 const snip = (value) =>
   typeof value === "string" && value.length > MAX_LOG_LENGTH
     ? `${value.slice(0, MAX_LOG_LENGTH)}…`
     : value;
 
 const logInfo = (...args) => {
+  if (QUIET_LOGS) return;
   if (typeof console !== "undefined" && typeof console.log === "function") {
     console.log(LOG_PREFIX, ...args);
   }
 };
 
 const logWarn = (...args) => {
+  if (QUIET_LOGS) return;
   if (typeof console !== "undefined" && typeof console.warn === "function") {
     console.warn(LOG_PREFIX, ...args);
   }
