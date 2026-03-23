@@ -28,6 +28,26 @@ const DEBUG_OVERRIDE =
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
 const log = (...a) => !QUIET_LOGS && DEBUG && console.log("[Vejice API]", ...a);
+const QUOTE_TRACE_REGEX = /["'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]/u;
+function isQuoteTraceEnabled() {
+  if (typeof window !== "undefined") {
+    const parsed = parseQuietBoolean(window.__VEJICE_QUOTE_TRACE__);
+    if (typeof parsed === "boolean") return parsed;
+  }
+  if (typeof process !== "undefined") {
+    const parsed = parseQuietBoolean(process.env?.VEJICE_QUOTE_TRACE);
+    if (typeof parsed === "boolean") return parsed;
+  }
+  return false;
+}
+function quoteTraceLog(stage, payload = {}) {
+  if (!isQuoteTraceEnabled()) return;
+  try {
+    console.log("[Vejice QUOTE TRACE][api]", stage, payload);
+  } catch (_err) {
+    // Ignore console failures in constrained runtimes.
+  }
+}
 const MAX_SNIPPET = 120;
 const snip = (s) => (typeof s === "string" ? s.slice(0, MAX_SNIPPET) : s);
 
@@ -538,16 +558,148 @@ function normalizeCommaOpKind(value) {
   return null;
 }
 
-function normalizeQuoteIntent(value) {
+function normalizeQuoteIntent(value, sideHint = null) {
   if (typeof value !== "string") return null;
   const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
   if (!compact) return null;
+  const normalizedSide = normalizeQuoteBoundarySide(sideHint);
   if (compact === "none") return "none";
   if (compact === "unknown") return "unknown";
+  if (compact === "before") {
+    return normalizedSide === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (compact === "after") {
+    return normalizedSide === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
+  if (compact === "beforeopening" || compact === "openingbefore") return "before_opening_quote";
+  if (compact === "afteropening" || compact === "openingafter") return "after_opening_quote";
+  if (compact === "beforeclosing" || compact === "closingbefore") return "before_closing_quote";
+  if (compact === "afterclosing" || compact === "closingafter") return "after_closing_quote";
   if (compact === "beforeclosingquote" || compact === "beforequote") return "before_closing_quote";
   if (compact === "afterclosingquote" || compact === "afterquote") return "after_closing_quote";
   if (compact === "beforeopeningquote") return "before_opening_quote";
   if (compact === "afteropeningquote") return "after_opening_quote";
+  return null;
+}
+
+function normalizeQuoteBoundarySide(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "opening" || compact === "open" || compact === "left") return "opening";
+  if (compact === "closing" || compact === "close" || compact === "right") return "closing";
+  return null;
+}
+
+function parseLooseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return null;
+  }
+  if (typeof value === "string") {
+    const parsed = boolFromString(value);
+    if (typeof parsed === "boolean") return parsed;
+  }
+  return null;
+}
+
+function inferQuoteIntentFromFlags(rawOp = {}) {
+  const explicitBooleanIntent = [
+    [
+      firstDefinedValue([
+        rawOp.before_closing_quote,
+        rawOp.beforeClosingQuote,
+        rawOp.comma_before_closing_quote,
+        rawOp.commaBeforeClosingQuote,
+        rawOp.is_before_closing_quote,
+        rawOp.isBeforeClosingQuote,
+      ]),
+      "before_closing_quote",
+    ],
+    [
+      firstDefinedValue([
+        rawOp.after_closing_quote,
+        rawOp.afterClosingQuote,
+        rawOp.comma_after_closing_quote,
+        rawOp.commaAfterClosingQuote,
+        rawOp.is_after_closing_quote,
+        rawOp.isAfterClosingQuote,
+      ]),
+      "after_closing_quote",
+    ],
+    [
+      firstDefinedValue([
+        rawOp.before_opening_quote,
+        rawOp.beforeOpeningQuote,
+        rawOp.comma_before_opening_quote,
+        rawOp.commaBeforeOpeningQuote,
+        rawOp.is_before_opening_quote,
+        rawOp.isBeforeOpeningQuote,
+      ]),
+      "before_opening_quote",
+    ],
+    [
+      firstDefinedValue([
+        rawOp.after_opening_quote,
+        rawOp.afterOpeningQuote,
+        rawOp.comma_after_opening_quote,
+        rawOp.commaAfterOpeningQuote,
+        rawOp.is_after_opening_quote,
+        rawOp.isAfterOpeningQuote,
+      ]),
+      "after_opening_quote",
+    ],
+  ];
+  for (const [value, intent] of explicitBooleanIntent) {
+    if (parseLooseBoolean(value) === true) return intent;
+  }
+
+  const beforeQuoteFlag = parseLooseBoolean(
+    firstDefinedValue([
+      rawOp.comma_before_quote,
+      rawOp.commaBeforeQuote,
+      rawOp.before_quote,
+      rawOp.beforeQuote,
+      rawOp.insert_before_quote,
+      rawOp.insertBeforeQuote,
+      rawOp.place_before_quote,
+      rawOp.placeBeforeQuote,
+      rawOp.is_before_quote,
+      rawOp.isBeforeQuote,
+    ])
+  );
+  const afterQuoteFlag = parseLooseBoolean(
+    firstDefinedValue([
+      rawOp.comma_after_quote,
+      rawOp.commaAfterQuote,
+      rawOp.after_quote,
+      rawOp.afterQuote,
+      rawOp.insert_after_quote,
+      rawOp.insertAfterQuote,
+      rawOp.place_after_quote,
+      rawOp.placeAfterQuote,
+      rawOp.is_after_quote,
+      rawOp.isAfterQuote,
+    ])
+  );
+  const quoteSide = normalizeQuoteBoundarySide(
+    firstDefinedValue([
+      rawOp.quote_side,
+      rawOp.quoteSide,
+      rawOp.boundary_quote_side,
+      rawOp.boundaryQuoteSide,
+      rawOp.quote_type,
+      rawOp.quoteType,
+    ])
+  );
+  if (beforeQuoteFlag === true) {
+    return quoteSide === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (afterQuoteFlag === true) {
+    return quoteSide === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
   return null;
 }
 
@@ -564,7 +716,8 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
   const seen = new Set();
   const commaOps = [];
 
-  for (const rawOp of rawOps) {
+  for (let rawIndex = 0; rawIndex < rawOps.length; rawIndex++) {
+    const rawOp = rawOps[rawIndex];
     if (!rawOp || typeof rawOp !== "object") continue;
     const kind = normalizeCommaOpKind(
       firstDefinedValue([rawOp.kind, rawOp.type, rawOp.op, rawOp.action])
@@ -591,19 +744,33 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
       rawOp.targetIndex,
       kind === "insert" ? rawOp.pos : undefined,
     ]);
-    const explicitQuoteIntent = normalizeQuoteIntent(
-      firstDefinedValue([
-        rawOp.explicit_quote_intent,
-        rawOp.explicitQuoteIntent,
-        rawOp.quote_intent,
-        rawOp.quoteIntent,
-        rawOp.quote_policy,
-        rawOp.quotePolicy,
-        rawOp.boundary_side,
-        rawOp.boundarySide,
-        rawOp.side,
-      ])
-    );
+    const quoteSideHint = firstDefinedValue([
+      rawOp.quote_side,
+      rawOp.quoteSide,
+      rawOp.boundary_quote_side,
+      rawOp.boundaryQuoteSide,
+      rawOp.quote_type,
+      rawOp.quoteType,
+      rawOp.boundary_side,
+      rawOp.boundarySide,
+      rawOp.side,
+    ]);
+    const explicitIntentRaw = firstDefinedValue([
+      rawOp.explicit_quote_intent,
+      rawOp.explicitQuoteIntent,
+      rawOp.quote_intent,
+      rawOp.quoteIntent,
+      rawOp.quote_policy,
+      rawOp.quotePolicy,
+    ]);
+    const explicitQuoteIntentFromPayload = normalizeQuoteIntent(explicitIntentRaw, quoteSideHint);
+    const explicitQuoteIntentFromFlags = inferQuoteIntentFromFlags(rawOp);
+    const explicitQuoteIntent = explicitQuoteIntentFromPayload ?? explicitQuoteIntentFromFlags;
+    const explicitQuoteIntentSource = explicitQuoteIntentFromPayload
+      ? "payload_explicit"
+      : explicitQuoteIntentFromFlags
+        ? "payload_flags"
+        : null;
 
     let originalPos = toBoundedIndex(originalCandidate, sourceLen);
     let correctedPos = toBoundedIndex(correctedCandidate, targetLen);
@@ -616,17 +783,39 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
     const identity = `${kind}:${originalPos}:${correctedPos}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
+    const traceIdRaw = firstDefinedValue([rawOp.trace_id, rawOp.traceId, rawOp.op_id, rawOp.opId, rawOp.id]);
+    const traceId =
+      typeof traceIdRaw === "string" && traceIdRaw.trim()
+        ? traceIdRaw.trim()
+        : `api:${rawIndex}:${kind}:${originalPos}:${correctedPos}`;
 
     const normalizedOp = {
       kind,
       pos,
       originalPos,
       correctedPos,
+      traceId,
     };
     if (explicitQuoteIntent) {
       normalizedOp.explicitQuoteIntent = explicitQuoteIntent;
+      normalizedOp.explicitQuoteIntentSource = explicitQuoteIntentSource || "unknown";
     }
     commaOps.push(normalizedOp);
+    const touchesQuoteByText =
+      typeof sourceText === "string" &&
+      (QUOTE_TRACE_REGEX.test(sourceText) || (typeof targetText === "string" && QUOTE_TRACE_REGEX.test(targetText)));
+    if (explicitQuoteIntent || touchesQuoteByText) {
+      quoteTraceLog("extract_comma_op", {
+        traceId,
+        index: rawIndex,
+        kind,
+        originalPos,
+        correctedPos,
+        explicitQuoteIntent: explicitQuoteIntent || null,
+        explicitQuoteIntentSource: explicitQuoteIntentSource || null,
+        sideHint: quoteSideHint || null,
+      });
+    }
   }
 
   return commaOps;
@@ -1242,12 +1431,14 @@ async function requestPopravek(poved, options = {}) {
       const t1 = performance?.now?.() ?? Date.now();
       const durationMs = Math.round(t1 - t0);
       const info = describeAxiosError(err);
+      const status = typeof info?.status === "number" ? info.status : null;
+      const infraRetryStatus =
+        status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
       const canTryProtectedDots =
         !protectedRetryUsed &&
         !USE_MOCK &&
         !primaryPayload.dotProtected &&
-        typeof info?.status === "number" &&
-        info.status >= 500 &&
+        infraRetryStatus &&
         hasProblematicDotPattern(poved);
       if (canTryProtectedDots) {
         protectedRetryUsed = true;
@@ -1285,8 +1476,7 @@ async function requestPopravek(poved, options = {}) {
         ENABLE_OG_COMPAT_RETRY &&
         !ogCompatRetryUsed &&
         !USE_MOCK &&
-        typeof info?.status === "number" &&
-        info.status >= 500;
+        infraRetryStatus;
       if (canTryOgCompat) {
         ogCompatRetryUsed = true;
         const compatPayloads = buildOgCompatPayloads(poved);
@@ -1322,8 +1512,7 @@ async function requestPopravek(poved, options = {}) {
         ENABLE_NORMALIZED_TRANSPORT_RETRY &&
         !normalizedRetryUsed &&
         !USE_MOCK &&
-        typeof info?.status === "number" &&
-        info.status >= 500 &&
+        infraRetryStatus &&
         hasTransportNormalizationOpportunity(poved);
       if (canTryNormalizedTransport) {
         normalizedRetryUsed = true;

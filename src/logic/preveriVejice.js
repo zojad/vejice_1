@@ -105,10 +105,10 @@ const onlineParagraphAnalysisCache = [];
 const onlineParagraphRenderState = new Map();
 const unstableOnlineParagraphBackoff = new Map();
 const onlineMarkerBaselineByKey = new Map();
-const PENDING_SUGGESTIONS_STORAGE_BASE_KEY = "vejice.pendingSuggestionsOnline.v1";
+const PENDING_SUGGESTIONS_STORAGE_BASE_KEY = "vejice.pendingSuggestionsOnline.v2";
 const PENDING_SUGGESTIONS_SESSION_KEY = "vejice.pendingSuggestionsSessionId.v1";
-const DESKTOP_PARAGRAPH_CACHE_VERSION = 2;
-const ONLINE_PARAGRAPH_CACHE_VERSION = 2;
+const DESKTOP_PARAGRAPH_CACHE_VERSION = 3;
+const ONLINE_PARAGRAPH_CACHE_VERSION = 3;
 const MAX_PARAGRAPH_CHARS = 3000; //???
 const LONG_PARAGRAPH_MESSAGE = "Odstavek je predolg za preverjanje. Razdelite ga na kraj\u0161e povedi in poskusite znova.";
 const LONG_SENTENCE_MESSAGE = "Poved je predolga za preverjanje. Razdelite jo na kraj\u0161e povedi in poskusite znova.";
@@ -165,13 +165,146 @@ function isQuoteTraceEnabled() {
   return false;
 }
 
+function isQuoteIntentInferenceEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_QUOTE_INTENT_INFERENCE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_INTENT_INFERENCE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  // Default OFF: keep quote placement/highlight tied to explicit API intent.
+  return false;
+}
+
+function isQuoteTraceVerboseEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE_VERBOSE__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE_VERBOSE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return false;
+}
+
 function hasQuoteTraceChar(value) {
   return typeof value === "string" && QUOTE_TRACE_REGEX.test(value);
+}
+
+function normalizeQuoteBoundaryIntent(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "none") return "none";
+  if (compact === "unknown") return "unknown";
+  if (compact === "before") return "before_closing_quote";
+  if (compact === "after") return "after_closing_quote";
+  if (compact === "whitespaceonly") return "whitespace_only";
+  if (compact === "insidequoteboundary") return "inside_quote_boundary";
+  if (compact === "insidequotegap") return "inside_quote_gap";
+  if (compact === "beforeclosingquote" || compact === "beforequote") return "before_closing_quote";
+  if (compact === "afterclosingquote" || compact === "afterquote") return "after_closing_quote";
+  if (compact === "beforeopeningquote") return "before_opening_quote";
+  if (compact === "afteropeningquote") return "after_opening_quote";
+  return null;
+}
+
+function isExplicitQuoteBoundaryIntent(intent) {
+  return (
+    intent === "before_closing_quote" ||
+    intent === "after_closing_quote" ||
+    intent === "before_opening_quote" ||
+    intent === "after_opening_quote"
+  );
+}
+
+function isAfterQuoteBoundaryIntent(intent) {
+  return intent === "after_closing_quote" || intent === "after_opening_quote";
+}
+
+function shouldForceQuoteBoundaryHighlight(intent) {
+  return (
+    intent === "before_closing_quote" ||
+    intent === "after_closing_quote" ||
+    intent === "after_opening_quote"
+  );
+}
+
+function resolveSuggestionQuoteBoundaryIntent(suggestion, op = null) {
+  const suggestionBoundary = suggestion?.meta?.anchor?.boundaryMeta ?? {};
+  const opMeta = suggestion?.meta?.op ?? {};
+  const opBoundary = op?.boundary ?? opMeta?.boundary ?? {};
+  const candidates = [
+    op?.explicitQuoteIntent,
+    opMeta?.explicitQuoteIntent,
+    opBoundary?.explicitQuoteIntent,
+    opMeta?.quoteIntent,
+    opMeta?.quotePolicy,
+    opBoundary?.quotePolicy,
+    suggestionBoundary?.explicitQuoteIntent,
+  ];
+  let fallbackIntent = null;
+  for (const candidate of candidates) {
+    const normalized = normalizeQuoteBoundaryIntent(candidate);
+    if (!normalized) continue;
+    if (isExplicitQuoteBoundaryIntent(normalized)) {
+      return normalized;
+    }
+    if (!fallbackIntent) {
+      fallbackIntent = normalized;
+    }
+  }
+  return fallbackIntent;
 }
 
 function suggestionTouchesQuoteBoundary(suggestion) {
   if (!suggestion || typeof suggestion !== "object") return false;
   const meta = suggestion?.meta?.anchor || {};
+  const explicitQuoteIntent = resolveSuggestionQuoteBoundaryIntent(suggestion, suggestion?.meta?.op);
+  if (isExplicitQuoteBoundaryIntent(explicitQuoteIntent)) return true;
+  const hasQuoteNearBoundary = (text, pos) => {
+    if (typeof text !== "string" || !text.length) return false;
+    if (!Number.isFinite(pos) || pos < 0 || pos > text.length) return false;
+    const boundaryPos = Math.max(0, Math.min(text.length, Math.floor(pos)));
+    let left = boundaryPos - 1;
+    while (left >= 0 && /\s/u.test(text[left] || "")) left--;
+    if (left >= 0 && hasQuoteTraceChar(text[left])) return true;
+    if (boundaryPos < text.length && hasQuoteTraceChar(text[boundaryPos])) return true;
+    let right = boundaryPos;
+    while (right < text.length && /\s/u.test(text[right] || "")) right++;
+    if (right < text.length && hasQuoteTraceChar(text[right])) return true;
+    return false;
+  };
+  const opMeta = suggestion?.meta?.op || {};
+  const sourceText =
+    typeof suggestion?.meta?.originalText === "string"
+      ? suggestion.meta.originalText
+      : typeof suggestion?.meta?.sourceText === "string"
+        ? suggestion.meta.sourceText
+        : "";
+  const correctedText =
+    typeof suggestion?.meta?.correctedText === "string"
+      ? suggestion.meta.correctedText
+      : sourceText;
+  const boundaryHintCandidates = [
+    opMeta?.originalPos,
+    opMeta?.correctedPos,
+    opMeta?.pos,
+    suggestion?.charHint?.start,
+    meta?.targetCharStart,
+    meta?.charStart,
+  ];
+  for (const candidate of boundaryHintCandidates) {
+    if (
+      hasQuoteNearBoundary(sourceText, candidate) ||
+      hasQuoteNearBoundary(correctedText, candidate)
+    ) {
+      return true;
+    }
+  }
   const snippetLeft = suggestion?.snippets?.leftSnippet;
   const snippetRight = suggestion?.snippets?.rightSnippet;
   const candidates = [
@@ -184,6 +317,10 @@ function suggestionTouchesQuoteBoundary(suggestion) {
     meta?.targetTokenBefore?.tokenText,
     meta?.targetTokenAt?.tokenText,
     meta?.targetTokenAfter?.tokenText,
+    meta?.boundaryMeta?.leftContext,
+    meta?.boundaryMeta?.rightContext,
+    meta?.boundaryMeta?.beforeToken?.tokenText,
+    meta?.boundaryMeta?.afterToken?.tokenText,
   ];
   return candidates.some((value) => hasQuoteTraceChar(value));
 }
@@ -192,10 +329,21 @@ function buildQuoteTraceSuggestionSnapshot(suggestion) {
   if (!suggestion || typeof suggestion !== "object") return null;
   const op = suggestion?.meta?.op || {};
   const anchor = suggestion?.meta?.anchor || {};
+  const traceId =
+    typeof op?.traceId === "string" && op.traceId.trim()
+      ? op.traceId.trim()
+      : `pv:${Number.isFinite(suggestion?.paragraphIndex) ? suggestion.paragraphIndex : "na"}:${suggestion?.kind || "op"}:${Number.isFinite(op?.originalPos) ? op.originalPos : Number.isFinite(op?.pos) ? op.pos : "na"}:${Number.isFinite(op?.correctedPos) ? op.correctedPos : Number.isFinite(op?.pos) ? op.pos : "na"}`;
+  const explicitQuoteIntent = resolveSuggestionQuoteBoundaryIntent(suggestion, op);
+  const highlightText =
+    typeof anchor?.highlightText === "string" ? anchor.highlightText : typeof suggestion?.meta?.highlightText === "string" ? suggestion.meta.highlightText : null;
+  const highlightTarget = hasQuoteTraceChar(highlightText || "") && (highlightText || "").length === 1 ? "quote" : "word";
   return {
+    traceId,
     id: suggestion?.id ?? null,
     paragraphIndex: Number.isFinite(suggestion?.paragraphIndex) ? suggestion.paragraphIndex : null,
     kind: suggestion?.kind ?? null,
+    explicitQuoteIntent: explicitQuoteIntent || null,
+    explicitQuoteIntentSource: op?.explicitQuoteIntentSource || null,
     opOriginalPos: Number.isFinite(op?.originalPos) ? op.originalPos : null,
     opCorrectedPos: Number.isFinite(op?.correctedPos) ? op.correctedPos : null,
     opPos: Number.isFinite(op?.pos) ? op.pos : null,
@@ -205,7 +353,16 @@ function buildQuoteTraceSuggestionSnapshot(suggestion) {
     sourceTokenAfter: anchor?.sourceTokenAfter?.tokenText || null,
     targetTokenBefore: anchor?.targetTokenBefore?.tokenText || null,
     targetTokenAfter: anchor?.targetTokenAfter?.tokenText || null,
-    highlightText: anchor?.highlightText || null,
+    highlightText,
+    highlightTarget,
+    highlightCharStart: Number.isFinite(anchor?.highlightCharStart) ? anchor.highlightCharStart : null,
+    highlightCharEnd: Number.isFinite(anchor?.highlightCharEnd) ? anchor.highlightCharEnd : null,
+    boundaryTargetPos: Number.isFinite(anchor?.boundaryMeta?.targetBoundaryPos)
+      ? anchor.boundaryMeta.targetBoundaryPos
+      : null,
+    boundarySourcePos: Number.isFinite(anchor?.boundaryMeta?.sourceBoundaryPos)
+      ? anchor.boundaryMeta.sourceBoundaryPos
+      : null,
     leftSnippet:
       typeof suggestion?.snippets?.leftSnippet === "string"
         ? suggestion.snippets.leftSnippet.slice(-28)
@@ -220,10 +377,25 @@ function buildQuoteTraceSuggestionSnapshot(suggestion) {
 function traceQuoteSuggestion(stage, suggestion, extra = {}) {
   if (!isQuoteTraceEnabled()) return;
   if (!suggestionTouchesQuoteBoundary(suggestion) && !extra?.force) return;
-  log("[QUOTE TRACE]", stage, {
-    suggestion: buildQuoteTraceSuggestionSnapshot(suggestion),
-    ...extra,
-  });
+  const snapshot = buildQuoteTraceSuggestionSnapshot(suggestion);
+  const traceId = snapshot?.traceId || "na";
+  const intent = snapshot?.explicitQuoteIntent || "none";
+  const target = snapshot?.highlightTarget || "na";
+  const boundaryPos =
+    Number.isFinite(snapshot?.boundaryTargetPos) ? snapshot.boundaryTargetPos : snapshot?.opCorrectedPos;
+  try {
+    console.log(
+      `[Vejice QUOTE TRACE][preveri] ${stage} | traceId=${traceId} | intent=${intent} | target=${target} | boundary=${boundaryPos}`
+    );
+    if (isQuoteTraceVerboseEnabled()) {
+      console.log("[Vejice QUOTE TRACE][preveri][detail]", {
+        suggestion: snapshot,
+        ...extra,
+      });
+    }
+  } catch (_err) {
+    // Ignore console failures in restricted host consoles.
+  }
 }
 
 function isLocalhostRuntime() {
@@ -2353,36 +2525,84 @@ function hasDesktopDirectInsertBoundary(suggestion) {
 function isDesktopDirectInsertOp(op) {
   if (op?.kind !== "insert") return false;
   const suggestions = Array.isArray(op?.suggestions) ? op.suggestions : [];
-  return suggestions.length > 0 && suggestions.every(hasDesktopDirectInsertBoundary);
+  return suggestions.length === 1 && suggestions.every(hasDesktopDirectInsertBoundary);
 }
 
 async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIndex, sourceText, op) {
-  const suggestion = Array.isArray(op?.suggestions) ? op.suggestions[0] : null;
+  const suggestions = Array.isArray(op?.suggestions) ? op.suggestions.filter(Boolean) : [];
+  if (!suggestions.length) return "failed";
+  if (suggestions.some((candidate) => suggestionTouchesQuoteBoundary(candidate))) return "failed";
+  const suggestion = suggestions[0];
   const meta = suggestion?.meta?.anchor;
   if (!meta) return "failed";
-  if (suggestionTouchesQuoteBoundary(suggestion)) return "failed";
 
   paragraph.load("text");
   await context.sync();
   const liveText = paragraph.text || "";
   const anchorsEntry = anchorProvider.getAnchorsForParagraph(paragraphIndex);
+  const quoteCharRegex = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
+  const boundary = op?.boundary ?? suggestion?.meta?.anchor?.boundaryMeta ?? {};
+  const boundaryHasQuoteCue =
+    quoteCharRegex.test(boundary?.leftContext || "") ||
+    quoteCharRegex.test(boundary?.rightContext || "") ||
+    quoteCharRegex.test(boundary?.beforeToken?.tokenText || "") ||
+    quoteCharRegex.test(boundary?.afterToken?.tokenText || "") ||
+    quoteCharRegex.test(meta?.sourceTokenBefore?.tokenText || "") ||
+    quoteCharRegex.test(meta?.sourceTokenAfter?.tokenText || "");
+  const hasQuoteNearBoundary = (text, pos, radius = 2) => {
+    if (typeof text !== "string" || !text.length) return false;
+    if (!Number.isFinite(pos)) return false;
+    const safePos = Math.max(0, Math.min(text.length, Math.floor(pos)));
+    const from = Math.max(0, safePos - Math.max(0, radius));
+    const to = Math.min(text.length, safePos + Math.max(0, radius) + 1);
+    return quoteCharRegex.test(text.slice(from, to));
+  };
+  const sourceBoundaryHint = firstFiniteValue([
+    boundary?.sourceBoundaryPos,
+    boundary?.sourceBoundaryStart,
+    boundary?.sourceBoundaryEnd,
+    boundary?.resolvedPos,
+    boundary?.requestedPos,
+    suggestion?.meta?.op?.originalPos,
+    suggestion?.meta?.op?.correctedPos,
+    op?.start,
+    op?.end,
+  ]);
+  const liveBoundaryHint =
+    Number.isFinite(sourceBoundaryHint) && typeof sourceText === "string"
+      ? mapIndexAcrossCanonical(sourceText, liveText, sourceBoundaryHint, { allowEnd: true })
+      : sourceBoundaryHint;
+  if (
+    boundaryHasQuoteCue ||
+    hasQuoteNearBoundary(sourceText, sourceBoundaryHint, 3) ||
+    hasQuoteNearBoundary(liveText, liveBoundaryHint, 3)
+  ) {
+    // Route quote-adjacent edits through strict resolver to avoid generic after-anchor placement.
+    return "failed";
+  }
 
   const tryBoundaryInsert = async (sourceBoundary, traceLabel, fallbackSnippet) => {
     if (!Number.isFinite(sourceBoundary) || sourceBoundary < 0) return false;
-    const mappedBoundary = mapIndexAcrossCanonical(sourceText, liveText, sourceBoundary);
+    const mappedBoundary = mapIndexAcrossCanonical(sourceText, liveText, sourceBoundary, {
+      allowEnd: true,
+    });
     if (!Number.isFinite(mappedBoundary) || mappedBoundary < 0 || mappedBoundary > liveText.length) {
       return false;
     }
-    if (hasCommaNearMappedHint(liveText, mappedBoundary, 0)) {
+    let adjustedBoundary = Math.max(0, Math.min(liveText.length, Math.floor(mappedBoundary)));
+    while (adjustedBoundary > 0 && /\s/u.test(liveText[adjustedBoundary - 1] || "")) {
+      adjustedBoundary--;
+    }
+    if (hasCommaNearMappedHint(liveText, adjustedBoundary, 0)) {
       return "noop";
     }
-    if (mappedBoundary < liveText.length) {
+    if (adjustedBoundary < liveText.length) {
       const range = await getRangeForAnchorSpan(
         context,
         paragraph,
         anchorsEntry,
-        mappedBoundary,
-        Math.min(mappedBoundary + 1, liveText.length),
+        adjustedBoundary,
+        Math.min(adjustedBoundary + 1, liveText.length),
         traceLabel,
         fallbackSnippet
       );
@@ -2410,6 +2630,14 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
     const anchorEnd = getAnchorResolvedEnd(anchor);
     if (!Number.isFinite(anchorEnd) || anchorEnd <= anchor.charStart) return false;
     const sourceBoundary = insertLocation === Word.InsertLocation.after ? anchorEnd : anchor.charStart;
+    const boundaryFirst = await tryBoundaryInsert(
+      sourceBoundary,
+      `${traceLabel}-boundary-first`,
+      anchor.tokenText || op?.snippet || ","
+    );
+    if (boundaryFirst === true || boundaryFirst === "noop") {
+      return boundaryFirst;
+    }
     const mappedBoundary = mapIndexAcrossCanonical(sourceText, liveText, sourceBoundary);
     if (Number.isFinite(mappedBoundary) && hasCommaNearMappedHint(liveText, mappedBoundary, 0)) {
       return "noop";
@@ -2762,7 +2990,11 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
         return deleteStart >= windowStart && deleteStart <= windowEnd;
       });
     }
-    const suggestion = Array.isArray(op?.suggestions) ? op.suggestions[0] : null;
+    const opSuggestions = Array.isArray(op?.suggestions) ? op.suggestions.filter(Boolean) : [];
+    const suggestion = opSuggestions[0] || null;
+    const quoteSuggestion =
+      opSuggestions.find((candidate) => suggestionTouchesQuoteBoundary(candidate)) || null;
+    const strictSuggestion = quoteSuggestion || suggestion;
     const hasRelocationCounterpart = suggestion
       ? plan.some((candidate, candidateIndex) => {
           if (candidateIndex === opIndex) return false;
@@ -2770,10 +3002,25 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
           return isSameCommaRelocationPair(suggestion, candidateSuggestion);
         })
       : false;
+    const explicitQuoteIntentCandidates = [
+      resolveSuggestionQuoteBoundaryIntent(strictSuggestion, op),
+      normalizeQuoteBoundaryIntent(op?.explicitQuoteIntent),
+      normalizeQuoteBoundaryIntent(op?.boundary?.explicitQuoteIntent),
+      normalizeQuoteBoundaryIntent(op?.boundary?.quotePolicy),
+      ...opSuggestions.map((candidate) => resolveSuggestionQuoteBoundaryIntent(candidate, op)),
+    ].filter(Boolean);
+    const hasExplicitQuoteIntent = explicitQuoteIntentCandidates.some((intent) =>
+      isExplicitQuoteBoundaryIntent(intent)
+    );
+    const opTouchesQuoteBoundary = opSuggestions.some((candidate) =>
+      suggestionTouchesQuoteBoundary(candidate)
+    );
     const shouldUseStrictInsertResolutionForOp =
-      strictResolutionOnlineOnly || (op.kind === "insert" && suggestionTouchesQuoteBoundary(suggestion));
+      strictResolutionOnlineOnly ||
+      (op.kind === "insert" && (hasExplicitQuoteIntent || opTouchesQuoteBoundary));
     const shouldUseStrictDeleteResolutionForOp =
-      strictResolutionOnlineOnly || (op.kind === "delete" && suggestionTouchesQuoteBoundary(suggestion));
+      strictResolutionOnlineOnly ||
+      (op.kind === "delete" && (hasExplicitQuoteIntent || opTouchesQuoteBoundary));
     if (
       shouldUseExactWindowInsertResolution &&
       shouldUseStrictInsertResolutionForOp &&
@@ -2806,12 +3053,12 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
         continue;
       }
     }
-    if (shouldUseStrictInsertResolutionForOp && op.kind === "insert" && suggestion) {
+    if (shouldUseStrictInsertResolutionForOp && op.kind === "insert" && strictSuggestion) {
       const strictResolution = await resolveStrictInsertRangeForSuggestion(
         context,
         paragraph,
         op,
-        suggestion,
+        strictSuggestion,
         `${reason}-strict-insert`
       );
       if (strictResolution?.range) {
@@ -2827,16 +3074,16 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
       op.strictResolutionBlocked = true;
       warn(`getRangesForPlannedOperations(${reason}): strict insert resolution blocked apply`, {
         opIndex,
-        suggestionId: suggestion?.id ?? null,
-        reason: strictResolution?.reason || "insert_strict_resolution_failed",
-      });
+          suggestionId: suggestion?.id ?? null,
+          reason: strictResolution?.reason || "insert_strict_resolution_failed",
+        });
       continue;
     }
-    if (shouldUseStrictDeleteResolutionForOp && op.kind === "delete" && suggestion) {
+    if (shouldUseStrictDeleteResolutionForOp && op.kind === "delete" && strictSuggestion) {
       const strictResolution = await resolveStrictDeleteRangeForSuggestion(
         context,
         paragraph,
-        suggestion,
+        strictSuggestion,
         `${reason}-strict-delete`
       );
       if (strictResolution?.range) {
@@ -3474,6 +3721,8 @@ function shouldUseMarkerFirstInsertApply(suggestion, plan) {
     if (!compact) return null;
     if (compact === "none") return "none";
     if (compact === "unknown") return "unknown";
+    if (compact === "before") return "before_closing_quote";
+    if (compact === "after") return "after_closing_quote";
     if (compact === "whitespaceonly") return "whitespace_only";
     if (compact === "insidequoteboundary") return "inside_quote_boundary";
     if (compact === "insidequotegap") return "inside_quote_gap";
@@ -4143,7 +4392,7 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     const lastWord = extractLastWord(rawLeft || "");
     let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
     const searchOpts = { matchCase: false, matchWholeWord: false };
-    const boundaryIntent = anchor?.boundaryMeta?.explicitQuoteIntent ?? "none";
+    const boundaryIntent = resolveSuggestionQuoteBoundaryIntent(suggestion, suggestion?.meta?.op) ?? "none";
     const boundaryPunctuationChar =
       typeof anchor?.boundaryMeta?.punctuationBoundaryChar === "string"
         ? anchor.boundaryMeta.punctuationBoundaryChar
@@ -4157,28 +4406,56 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       (typeof corrected === "string" ? corrected : "") ||
       "";
     const boundaryCandidates = [
+      anchor?.boundaryMeta?.sourceBoundaryPos,
+      anchor?.boundaryMeta?.sourceBoundaryStart,
+      anchor?.boundaryMeta?.sourceBoundaryEnd,
       anchor?.boundaryMeta?.targetCommaPos,
       anchor?.boundaryMeta?.targetBoundaryPos,
+      suggestion?.meta?.op?.originalPos,
       suggestion?.meta?.op?.correctedPos,
       suggestion?.meta?.op?.pos,
       anchor?.targetCharStart,
       anchor?.highlightCharStart,
       suggestion?.charHint?.start,
     ];
-    const resolveQuotePosFromCandidates = (text, candidates) => {
+    const resolveQuotePosFromCandidates = (text, candidates, intent = "none") => {
       if (!text || !Array.isArray(candidates) || !candidates.length) return -1;
+      const preferRight =
+        intent === "before_closing_quote" || intent === "before_opening_quote";
+      const preferLeft =
+        intent === "after_closing_quote" || intent === "after_opening_quote";
       for (const candidate of candidates) {
         if (!Number.isFinite(candidate) || candidate < 0 || candidate > text.length) continue;
-        let left = Math.min(text.length - 1, Math.floor(candidate) - 1);
-        while (left >= 0 && invisibleOrGapRegex.test(text[left] || "")) left--;
-        if (left >= 0 && quoteCharRegex.test(text[left])) {
-          return left;
+        const probeLeft = () => {
+          let left = Math.min(text.length - 1, Math.floor(candidate) - 1);
+          while (left >= 0 && invisibleOrGapRegex.test(text[left] || "")) left--;
+          if (left >= 0 && quoteCharRegex.test(text[left])) return left;
+          return -1;
+        };
+        const probeRight = () => {
+          let right = Math.max(0, Math.floor(candidate));
+          while (right < text.length && invisibleOrGapRegex.test(text[right] || "")) right++;
+          if (right < text.length && quoteCharRegex.test(text[right])) return right;
+          return -1;
+        };
+        if (preferRight) {
+          const rightHit = probeRight();
+          if (rightHit >= 0) return rightHit;
+          const leftHit = probeLeft();
+          if (leftHit >= 0) return leftHit;
+          continue;
         }
-        let right = Math.max(0, Math.floor(candidate));
-        while (right < text.length && invisibleOrGapRegex.test(text[right] || "")) right++;
-        if (right < text.length && quoteCharRegex.test(text[right])) {
-          return right;
+        if (preferLeft) {
+          const leftHit = probeLeft();
+          if (leftHit >= 0) return leftHit;
+          const rightHit = probeRight();
+          if (rightHit >= 0) return rightHit;
+          continue;
         }
+        const leftHit = probeLeft();
+        if (leftHit >= 0) return leftHit;
+        const rightHit = probeRight();
+        if (rightHit >= 0) return rightHit;
       }
       return -1;
     };
@@ -4203,7 +4480,11 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       }
       return -1;
     };
-    const quotePosFromBoundary = resolveQuotePosFromCandidates(baseText, boundaryCandidates);
+    const quotePosFromBoundary = resolveQuotePosFromCandidates(
+      baseText,
+      boundaryCandidates,
+      boundaryIntent
+    );
     const opBoundaryPos = Number.isFinite(suggestion?.meta?.op?.correctedPos)
       ? Math.floor(suggestion.meta.op.correctedPos)
       : Number.isFinite(suggestion?.meta?.op?.pos)
@@ -4382,10 +4663,11 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
             dashBoundaryRegex.test(candidate?.tokenText || "")
         )
       : null;
-    const shouldForceQuoteBoundary =
-      boundaryIntent === "after_closing_quote" || boundaryIntent === "after_opening_quote";
+    const hasExplicitQuoteBoundary = isExplicitQuoteBoundaryIntent(boundaryIntent);
+    const shouldForceQuoteBoundary = shouldForceQuoteBoundaryHighlight(boundaryIntent);
     const shouldPreferQuoteBoundary =
-      shouldForceQuoteBoundary || (!lexicalAnchorCandidate && quotePosFromBoundary >= 0);
+      shouldForceQuoteBoundary ||
+      (hasExplicitQuoteBoundary && !lexicalAnchorCandidate && quotePosFromBoundary >= 0);
 
   const resolveAnchorEnd = (candidate) => {
     if (!Number.isFinite(candidate?.charStart) || candidate.charStart < 0) return null;
@@ -4403,7 +4685,11 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       range = await resolveQuoteRangeNearPos(quotePosFromBoundary);
     }
     if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
-      const quotePosFromHighlight = resolveQuotePosFromCandidates(baseText, [anchor.highlightCharStart]);
+      const quotePosFromHighlight = resolveQuotePosFromCandidates(
+        baseText,
+        [anchor.highlightCharStart],
+        boundaryIntent
+      );
       if (quotePosFromHighlight >= 0) {
         range = await resolveQuoteRangeNearPos(quotePosFromHighlight);
       }
@@ -4415,7 +4701,7 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         ...boundaryCandidates,
       ].filter((value, index, arr) => Number.isFinite(value) && value >= 0 && arr.indexOf(value) === index);
       for (const hint of fallbackHints) {
-        const quotePos = resolveQuotePosFromCandidates(baseText, [hint]);
+        const quotePos = resolveQuotePosFromCandidates(baseText, [hint], boundaryIntent);
         if (quotePos < 0) continue;
         range = await resolveQuoteContextRangeNearPos(quotePos);
         if (range) break;
@@ -5106,6 +5392,8 @@ async function resolveStrictInsertRangeForSuggestion(
     if (!compact) return null;
     if (compact === "none") return "none";
     if (compact === "unknown") return "unknown";
+    if (compact === "before") return "before_closing_quote";
+    if (compact === "after") return "after_closing_quote";
     if (compact === "whitespaceonly") return "whitespace_only";
     if (compact === "insidequoteboundary") return "inside_quote_boundary";
     if (compact === "insidequotegap") return "inside_quote_gap";
@@ -5215,7 +5503,7 @@ async function resolveStrictInsertRangeForSuggestion(
   const afterText = afterRange
     ? afterRange.text || afterResolved.tokenText || (afterAnchor?.tokenText || "").trim()
     : "";
-  const beforeStart =
+  let beforeStart =
     beforeRange && Number.isFinite(beforeResolved?.start) && beforeResolved.start >= 0
       ? beforeResolved.start
       : beforeRange
@@ -5229,7 +5517,7 @@ async function resolveStrictInsertRangeForSuggestion(
             resolveLemmaAwareTokenLookupOptions(suggestion, beforeAnchor)
           )
         : -1;
-  const afterStart =
+  let afterStart =
     afterRange && Number.isFinite(afterResolved?.start) && afterResolved.start >= 0
       ? afterResolved.start
       : afterRange
@@ -5243,6 +5531,34 @@ async function resolveStrictInsertRangeForSuggestion(
             resolveLemmaAwareTokenLookupOptions(suggestion, afterAnchor)
           )
         : -1;
+  if (
+    (!Number.isFinite(beforeStart) || beforeStart < 0) &&
+    beforeRange &&
+    sourceText &&
+    Number.isFinite(beforeAnchor?.charStart) &&
+    beforeAnchor.charStart >= 0
+  ) {
+    const mappedBeforeStart = mapIndexAcrossCanonical(sourceText, liveText, beforeAnchor.charStart, {
+      allowEnd: true,
+    });
+    if (Number.isFinite(mappedBeforeStart) && mappedBeforeStart >= 0) {
+      beforeStart = mappedBeforeStart;
+    }
+  }
+  if (
+    (!Number.isFinite(afterStart) || afterStart < 0) &&
+    afterRange &&
+    sourceText &&
+    Number.isFinite(afterAnchor?.charStart) &&
+    afterAnchor.charStart >= 0
+  ) {
+    const mappedAfterStart = mapIndexAcrossCanonical(sourceText, liveText, afterAnchor.charStart, {
+      allowEnd: true,
+    });
+    if (Number.isFinite(mappedAfterStart) && mappedAfterStart >= 0) {
+      afterStart = mappedAfterStart;
+    }
+  }
 
   const preferredSide = persistedBoundary?.preferredSide ?? boundary?.preferredSide ?? "after_before_token";
   const quotePolicy =
@@ -5275,16 +5591,20 @@ async function resolveStrictInsertRangeForSuggestion(
   };
   const shouldBlockQuoteBoundaryInsert = (pos) =>
     !op?.hasLocalDeleteCounterpart && hasLiveCommaAcrossQuoteBoundary(pos);
-  const resolveExplicitQuoteBoundaryRange = async () => {
+  const resolveQuoteBoundaryRangeByIntent = async (
+    quoteIntent,
+    anchorPos,
+    traceSuffix = "quote-boundary",
+    { blockPosOverride } = {}
+  ) => {
     if (
-      explicitQuoteIntent !== "before_closing_quote" &&
-      explicitQuoteIntent !== "after_closing_quote" &&
-      explicitQuoteIntent !== "before_opening_quote" &&
-      explicitQuoteIntent !== "after_opening_quote"
+      quoteIntent !== "before_closing_quote" &&
+      quoteIntent !== "after_closing_quote" &&
+      quoteIntent !== "before_opening_quote" &&
+      quoteIntent !== "after_opening_quote"
     ) {
       return null;
     }
-    const anchorPos = Number.isFinite(explicitGapPos) ? explicitGapPos : preferredLiveHint;
     if (!Number.isFinite(anchorPos) || anchorPos < 0 || !liveText.length) {
       return {
         range: null,
@@ -5293,10 +5613,10 @@ async function resolveStrictInsertRangeForSuggestion(
       };
     }
     const quoteMatcher =
-      explicitQuoteIntent === "before_closing_quote" || explicitQuoteIntent === "after_closing_quote"
+      quoteIntent === "before_closing_quote" || quoteIntent === "after_closing_quote"
         ? isClosingQuoteChar
         : isOpeningQuoteChar;
-    const insertLocation = explicitQuoteIntent.startsWith("before_")
+    const insertLocation = quoteIntent.startsWith("before_")
       ? Word.InsertLocation.before
       : Word.InsertLocation.after;
     const safeAnchor = Math.max(0, Math.min(Math.floor(anchorPos), liveText.length - 1));
@@ -5304,23 +5624,30 @@ async function resolveStrictInsertRangeForSuggestion(
     for (let step = 1; step <= 24; step++) {
       offsets.push(step, -step);
     }
+    const preferredDirection = quoteIntent.startsWith("before_") ? "right" : "left";
     let bestQuoteIndex = -1;
     let bestScore = Number.POSITIVE_INFINITY;
-    for (const offset of offsets) {
-      const idx = safeAnchor + offset;
-      if (idx < 0 || idx >= liveText.length) continue;
-      const quoteChar = liveText[idx] || "";
-      if (!quoteMatcher(quoteChar)) continue;
-      let score = Math.abs(idx - anchorPos);
-      if (insertLocation === Word.InsertLocation.before && idx < anchorPos) {
-        score += 2;
-      } else if (insertLocation === Word.InsertLocation.after && idx > anchorPos) {
-        score += 2;
+    const considerCandidates = (allowOppositeSide = false) => {
+      for (const offset of offsets) {
+        const idx = safeAnchor + offset;
+        if (idx < 0 || idx >= liveText.length) continue;
+        if (!allowOppositeSide) {
+          if (preferredDirection === "right" && idx < anchorPos) continue;
+          if (preferredDirection === "left" && idx > anchorPos) continue;
+        }
+        const quoteChar = liveText[idx] || "";
+        if (!quoteMatcher(quoteChar)) continue;
+        const score = Math.abs(idx - anchorPos);
+        if (score < bestScore) {
+          bestScore = score;
+          bestQuoteIndex = idx;
+        }
       }
-      if (score < bestScore) {
-        bestScore = score;
-        bestQuoteIndex = idx;
-      }
+    };
+    considerCandidates(false);
+    if (bestQuoteIndex < 0) {
+      // Fallback if strict directional search fails due minor anchor drift.
+      considerCandidates(true);
     }
     if (bestQuoteIndex < 0) {
       return {
@@ -5329,7 +5656,11 @@ async function resolveStrictInsertRangeForSuggestion(
         reason: "insert_live_quote_boundary_unresolved",
       };
     }
-    const blockPos = Number.isFinite(explicitGapPos) ? explicitGapPos : bestQuoteIndex;
+    const blockPos = Number.isFinite(blockPosOverride)
+      ? blockPosOverride
+      : Number.isFinite(explicitGapPos)
+        ? explicitGapPos
+        : bestQuoteIndex;
     if (shouldBlockQuoteBoundaryInsert(blockPos)) {
       return {
         range: null,
@@ -5343,7 +5674,7 @@ async function resolveStrictInsertRangeForSuggestion(
       liveText,
       bestQuoteIndex,
       bestQuoteIndex + 1,
-      `${reason}-explicit-quote-boundary`,
+      `${reason}-${traceSuffix}`,
       liveText[bestQuoteIndex]
     );
     if (charRange) {
@@ -5359,7 +5690,7 @@ async function resolveStrictInsertRangeForSuggestion(
       liveText,
       liveText[bestQuoteIndex] || "",
       bestQuoteIndex,
-      `${reason}-explicit-quote-boundary-fallback`
+      `${reason}-${traceSuffix}-fallback`
     );
     if (snippetRange) {
       return {
@@ -5373,6 +5704,26 @@ async function resolveStrictInsertRangeForSuggestion(
       insertLocation: null,
       reason: "insert_live_quote_boundary_unresolved",
     };
+  };
+  const resolveExplicitQuoteBoundaryRange = async () => {
+    if (
+      explicitQuoteIntent !== "before_closing_quote" &&
+      explicitQuoteIntent !== "after_closing_quote" &&
+      explicitQuoteIntent !== "before_opening_quote" &&
+      explicitQuoteIntent !== "after_opening_quote"
+    ) {
+      return null;
+    }
+    const anchorPos = Number.isFinite(explicitGapPos)
+      ? explicitGapPos
+      : Number.isFinite(preferredLiveHint) && preferredLiveHint >= 0
+        ? preferredLiveHint
+        : Number.isFinite(beforeStart) && beforeStart >= 0
+          ? beforeStart
+          : afterStart;
+    return resolveQuoteBoundaryRangeByIntent(explicitQuoteIntent, anchorPos, "explicit-quote-boundary", {
+      blockPosOverride: explicitGapPos,
+    });
   };
   const explicitQuoteBoundaryResolution = await resolveExplicitQuoteBoundaryRange();
   if (explicitQuoteBoundaryResolution) {
@@ -5407,6 +5758,29 @@ async function resolveStrictInsertRangeForSuggestion(
     }
     return "inside_quote_gap";
   };
+  const resolveBeforeRangeForInsert = async (traceSuffix = "insert-before-anchor") => {
+    if (!beforeRange || !Number.isFinite(beforeStart) || beforeStart < 0) return beforeRange;
+    const beforeEnd = beforeStart + (typeof beforeText === "string" ? beforeText.length : 0);
+    if (!Number.isFinite(beforeEnd) || beforeEnd <= beforeStart) return beforeRange;
+    const safeEnd = Math.max(beforeStart + 1, Math.min(liveText.length, Math.floor(beforeEnd)));
+    let anchorIndex = safeEnd - 1;
+    while (anchorIndex >= beforeStart && /[\s\u200B-\u200D\uFEFF]/u.test(liveText[anchorIndex] || "")) {
+      anchorIndex--;
+    }
+    if (anchorIndex < beforeStart || anchorIndex === safeEnd - 1) {
+      return beforeRange;
+    }
+    const trimmedRange = await getRangeForCharacterSpan(
+      context,
+      paragraph,
+      liveText,
+      anchorIndex,
+      anchorIndex + 1,
+      `${reason}-${traceSuffix}`,
+      liveText[anchorIndex] || beforeText.trim() || ","
+    );
+    return trimmedRange || beforeRange;
+  };
 
   if (beforeRange && afterRange && Number.isFinite(beforeStart) && beforeStart >= 0 && Number.isFinite(afterStart) && afterStart >= 0) {
     const beforeEnd = beforeStart + beforeText.length;
@@ -5428,47 +5802,31 @@ async function resolveStrictInsertRangeForSuggestion(
           gapNoTrailingWs.length > 0 &&
           [...gapNoTrailingWs].every((char) => isClosingQuoteChar(char) || /\s/u.test(char));
         const shouldPreferQuoteBoundary =
+          isQuoteIntentInferenceEnabled() &&
           closingQuoteGap &&
           gapIntent !== "before_closing_quote" &&
           (quotePolicy === "after_closing_quote" ||
             (preferredSide !== "before_after_token" && preferredLiveHint >= beforeEnd));
 
         if (shouldPreferQuoteBoundary) {
-          if (shouldBlockQuoteBoundaryInsert(explicitGapPos ?? beforeEnd)) {
-            return {
-              range: null,
-              insertLocation: null,
-              reason: "insert_live_quote_boundary_already_has_comma",
-            };
-          }
-          try {
-            const closingRun = (
-              gapText.match(/^[\s]*["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]+/u) || [""]
-            )[0].trimStart();
-            if (closingRun) {
-              const quoteSearchBase = beforeRange.expandToOrNullObject(afterRange);
-              quoteSearchBase.load("isNullObject");
-              await context.sync();
-              if (!quoteSearchBase?.isNullObject) {
-                const quoteMatches = quoteSearchBase.search(closingRun, {
-                  matchCase: true,
-                  matchWholeWord: false,
-                  ignoreSpace: false,
-                  ignorePunct: false,
-                });
-                quoteMatches.load("items");
-                await context.sync();
-                if (quoteMatches.items.length) {
-                  return {
-                    range: quoteMatches.items[quoteMatches.items.length - 1],
-                    insertLocation: Word.InsertLocation.after,
-                    reason: null,
-                  };
-                }
-              }
+          const leadingWhitespaceLen = ((gapText.match(/^\s+/u) || [""])[0] || "").length;
+          const closingRun = (
+            gapText.slice(leadingWhitespaceLen).match(/^["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]+/u) || [""]
+          )[0];
+          if (closingRun) {
+            const quoteBoundaryAnchor = beforeEnd + leadingWhitespaceLen + Math.max(0, closingRun.length - 1);
+            const quoteBoundaryResolution = await resolveQuoteBoundaryRangeByIntent(
+              "after_closing_quote",
+              quoteBoundaryAnchor,
+              "auto-quote-boundary",
+              { blockPosOverride: explicitGapPos ?? quoteBoundaryAnchor }
+            );
+            if (quoteBoundaryResolution?.range) {
+              return quoteBoundaryResolution;
             }
-          } catch (err) {
-            warn(`${reason}: quote boundary lookup failed`, err);
+            if (quoteBoundaryResolution?.reason === "insert_live_quote_boundary_already_has_comma") {
+              return quoteBoundaryResolution;
+            }
           }
         }
         if (requiresAfterQuoteBoundary) {
@@ -5479,7 +5837,7 @@ async function resolveStrictInsertRangeForSuggestion(
           };
         }
         return {
-          range: beforeRange,
+          range: await resolveBeforeRangeForInsert("insert-before-gap-anchor"),
           insertLocation: Word.InsertLocation.after,
           reason: null,
         };
@@ -5500,6 +5858,7 @@ async function resolveStrictInsertRangeForSuggestion(
     }
 
     const shouldPreferQuoteBoundary =
+      isQuoteIntentInferenceEnabled() &&
       Boolean(closingQuoteRun) &&
       resolveGapIntent(beforeEnd, gapEnd, gapText) !== "before_closing_quote" &&
       (quotePolicy === "after_closing_quote" ||
@@ -5507,38 +5866,18 @@ async function resolveStrictInsertRangeForSuggestion(
           preferredLiveHint >= beforeEnd + closingQuoteRun.length));
 
     if (shouldPreferQuoteBoundary) {
-      if (shouldBlockQuoteBoundaryInsert(explicitGapPos ?? beforeEnd)) {
-        return {
-          range: null,
-          insertLocation: null,
-          reason: "insert_live_quote_boundary_already_has_comma",
-        };
+      const quoteBoundaryAnchor = beforeEnd + Math.max(0, closingQuoteRun.length - 1);
+      const quoteBoundaryResolution = await resolveQuoteBoundaryRangeByIntent(
+        "after_closing_quote",
+        quoteBoundaryAnchor,
+        "auto-closing-quote-boundary",
+        { blockPosOverride: explicitGapPos ?? quoteBoundaryAnchor }
+      );
+      if (quoteBoundaryResolution?.range) {
+        return quoteBoundaryResolution;
       }
-      try {
-        const quoteSearchBase = afterRange
-          ? beforeRange.expandToOrNullObject(afterRange)
-          : beforeRange.getRange(Word.RangeLocation.after);
-        quoteSearchBase.load("isNullObject");
-        await context.sync();
-        if (!quoteSearchBase?.isNullObject) {
-          const quoteMatches = quoteSearchBase.search(closingQuoteRun, {
-            matchCase: true,
-            matchWholeWord: false,
-            ignoreSpace: false,
-            ignorePunct: false,
-          });
-          quoteMatches.load("items");
-          await context.sync();
-          if (quoteMatches.items.length) {
-            return {
-              range: quoteMatches.items[quoteMatches.items.length - 1],
-              insertLocation: Word.InsertLocation.after,
-              reason: null,
-            };
-          }
-        }
-      } catch (err) {
-        warn(`${reason}: closing quote boundary lookup failed`, err);
+      if (quoteBoundaryResolution?.reason === "insert_live_quote_boundary_already_has_comma") {
+        return quoteBoundaryResolution;
       }
     }
     if (requiresAfterQuoteBoundary) {
@@ -5550,7 +5889,7 @@ async function resolveStrictInsertRangeForSuggestion(
     }
 
     return {
-      range: beforeRange,
+      range: await resolveBeforeRangeForInsert("insert-before-anchor-fallback"),
       insertLocation: Word.InsertLocation.after,
       reason: null,
     };
@@ -5700,6 +6039,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
   });
   const entry = anchorProvider.getAnchorsForParagraph(suggestion.paragraphIndex);
   const lowReliability = Boolean(suggestion?.meta?.lowAnchorReliability);
+  const gapCharRegex = /[\s\u200B-\u200D\uFEFF]/u;
   const insertCommaAtBoundary = async (text, rawPos, traceLabel, fallbackSnippet, options = {}) => {
     if (typeof text !== "string") return false;
     if (!Number.isFinite(rawPos) || rawPos < 0 || rawPos > text.length) {
@@ -5712,7 +6052,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     }
     let insertionPos = Math.max(0, Math.min(text.length, Math.floor(rawPos)));
     if (options.rewindWhitespaceRun !== false) {
-      while (insertionPos > 0 && /\s/.test(text[insertionPos - 1])) {
+      while (insertionPos > 0 && gapCharRegex.test(text[insertionPos - 1])) {
         insertionPos--;
       }
     }
@@ -5742,9 +6082,9 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       return false;
     }
 
-    if (insertionPos > 0 && insertionPos <= text.length && /\s/u.test(prevChar)) {
+    if (insertionPos > 0 && insertionPos <= text.length && gapCharRegex.test(prevChar)) {
       let gapStart = insertionPos - 1;
-      while (gapStart > 0 && /\s/u.test(text[gapStart - 1])) {
+      while (gapStart > 0 && gapCharRegex.test(text[gapStart - 1])) {
         gapStart--;
       }
       const gapText = text.slice(gapStart, insertionPos);
@@ -5920,9 +6260,9 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
     const hintIndex = mapIndexAcrossCanonical(originalText, liveText, anchorEnd);
     if (tokenText) {
       const tokenStart = findTokenStartByHint(liveText, tokenText, hintIndex, tokenOrdinal);
-      if (tokenStart > 0 && /\s/.test(liveText[tokenStart - 1])) {
+      if (tokenStart > 0 && gapCharRegex.test(liveText[tokenStart - 1])) {
         let wsStart = tokenStart - 1;
-        while (wsStart > 0 && /\s/.test(liveText[wsStart - 1])) {
+        while (wsStart > 0 && gapCharRegex.test(liveText[wsStart - 1])) {
           wsStart--;
         }
         return insertCommaAtBoundary(
@@ -5940,9 +6280,9 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       if (insertedViaChar) return true;
     }
     const nextChar = liveText[liveIndex] ?? "";
-    if (nextChar && /\s/.test(nextChar)) {
+    if (nextChar && gapCharRegex.test(nextChar)) {
       let wsEnd = liveIndex;
-      while (wsEnd < liveText.length && /\s/.test(liveText[wsEnd])) {
+      while (wsEnd < liveText.length && gapCharRegex.test(liveText[wsEnd])) {
         wsEnd++;
       }
       return insertCommaAtBoundary(
@@ -5977,7 +6317,7 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       const tokenStart = findTokenStartByHint(liveText, tokenText, hintIndex, tokenOrdinal);
       if (tokenStart > 0) {
         let wsStart = tokenStart;
-        while (wsStart > 0 && /\s/.test(liveText[wsStart - 1])) {
+        while (wsStart > 0 && gapCharRegex.test(liveText[wsStart - 1])) {
           wsStart--;
         }
         if (wsStart < tokenStart) {
@@ -6197,6 +6537,26 @@ function collectOnlineCommaCleanupFixes(text = "") {
   return accepted;
 }
 
+function collectQuoteBoundaryCommaCleanupFixes(text = "") {
+  if (typeof text !== "string" || !text.length) return [];
+  const fixes = [];
+  for (const match of text.matchAll(
+    /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A][\s\u200B-\u200D\uFEFF]+,/gu
+  )) {
+    const start = match.index + 1;
+    const end = match.index + match[0].length;
+    if (end > start) {
+      fixes.push({
+        start,
+        end,
+        replacement: ",",
+        priority: 5,
+      });
+    }
+  }
+  return fixes;
+}
+
 async function applyOnlineCommaCleanupFix(context, paragraph, liveText, fix, reason = "online-comma-cleanup") {
   if (!fix) return false;
   const region = await findReplaceableRegionRangeNearIndex(
@@ -6321,9 +6681,47 @@ async function ensureCommaSpaceAfterInParagraph(context, paragraph) {
   }
 }
 
+async function normalizeQuoteBoundaryCommaSpacingInParagraph(context, paragraph) {
+  paragraph.load("text");
+  await context.sync();
+  let text = paragraph.text || "";
+  if (!text.includes(",")) return;
+
+  for (let pass = 0; pass < 4; pass++) {
+    const fixes = collectQuoteBoundaryCommaCleanupFixes(text);
+    if (!fixes.length) return;
+    let applied = false;
+    for (const fix of fixes) {
+      applied = await applyOnlineCommaCleanupFix(
+        context,
+        paragraph,
+        text,
+        fix,
+        `normalize-quote-comma-pass-${pass + 1}`
+      );
+      if (applied) {
+        paragraph.load("text");
+        await context.sync();
+        text = paragraph.text || "";
+        if (!text.includes(",")) return;
+        break;
+      }
+    }
+    if (!applied) return;
+  }
+}
+
 async function cleanupCommaSpacingForParagraphs(context, paragraphs, indexes, { force = false } = {}) {
   if (anchorProviderSupportsCharHints && !force) {
-    log("Skipping comma spacing cleanup because char-hint anchors are active.");
+    for (const idx of indexes) {
+      const paragraph = paragraphs.items[idx];
+      if (!paragraph) continue;
+      try {
+        await normalizeQuoteBoundaryCommaSpacingInParagraph(context, paragraph);
+      } catch (err) {
+        warn("Failed to normalize quote boundary comma spacing", err);
+      }
+    }
     return;
   }
   if (!indexes?.size) return;
@@ -7792,6 +8190,8 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (!compact) return null;
     if (compact === "none") return "none";
     if (compact === "unknown") return "unknown";
+    if (compact === "before") return "before_closing_quote";
+    if (compact === "after") return "after_closing_quote";
     if (compact === "whitespaceonly") return "whitespace_only";
     if (compact === "insidequoteboundary") return "inside_quote_boundary";
     if (compact === "insidequotegap") return "inside_quote_gap";
@@ -7901,7 +8301,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
 
   const isQuoteOrSpaceBoundary = (value) =>
     typeof value === "string" &&
-    /^[\s"'`\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A\u2019\u2018\u201A]+$/u.test(value);
+    /^[\s\u200B-\u200D\uFEFF"'`\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A\u2019\u2018\u201A]+$/u.test(value);
   // In Word content, angled quotes can surface in either direction around boundaries.
   // Treat both \u00AB and \u00BB as boundary quotes.
   const isClosingQuoteOrCloser = (char) =>
@@ -7922,25 +8322,26 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
   };
   const isBoundaryQuoteChar = (char) =>
     isClosingQuoteOrCloser(char) || isOpeningQuoteOrOpener(char);
+  const snapshotGapCharRegex = /[\s\u200B-\u200D\uFEFF]/u;
   const hasCommaAcrossQuoteBoundary = (pos) => {
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return false;
     let left = pos - 1;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    while (left >= 0 && snapshotGapCharRegex.test(snapshotText[left])) left--;
     while (left >= 0 && isBoundaryQuoteChar(snapshotText[left])) left--;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    while (left >= 0 && snapshotGapCharRegex.test(snapshotText[left])) left--;
     if (left >= 0 && snapshotText[left] === ",") return true;
 
     let right = pos;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    while (right < snapshotText.length && snapshotGapCharRegex.test(snapshotText[right])) right++;
     while (right < snapshotText.length && isBoundaryQuoteChar(snapshotText[right])) right++;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    while (right < snapshotText.length && snapshotGapCharRegex.test(snapshotText[right])) right++;
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
     return false;
   };
   const rewindInsertPosBeforeWhitespace = (candidatePos) => {
     if (!Number.isFinite(candidatePos) || candidatePos <= 0) return candidatePos;
     let pos = Math.floor(candidatePos);
-    while (pos > 0 && /\s/.test(snapshotText[pos - 1])) {
+    while (pos > 0 && snapshotGapCharRegex.test(snapshotText[pos - 1])) {
       pos--;
     }
     return pos;
@@ -8001,7 +8402,9 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     let quotePolicy = "none";
     const explicitQuoteIntent =
       normalizeQuoteBoundaryIntent(options?.explicitQuoteIntent) ?? suggestionExplicitQuoteIntent ?? null;
-    if (gapText && isQuoteOrSpaceBoundary(gapText)) {
+    if (explicitQuoteIntent) {
+      quotePolicy = explicitQuoteIntent;
+    } else if (isQuoteIntentInferenceEnabled() && gapText && isQuoteOrSpaceBoundary(gapText)) {
       const trimmedGap = gapText.replace(/\s+/gu, "");
       if (trimmedGap) {
         const leadingClosers =
@@ -8018,9 +8421,6 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       } else {
         quotePolicy = "whitespace_only";
       }
-    }
-    if (explicitQuoteIntent) {
-      quotePolicy = explicitQuoteIntent;
     }
     return {
       beforeToken: snapshotBoundaryAnchor(boundaryBeforeAnchor),
@@ -8050,14 +8450,14 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     while (wordEnd < snapshotText.length && isWordCharForInsertBoundary(snapshotText[wordEnd])) wordEnd++;
 
     const candidateSet = new Set([wordStart, wordEnd]);
-    if (wordStart > 0 && /\s/.test(snapshotText[wordStart - 1])) {
+    if (wordStart > 0 && snapshotGapCharRegex.test(snapshotText[wordStart - 1])) {
       let wsStart = wordStart;
-      while (wsStart > 0 && /\s/.test(snapshotText[wsStart - 1])) wsStart--;
+      while (wsStart > 0 && snapshotGapCharRegex.test(snapshotText[wsStart - 1])) wsStart--;
       candidateSet.add(wsStart);
     }
-    if (wordEnd < snapshotText.length && /\s/.test(snapshotText[wordEnd])) {
+    if (wordEnd < snapshotText.length && snapshotGapCharRegex.test(snapshotText[wordEnd])) {
       let wsEnd = wordEnd;
-      while (wsEnd < snapshotText.length && /\s/.test(snapshotText[wsEnd])) wsEnd++;
+      while (wsEnd < snapshotText.length && snapshotGapCharRegex.test(snapshotText[wsEnd])) wsEnd++;
       candidateSet.add(wsEnd);
     }
     if (Number.isFinite(preferredPos) && preferredPos >= 0 && preferredPos <= snapshotText.length) {
@@ -8256,7 +8656,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     const after = findStartForAnchor(afterAnchor, false, "insert_after_anchor_lookup_failed");
     if (after.start > 0) {
       let wsStart = after.start;
-      while (wsStart > 0 && /\s/.test(snapshotText[wsStart - 1])) wsStart--;
+      while (wsStart > 0 && snapshotGapCharRegex.test(snapshotText[wsStart - 1])) wsStart--;
       if (wsStart < after.start) {
         return createInsertOpResult(wsStart, snapshotText.slice(wsStart, after.start), {
           allowQuoteBoundaryHeuristic: !authoritativeInsert,
@@ -8291,7 +8691,7 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     if (before.start >= 0) {
       const beforeEnd = before.start + before.token.length;
       let wsEnd = beforeEnd;
-      while (wsEnd < snapshotText.length && /\s/.test(snapshotText[wsEnd])) wsEnd++;
+      while (wsEnd < snapshotText.length && snapshotGapCharRegex.test(snapshotText[wsEnd])) wsEnd++;
       if (wsEnd > beforeEnd) {
         return createInsertOpResult(beforeEnd, snapshotText.slice(beforeEnd, wsEnd), {
           allowQuoteBoundaryHeuristic: !authoritativeInsert,
@@ -8380,7 +8780,7 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
 
   const isQuoteOrSpaceBoundary = (value) =>
     typeof value === "string" &&
-    /^[\s"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]+$/u.test(value);
+    /^[\s\u200B-\u200D\uFEFF"'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]+$/u.test(value);
   const isClosingQuoteOrCloser = (char) =>
     /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u.test(char || "");
   const isOpeningQuoteOrOpener = (char) =>
@@ -8399,25 +8799,27 @@ function resolveInsertOperationFromSnapshotDesktopLegacy(snapshotText, sourceTex
   };
 
   const hasCommaAcrossQuoteBoundary = (pos) => {
+    const snapshotGapCharRegex = /[\s\u200B-\u200D\uFEFF]/u;
     if (!Number.isFinite(pos) || pos < 0 || pos > snapshotText.length) return false;
     let left = pos - 1;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    while (left >= 0 && snapshotGapCharRegex.test(snapshotText[left])) left--;
     while (left >= 0 && isClosingQuoteOrCloser(snapshotText[left])) left--;
-    while (left >= 0 && /\s/.test(snapshotText[left])) left--;
+    while (left >= 0 && snapshotGapCharRegex.test(snapshotText[left])) left--;
     if (left >= 0 && snapshotText[left] === ",") return true;
 
     let right = pos;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    while (right < snapshotText.length && snapshotGapCharRegex.test(snapshotText[right])) right++;
     while (right < snapshotText.length && isOpeningQuoteOrOpener(snapshotText[right])) right++;
-    while (right < snapshotText.length && /\s/.test(snapshotText[right])) right++;
+    while (right < snapshotText.length && snapshotGapCharRegex.test(snapshotText[right])) right++;
     if (right < snapshotText.length && snapshotText[right] === ",") return true;
     return false;
   };
 
   const rewindInsertPosBeforeWhitespace = (candidatePos) => {
+    const snapshotGapCharRegex = /[\s\u200B-\u200D\uFEFF]/u;
     if (!Number.isFinite(candidatePos) || candidatePos <= 0) return candidatePos;
     let pos = Math.floor(candidatePos);
-    while (pos > 0 && /\s/.test(snapshotText[pos - 1])) {
+    while (pos > 0 && snapshotGapCharRegex.test(snapshotText[pos - 1])) {
       pos--;
     }
     return pos;
@@ -10433,6 +10835,7 @@ export async function checkDocumentText() {
 
 async function checkDocumentTextDesktop(checkToken) {
   log("START checkDocumentText()");
+  const checkStartedAt = tnow();
   let totalInserted = 0;
   let totalDeleted = 0;
   let paragraphsProcessed = 0;
@@ -10446,6 +10849,10 @@ async function checkDocumentTextDesktop(checkToken) {
   let applyRangeMisses = 0;
   let applyOpFailures = 0;
   let deterministicPlannerSkips = 0;
+  let paragraphTimingCount = 0;
+  let paragraphTimingTotalMs = 0;
+  let paragraphTimingMaxMs = 0;
+  let paragraphTimingMinMs = Number.POSITIVE_INFINITY;
   const paragraphCacheDisabled = isParagraphCacheDisabled();
   const desktopAnalyzeConcurrency = resolveDesktopAnalyzeConcurrency();
   const paragraphTimeoutMs = resolveOnlineParagraphTimeoutMs();
@@ -10643,6 +11050,12 @@ async function checkDocumentTextDesktop(checkToken) {
 
     for (const analyzed of analysisResults) {
       if (!analyzed) continue;
+      if (Number.isFinite(analyzed.durationMs)) {
+        paragraphTimingCount += 1;
+        paragraphTimingTotalMs += analyzed.durationMs;
+        paragraphTimingMaxMs = Math.max(paragraphTimingMaxMs, analyzed.durationMs);
+        paragraphTimingMinMs = Math.min(paragraphTimingMinMs, analyzed.durationMs);
+      }
       if (analyzed.error) {
         if (
           isAbortLikeError(analyzed.error) ||
@@ -10907,7 +11320,17 @@ async function checkDocumentTextDesktop(checkToken) {
       "| applyRangeMisses:",
       applyRangeMisses,
       "| applyOpFailures:",
-      applyOpFailures
+      applyOpFailures,
+      "| totalMs:",
+      roundMs(tnow() - checkStartedAt),
+      "| perParagraphMs:",
+      roundMs(paragraphsProcessed > 0 ? (tnow() - checkStartedAt) / paragraphsProcessed : 0),
+      "| avgParagraphMs:",
+      roundMs(paragraphTimingCount > 0 ? paragraphTimingTotalMs / paragraphTimingCount : 0),
+      "| minParagraphMs:",
+      roundMs(paragraphTimingCount > 0 ? paragraphTimingMinMs : 0),
+      "| maxParagraphMs:",
+      roundMs(paragraphTimingCount > 0 ? paragraphTimingMaxMs : 0)
     );
     if (
       paragraphsProcessed > 0 &&
@@ -10935,6 +11358,11 @@ async function checkDocumentTextDesktop(checkToken) {
       cacheHits,
       cacheMisses,
       unchangedHardSkips,
+      totalMs: roundMs(tnow() - checkStartedAt),
+      perParagraphMs: roundMs(paragraphsProcessed > 0 ? (tnow() - checkStartedAt) / paragraphsProcessed : 0),
+      avgParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingTotalMs / paragraphTimingCount : 0),
+      minParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingMinMs : 0),
+      maxParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingMaxMs : 0),
     };
   } catch (e) {
     if (e instanceof CheckAbortError && e.reason === CHECK_ABORT_REASON_TIMEOUT) {
@@ -10959,6 +11387,11 @@ async function checkDocumentTextDesktop(checkToken) {
       applyRangeMisses,
       applyOpFailures,
       unchangedHardSkips,
+      totalMs: roundMs(tnow() - checkStartedAt),
+      perParagraphMs: roundMs(paragraphsProcessed > 0 ? (tnow() - checkStartedAt) / paragraphsProcessed : 0),
+      avgParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingTotalMs / paragraphTimingCount : 0),
+      minParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingMinMs : 0),
+      maxParagraphMs: roundMs(paragraphTimingCount > 0 ? paragraphTimingMaxMs : 0),
       error: String(e?.message || e || "unknown-error"),
     };
   } finally {

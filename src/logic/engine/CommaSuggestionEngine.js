@@ -134,6 +134,92 @@ function parseBooleanFlag(value) {
   return undefined;
 }
 
+function isQuoteIntentInferenceEnabled() {
+  if (typeof window !== "undefined") {
+    const windowOverride = parseBooleanFlag(window.__VEJICE_QUOTE_INTENT_INFERENCE__);
+    if (typeof windowOverride === "boolean") return windowOverride;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_INTENT_INFERENCE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  // Default OFF: prefer explicit API intent over local heuristics.
+  return false;
+}
+
+function isQuoteTraceEnabled() {
+  if (typeof window !== "undefined") {
+    const windowOverride = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE__);
+    if (typeof windowOverride === "boolean") return windowOverride;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return false;
+}
+
+function isQuoteTraceVerboseEnabled() {
+  if (typeof window !== "undefined") {
+    const windowOverride = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE_VERBOSE__);
+    if (typeof windowOverride === "boolean") return windowOverride;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE_VERBOSE);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return false;
+}
+
+function quoteTraceLog(stage, payload = {}) {
+  if (!isQuoteTraceEnabled()) return;
+  const traceId = payload?.traceId || payload?.suggestionTraceId || "na";
+  const intent = payload?.explicitQuoteIntent || payload?.intent || "none";
+  const target = payload?.highlightTarget || "na";
+  try {
+    console.log(
+      `[Vejice QUOTE TRACE][engine] ${stage} | traceId=${traceId} | intent=${intent} | target=${target}`
+    );
+    if (isQuoteTraceVerboseEnabled()) {
+      console.log("[Vejice QUOTE TRACE][engine][detail]", payload);
+    }
+  } catch (_err) {
+    // Ignore console failures in constrained runtimes.
+  }
+}
+
+function buildOpTraceId(op, { paragraphIndex, chunkIndex, opIndex } = {}) {
+  const provided =
+    typeof op?.traceId === "string" && op.traceId.trim()
+      ? op.traceId.trim()
+      : typeof op?.id === "string" && op.id.trim()
+        ? op.id.trim()
+        : null;
+  if (provided) return provided;
+  const kind = typeof op?.kind === "string" ? op.kind : "op";
+  const originalPos = Number.isFinite(op?.originalPos) ? op.originalPos : Number.isFinite(op?.pos) ? op.pos : "na";
+  const correctedPos =
+    Number.isFinite(op?.correctedPos) ? op.correctedPos : Number.isFinite(op?.pos) ? op.pos : "na";
+  const paragraphLabel = Number.isFinite(paragraphIndex) ? paragraphIndex : "na";
+  const chunkLabel =
+    typeof chunkIndex === "string" || typeof chunkIndex === "number" ? String(chunkIndex) : "na";
+  const opLabel = Number.isFinite(opIndex) ? opIndex : "na";
+  return `eng:p${paragraphLabel}:c${chunkLabel}:i${opLabel}:${kind}:${originalPos}:${correctedPos}`;
+}
+
+function classifySuggestionHighlightTarget(suggestion) {
+  const anchor = suggestion?.meta?.anchor || {};
+  const text =
+    typeof anchor?.highlightText === "string"
+      ? anchor.highlightText
+      : typeof suggestion?.meta?.highlightText === "string"
+        ? suggestion.meta.highlightText
+        : "";
+  if (/^["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]$/u.test(text)) return "quote";
+  if (text) return "word";
+  return "unknown";
+}
+
 function isDeterministicMappingV2Enabled() {
   if (typeof window !== "undefined") {
     const windowOverride = parseBooleanFlag(window.__VEJICE_DETERMINISTIC_MAPPING_V2);
@@ -785,16 +871,22 @@ export class CommaSuggestionEngine {
       let ops = apiOpsPresent ? entry.apiCommaOps.map((op) => ({ ...op })) : [];
       let fallbackOps = [];
       let correctionOps = [];
-      if (!apiOpsPresent) {
-        const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
-        const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
+      const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
+      const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
+      if (correctionsPresent) {
+        correctionOps = collectCommaOpsFromCorrections(
+          detailRef,
+          anchorsEntry,
+          paragraphIndex,
+          correctionTracking
+        );
+      }
+      if (apiOpsPresent) {
+        if (correctionOps.length) {
+          ops = enrichOpsWithCorrectionQuoteIntent(ops, correctionOps);
+        }
+      } else {
         if (correctionsPresent) {
-          correctionOps = collectCommaOpsFromCorrections(
-            detailRef,
-            anchorsEntry,
-            paragraphIndex,
-            correctionTracking
-          );
           ops = correctionOps;
         }
         fallbackOps = entry.diffOps || [];
@@ -839,7 +931,8 @@ export class CommaSuggestionEngine {
             droppedOps: [],
           }
         : null;
-      for (const op of allOps) {
+      for (let opIndex = 0; opIndex < allOps.length; opIndex++) {
+        const op = allOps[opIndex];
         const offset = entry.chunk.start;
         const baseOp = op;
         const adjustedOp = {
@@ -849,7 +942,23 @@ export class CommaSuggestionEngine {
             (typeof baseOp.originalPos === "number" ? baseOp.originalPos : baseOp.pos) + offset,
           correctedPos:
             (typeof baseOp.correctedPos === "number" ? baseOp.correctedPos : baseOp.pos) + offset,
+          traceId: buildOpTraceId(baseOp, {
+            paragraphIndex,
+            chunkIndex: entry?.chunk?.index,
+            opIndex,
+          }),
         };
+        if (adjustedOp.explicitQuoteIntent) {
+          quoteTraceLog("op_adjusted", {
+            traceId: adjustedOp.traceId,
+            explicitQuoteIntent: adjustedOp.explicitQuoteIntent,
+            explicitQuoteIntentSource: adjustedOp.explicitQuoteIntentSource || null,
+            kind: adjustedOp.kind || null,
+            originalPos: adjustedOp.originalPos,
+            correctedPos: adjustedOp.correctedPos,
+            highlightTarget: "pending",
+          });
+        }
         if (!isOpConsistentWithTexts(adjustedOp, originalText, correctedParagraph)) {
           if (opFlow) opFlow.droppedOps.push({ reason: "inconsistent_with_texts", op: adjustedOp });
           continue;
@@ -867,6 +976,20 @@ export class CommaSuggestionEngine {
           lowAnchorReliability: Boolean(entry.metaRef?.lowAnchorReliability),
         });
         if (suggestion) {
+          if (adjustedOp.explicitQuoteIntent) {
+            quoteTraceLog("suggestion_built", {
+              traceId: adjustedOp.traceId,
+              suggestionId: suggestion.id,
+              explicitQuoteIntent: adjustedOp.explicitQuoteIntent,
+              explicitQuoteIntentSource: adjustedOp.explicitQuoteIntentSource || null,
+              highlightTarget: classifySuggestionHighlightTarget(suggestion),
+              highlightText: suggestion?.meta?.anchor?.highlightText || null,
+              highlightStart: suggestion?.meta?.anchor?.highlightCharStart,
+              highlightEnd: suggestion?.meta?.anchor?.highlightCharEnd,
+              boundaryPos: suggestion?.meta?.anchor?.boundaryMeta?.targetBoundaryPos,
+              kind: adjustedOp.kind || null,
+            });
+          }
           const dedupKey = buildSuggestionDedupKey(suggestion);
           if (dedupKey && suggestionDedupKeys.has(dedupKey)) {
             if (opFlow) {
@@ -2422,16 +2545,24 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
     if (!raw || typeof raw !== "object") continue;
     const kind = raw.kind === "delete" || raw.kind === "insert" ? raw.kind : null;
     if (!kind) continue;
+    const explicitQuoteSideHint =
+      raw.quote_side ??
+      raw.quoteSide ??
+      raw.boundary_quote_side ??
+      raw.boundaryQuoteSide ??
+      raw.quote_type ??
+      raw.quoteType ??
+      raw.boundarySide ??
+      raw.boundary_side ??
+      raw.side;
     const explicitQuoteIntent = normalizeExplicitQuoteIntent(
       raw.explicitQuoteIntent ??
         raw.explicit_quote_intent ??
         raw.quoteIntent ??
         raw.quote_intent ??
         raw.quotePolicy ??
-        raw.quote_policy ??
-        raw.boundarySide ??
-        raw.boundary_side ??
-        raw.side
+        raw.quote_policy,
+      explicitQuoteSideHint
     );
     let originalPos = toBoundedIndex(
       Number.isFinite(raw.originalPos) ? raw.originalPos : kind === "delete" ? raw.pos : undefined,
@@ -2642,14 +2773,23 @@ function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegmen
   };
 }
 
-function normalizeExplicitQuoteIntent(value) {
+function normalizeExplicitQuoteIntent(value, sideHint = null) {
   if (typeof value !== "string") return null;
   const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
   if (!compact) return null;
+  const normalizedSide = normalizeQuoteBoundarySide(sideHint);
   if (compact === "none") return "none";
   if (compact === "unknown") return "unknown";
-  if (compact === "before") return "before_closing_quote";
-  if (compact === "after") return "after_closing_quote";
+  if (compact === "before") {
+    return normalizedSide === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (compact === "after") {
+    return normalizedSide === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
+  if (compact === "beforeopening" || compact === "openingbefore") return "before_opening_quote";
+  if (compact === "afteropening" || compact === "openingafter") return "after_opening_quote";
+  if (compact === "beforeclosing" || compact === "closingbefore") return "before_closing_quote";
+  if (compact === "afterclosing" || compact === "closingafter") return "after_closing_quote";
   if (compact === "beforeclosingquote" || compact === "beforequote") return "before_closing_quote";
   if (compact === "afterclosingquote" || compact === "afterquote") return "after_closing_quote";
   if (compact === "beforeopeningquote") return "before_opening_quote";
@@ -2693,6 +2833,26 @@ function normalizeQuoteBoundarySide(value) {
 }
 
 function extractExplicitQuoteIntentFromCorrection(entry, group) {
+  const directSideHint = firstDefinedCorrectionValue([
+    entry?.quote_side,
+    entry?.quoteSide,
+    entry?.boundary_quote_side,
+    entry?.boundaryQuoteSide,
+    entry?.quote_type,
+    entry?.quoteType,
+    group?.quote_side,
+    group?.quoteSide,
+    group?.boundary_quote_side,
+    group?.boundaryQuoteSide,
+    group?.quote_type,
+    group?.quoteType,
+    entry?.boundary_side,
+    entry?.boundarySide,
+    entry?.side,
+    group?.boundary_side,
+    group?.boundarySide,
+    group?.side,
+  ]);
   const directIntent = normalizeExplicitQuoteIntent(
     firstDefinedCorrectionValue([
       entry?.explicit_quote_intent,
@@ -2701,19 +2861,14 @@ function extractExplicitQuoteIntentFromCorrection(entry, group) {
       entry?.quoteIntent,
       entry?.quote_policy,
       entry?.quotePolicy,
-      entry?.boundary_side,
-      entry?.boundarySide,
-      entry?.side,
       group?.explicit_quote_intent,
       group?.explicitQuoteIntent,
       group?.quote_intent,
       group?.quoteIntent,
       group?.quote_policy,
       group?.quotePolicy,
-      group?.boundary_side,
-      group?.boundarySide,
-      group?.side,
-    ])
+    ]),
+    directSideHint
   );
   if (directIntent) return directIntent;
 
@@ -2879,6 +3034,10 @@ function inferQuoteIntentFromCorrectionSegments(originalSegment = "", correctedS
   const commaIndex = findInsertedCommaIndexFromCorrectionSegments(originalSegment, correctedSegment);
   if (commaIndex < 0) return null;
   return inferQuoteIntentFromBoundary(correctedSegment, commaIndex);
+}
+
+function inferQuoteIntentFromParagraphBoundary(text = "", boundaryPos = -1) {
+  return inferQuoteIntentFromBoundary(text, boundaryPos);
 }
 
 function resolveExplicitQuoteIntentForInsert({
@@ -3085,7 +3244,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         "original_text",
         "originalText",
       ]);
-      const correctedSegment = pickCorrectionEntryText(entry, [
+      const correctedEntryText = pickCorrectionEntryText(entry, [
         "text",
         "target_text",
         "targetText",
@@ -3094,7 +3253,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         "suggested_text",
         "suggestedText",
       ]);
-      const analysis = analyzeCommaChangeFromCorrections(entrySource, correctedSegment);
+      const analysis = analyzeCommaChangeFromCorrections(entrySource, correctedEntryText);
       if (!analysis) continue;
       const tokenId = resolveCorrectionSourceTokenId(entry, group, anchorsEntry);
       if (!tokenId) continue;
@@ -3175,7 +3334,6 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           fromCorrections: true,
         });
       } else if (analysis.addComma) {
-        const correctedSegment = typeof entry?.text === "string" ? entry.text : "";
         const analysisBase =
           typeof analysis.baseText === "string" && normalizeTokenForComparison(analysis.baseText)
             ? analysis.baseText
@@ -3190,11 +3348,11 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
               Number.isFinite(anchor?.charStart) ? anchor.charStart : -1
             )
           : null;
-        const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedSegment);
+        const relativeFromCorrected = findTrailingCommaBoundaryIndex(correctedEntryText);
         const orderedAnchors = anchorsEntry?.sourceAnchors?.ordered;
         const pairBoundary = resolveInsertBoundaryFromAnchorPair(anchor, orderedAnchors);
         let rawRelative = relativeFromCorrected;
-        let relativeSource = correctedSegment;
+        let relativeSource = correctedEntryText;
         let relative = -1;
         let absolutePos = -1;
         if (sourceSpan && relativeFromCorrected >= 0) {
@@ -3237,14 +3395,30 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         if (seen.has(key)) continue;
         seen.add(key);
         const explicitQuoteIntentFromPayload = extractExplicitQuoteIntentFromCorrection(entry, group);
+        const explicitQuoteIntentFromSegments = inferQuoteIntentFromCorrectionSegments(
+          entrySource || effectiveBase,
+          correctedEntryText
+        );
+        const explicitQuoteIntentFromParagraph = inferQuoteIntentFromParagraphBoundary(
+          paragraphOriginalText,
+          absolutePos
+        );
+        const explicitQuoteIntentSource = explicitQuoteIntentFromPayload
+          ? "corrections_payload"
+          : explicitQuoteIntentFromSegments
+            ? "corrections_segment"
+            : explicitQuoteIntentFromParagraph
+              ? "corrections_paragraph_boundary"
+            : isQuoteIntentInferenceEnabled()
+              ? "heuristic_boundary"
+              : null;
         const explicitQuoteIntent =
           explicitQuoteIntentFromPayload ??
-          resolveExplicitQuoteIntentForInsert({
-          originalSegment: entrySource || effectiveBase,
-          correctedSegment,
-          boundaryText: paragraphOriginalText,
-          boundaryPos: absolutePos,
-        });
+          explicitQuoteIntentFromSegments ??
+          explicitQuoteIntentFromParagraph ??
+          (isQuoteIntentInferenceEnabled()
+            ? inferQuoteIntentFromBoundary(paragraphOriginalText, absolutePos)
+            : null);
         const insertOp = {
           kind: "insert",
           pos: absolutePos,
@@ -3255,6 +3429,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         };
         if (explicitQuoteIntent) {
           insertOp.explicitQuoteIntent = explicitQuoteIntent;
+          insertOp.explicitQuoteIntentSource = explicitQuoteIntentSource || "unknown";
         }
         ops.push(insertOp);
       }
@@ -3320,14 +3495,23 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     if (seen.has(key)) continue;
     seen.add(key);
     const explicitQuoteIntentFromPayload = extractExplicitQuoteIntentFromCorrection(null, group);
+    const explicitQuoteIntentFromParagraph = inferQuoteIntentFromParagraphBoundary(
+      paragraphOriginalText,
+      absolutePos
+    );
+    const explicitQuoteIntentSource = explicitQuoteIntentFromPayload
+      ? "corrections_payload"
+      : explicitQuoteIntentFromParagraph
+        ? "corrections_paragraph_boundary"
+      : isQuoteIntentInferenceEnabled()
+        ? "heuristic_boundary"
+        : null;
     const explicitQuoteIntent =
       explicitQuoteIntentFromPayload ??
-      resolveExplicitQuoteIntentForInsert({
-      originalSegment: baseText,
-      correctedSegment: "",
-      boundaryText: paragraphOriginalText,
-      boundaryPos: absolutePos,
-    });
+      explicitQuoteIntentFromParagraph ??
+      (isQuoteIntentInferenceEnabled()
+        ? inferQuoteIntentFromBoundary(paragraphOriginalText, absolutePos)
+        : null);
     const insertOp = {
       kind: "insert",
       pos: absolutePos,
@@ -3338,6 +3522,7 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     };
     if (explicitQuoteIntent) {
       insertOp.explicitQuoteIntent = explicitQuoteIntent;
+      insertOp.explicitQuoteIntentSource = explicitQuoteIntentSource || "unknown";
     }
     ops.push(insertOp);
   }
@@ -3467,6 +3652,75 @@ function mergePreferredCommaOps(primaryOps, secondaryOps) {
   (Array.isArray(primaryOps) ? primaryOps : []).forEach(pushUnique);
   (Array.isArray(secondaryOps) ? secondaryOps : []).forEach(pushUnique);
   return merged;
+}
+
+function hasUsableExplicitQuoteIntent(intent) {
+  return (
+    typeof intent === "string" &&
+    intent.length > 0 &&
+    intent !== "none" &&
+    intent !== "unknown"
+  );
+}
+
+function enrichOpsWithCorrectionQuoteIntent(primaryOps, correctionOps) {
+  const primary = Array.isArray(primaryOps) ? primaryOps : [];
+  const corrections = Array.isArray(correctionOps) ? correctionOps : [];
+  if (!primary.length || !corrections.length) return primary;
+
+  const byIdentity = new Map();
+  const byKind = { insert: [], delete: [] };
+  for (const corr of corrections) {
+    if (!corr || !hasUsableExplicitQuoteIntent(corr.explicitQuoteIntent)) continue;
+    const key = getCommaOpIdentity(corr);
+    if (!byIdentity.has(key)) byIdentity.set(key, corr);
+    if (corr.kind === "insert" || corr.kind === "delete") {
+      byKind[corr.kind].push(corr);
+    }
+  }
+  if (!byIdentity.size && !byKind.insert.length && !byKind.delete.length) return primary;
+
+  const proximityWindow = 3;
+  return primary.map((op) => {
+    if (!op || hasUsableExplicitQuoteIntent(op.explicitQuoteIntent)) return op;
+
+    const identityHit = byIdentity.get(getCommaOpIdentity(op));
+    if (identityHit) {
+      return {
+        ...op,
+        explicitQuoteIntent: identityHit.explicitQuoteIntent,
+        explicitQuoteIntentSource:
+          identityHit.explicitQuoteIntentSource || "corrections_enriched_identity",
+      };
+    }
+
+    const bucket = op.kind === "delete" ? byKind.delete : byKind.insert;
+    if (!bucket.length) return op;
+    const opOriginalPos = typeof op.originalPos === "number" ? op.originalPos : op.pos;
+    const opCorrectedPos = typeof op.correctedPos === "number" ? op.correctedPos : op.pos;
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const candidate of bucket) {
+      const candidateOriginal =
+        typeof candidate.originalPos === "number" ? candidate.originalPos : candidate.pos;
+      const candidateCorrected =
+        typeof candidate.correctedPos === "number" ? candidate.correctedPos : candidate.pos;
+      const originalDiff = Math.abs(candidateOriginal - opOriginalPos);
+      const correctedDiff = Math.abs(candidateCorrected - opCorrectedPos);
+      if (originalDiff > proximityWindow || correctedDiff > proximityWindow) continue;
+      const score = originalDiff + correctedDiff;
+      if (score < bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    if (!best) return op;
+    return {
+      ...op,
+      explicitQuoteIntent: best.explicitQuoteIntent,
+      explicitQuoteIntentSource: best.explicitQuoteIntentSource || "corrections_enriched_near",
+    };
+  });
 }
 
 function shouldSuppressDueToRepeatedToken(anchorsEntry, op) {
@@ -3660,7 +3914,11 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     op?.explicitQuoteIntent ?? op?.quoteIntent ?? op?.quotePolicy
   );
   const explicitQuoteIntent =
-    opExplicitQuoteIntent && opExplicitQuoteIntent !== "unknown" ? opExplicitQuoteIntent : classifyIntent();
+    opExplicitQuoteIntent && opExplicitQuoteIntent !== "unknown"
+      ? opExplicitQuoteIntent
+      : isQuoteIntentInferenceEnabled()
+        ? classifyIntent()
+        : "none";
   const resolveDashBoundaryInfo = () => {
     if (!correctedText || !Number.isFinite(resolvedInsertBoundaryIndex) || resolvedInsertBoundaryIndex < 0) {
       return { isDashBoundary: false, dashChar: null };
@@ -3783,7 +4041,9 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   let highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   let highlightCharEnd = highlightAnchor?.charEnd;
   const shouldHighlightQuoteOnly =
-    explicitQuoteIntent === "after_closing_quote" || explicitQuoteIntent === "after_opening_quote";
+    explicitQuoteIntent === "before_closing_quote" ||
+    explicitQuoteIntent === "after_closing_quote" ||
+    explicitQuoteIntent === "after_opening_quote";
   if (
     shouldHighlightQuoteOnly &&
     Number.isFinite(resolvedInsertBoundaryIndex) &&
@@ -3792,14 +4052,18 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     const quoteSearchText = typeof originalText === "string" && originalText.length ? originalText : correctedText;
     const boundaryHint = Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : resolvedInsertBoundaryIndex;
     let quotePos = -1;
+    let leftCandidate = -1;
+    let rightCandidate = -1;
     let left = Math.min(quoteSearchText.length - 1, Math.floor(boundaryHint) - 1);
     while (left >= 0 && invisibleCharRegex.test(quoteSearchText[left] || "")) left--;
+    leftCandidate = left;
     if (left >= 0 && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[left] || "")) {
       quotePos = left;
     }
     if (quotePos < 0) {
       let right = Math.max(0, Math.floor(boundaryHint));
       while (right < quoteSearchText.length && invisibleCharRegex.test(quoteSearchText[right] || "")) right++;
+      rightCandidate = right;
       if (right < quoteSearchText.length && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[right] || "")) {
         quotePos = right;
       }
@@ -3808,6 +4072,24 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       highlightCharStart = quotePos;
       highlightCharEnd = quotePos + 1;
     }
+    quoteTraceLog("highlight_quote_boundary_resolve", {
+      traceId: op?.traceId || null,
+      explicitQuoteIntent,
+      boundaryHint,
+      leftCandidate,
+      rightCandidate,
+      selectedQuotePos: quotePos,
+      selectedQuoteChar:
+        quotePos >= 0 && quotePos < quoteSearchText.length ? quoteSearchText[quotePos] || "" : null,
+      highlightTarget: quotePos >= 0 ? "quote" : "fallback",
+    });
+  } else if (explicitQuoteIntent && explicitQuoteIntent !== "none" && explicitQuoteIntent !== "unknown") {
+    quoteTraceLog("highlight_non_quote_intent_path", {
+      traceId: op?.traceId || null,
+      explicitQuoteIntent,
+      boundaryHint: Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : resolvedInsertBoundaryIndex,
+      highlightTarget: "word",
+    });
   }
   if (
     !(typeof highlightCharEnd === "number" && highlightCharEnd > highlightCharStart) &&
