@@ -867,9 +867,18 @@ export class CommaSuggestionEngine {
             corrections: entry.metaRef.remappedCorrections ?? entry.metaRef.detail.corrections,
           }
         : null;
-      const apiOpsPresent = Array.isArray(entry.apiCommaOps) && entry.apiCommaOps.length > 0;
-      let ops = apiOpsPresent ? entry.apiCommaOps.map((op) => ({ ...op })) : [];
-      let fallbackOps = [];
+      const rawApiOps = Array.isArray(entry.apiCommaOps) ? entry.apiCommaOps : [];
+      const authoritativeApiOps = rawApiOps.filter((op) => !op?.syntheticFallback);
+      const syntheticApiFallbackOps = rawApiOps
+        .filter((op) => op?.syntheticFallback)
+        .map((op) => ({
+          ...op,
+          fromApiCommaOps: false,
+          fromSyntheticApiOps: true,
+        }));
+      const apiOpsPresent = authoritativeApiOps.length > 0;
+      let ops = apiOpsPresent ? authoritativeApiOps.map((op) => ({ ...op })) : [];
+      let fallbackOps = syntheticApiFallbackOps;
       let correctionOps = [];
       const correctionTracking = detailRef?.corrections ? createCorrectionTracking() : null;
       const correctionsPresent = correctionsHaveEntries(detailRef?.corrections);
@@ -889,7 +898,10 @@ export class CommaSuggestionEngine {
         if (correctionsPresent) {
           ops = correctionOps;
         }
-        fallbackOps = entry.diffOps || [];
+        const diffFallbackOps = Array.isArray(entry.diffOps) ? entry.diffOps : [];
+        if (diffFallbackOps.length) {
+          fallbackOps = fallbackOps.concat(diffFallbackOps);
+        }
         if (fallbackOps.length) {
           if (!correctionsPresent || ops.length) {
             fallbackOps = filterDiffOpsAgainstCorrections(fallbackOps, correctionTracking);
@@ -923,6 +935,7 @@ export class CommaSuggestionEngine {
         ? {
             chunkIndex: entry.chunk.index,
             fromApiCommaOps: apiOpsPresent ? ops.map((op) => ({ ...op })) : [],
+            fromSyntheticApiCommaOps: syntheticApiFallbackOps.map((op) => ({ ...op })),
             fromCorrections: correctionOps.map((op) => ({ ...op })),
             fallbackOps: fallbackOps.map((op) => ({ ...op })),
             usingApiCommaOps: apiOpsPresent,

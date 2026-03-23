@@ -821,6 +821,546 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
   return commaOps;
 }
 
+function tokenTextFromApiToken(token) {
+  if (typeof token === "string") return token;
+  if (!token || typeof token !== "object") return "";
+  return (
+    token.token ??
+    token.text ??
+    token.form ??
+    token.value ??
+    token.surface ??
+    token.word ??
+    ""
+  );
+}
+
+function tokenIdFromApiToken(token, fallbackIndex = 0, prefix = "tok") {
+  if (token && typeof token === "object") {
+    const rawId =
+      token.token_id ??
+      token.tokenId ??
+      token.id ??
+      token.ID ??
+      token.name ??
+      token.key;
+    if (typeof rawId === "string" && rawId.trim()) return rawId.trim();
+  }
+  return `${prefix}${fallbackIndex + 1}`;
+}
+
+function parseTokenOffset(value) {
+  return numberFromUnknown(value);
+}
+
+function buildTokenPositionIndex(tokens = [], fallbackText = "") {
+  const list = Array.isArray(tokens) ? tokens : [];
+  const byId = Object.create(null);
+  const ordered = [];
+  let cursor = 0;
+  const safeFallback = typeof fallbackText === "string" ? fallbackText : "";
+
+  for (let i = 0; i < list.length; i++) {
+    const token = list[i];
+    const id = tokenIdFromApiToken(token, i);
+    const text = tokenTextFromApiToken(token);
+    const explicitStart = parseTokenOffset(
+      token?.start_char ?? token?.startChar ?? token?.charStart ?? token?.start ?? token?.begin
+    );
+    const explicitEnd = parseTokenOffset(
+      token?.end_char ?? token?.endChar ?? token?.charEnd ?? token?.end ?? token?.finish
+    );
+    let start = Number.isFinite(explicitStart) ? Math.max(0, Math.floor(explicitStart)) : cursor;
+    let end = Number.isFinite(explicitEnd) && explicitEnd >= start
+      ? Math.floor(explicitEnd)
+      : start + (typeof text === "string" ? text.length : 0);
+    if (safeFallback.length) {
+      start = Math.max(0, Math.min(start, safeFallback.length));
+      end = Math.max(start, Math.min(end, safeFallback.length));
+    } else {
+      start = Math.max(0, start);
+      end = Math.max(start, end);
+    }
+    cursor = Math.max(cursor, end);
+    const mapped = {
+      id,
+      text: typeof text === "string" ? text : "",
+      start,
+      end,
+      tokenIndex: i,
+    };
+    byId[id] = mapped;
+    ordered.push(mapped);
+  }
+
+  return {
+    byId,
+    ordered,
+    combinedText: ordered.map((entry) => entry.text || "").join(""),
+  };
+}
+
+function flattenCorrectionEntries(rawEntries, out = []) {
+  if (Array.isArray(rawEntries)) {
+    for (const entry of rawEntries) flattenCorrectionEntries(entry, out);
+    return out;
+  }
+  if (rawEntries && typeof rawEntries === "object") out.push(rawEntries);
+  return out;
+}
+
+function normalizeCorrectionOperationKind(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "insert" || compact === "add" || compact === "plus" || compact === "create") return "insert";
+  if (compact === "delete" || compact === "remove" || compact === "minus" || compact === "drop") return "delete";
+  if (compact === "replace" || compact === "update" || compact === "substitute") return "replace";
+  return null;
+}
+
+function normalizeSegmentForCommaCompare(value = "") {
+  return (typeof value === "string" ? value : "").replace(/[\s\u200B-\u200D\uFEFF]+/gu, " ").trim();
+}
+
+function findInsertedCommaIndexFromSegments(sourceSegment = "", correctedSegment = "") {
+  if (typeof correctedSegment !== "string" || !correctedSegment.includes(",")) return -1;
+  const safeSource = typeof sourceSegment === "string" ? sourceSegment : "";
+  const commaPositions = [];
+  for (let i = 0; i < correctedSegment.length; i++) {
+    if (correctedSegment[i] === ",") commaPositions.push(i);
+  }
+  for (const idx of commaPositions) {
+    const withoutComma = `${correctedSegment.slice(0, idx)}${correctedSegment.slice(idx + 1)}`;
+    if (normalizeSegmentForCommaCompare(withoutComma) === normalizeSegmentForCommaCompare(safeSource)) {
+      return idx;
+    }
+  }
+  if (!safeSource.includes(",") && commaPositions.length === 1) {
+    return commaPositions[0];
+  }
+  return commaPositions.length ? commaPositions[commaPositions.length - 1] : -1;
+}
+
+function findRemovedCommaIndexFromSegments(sourceSegment = "", correctedSegment = "") {
+  if (typeof sourceSegment !== "string" || !sourceSegment.includes(",")) return -1;
+  const safeCorrected = typeof correctedSegment === "string" ? correctedSegment : "";
+  const commaPositions = [];
+  for (let i = 0; i < sourceSegment.length; i++) {
+    if (sourceSegment[i] === ",") commaPositions.push(i);
+  }
+  for (const idx of commaPositions) {
+    const withoutComma = `${sourceSegment.slice(0, idx)}${sourceSegment.slice(idx + 1)}`;
+    if (normalizeSegmentForCommaCompare(withoutComma) === normalizeSegmentForCommaCompare(safeCorrected)) {
+      return idx;
+    }
+  }
+  return commaPositions.length ? commaPositions[commaPositions.length - 1] : -1;
+}
+
+const INVISIBLE_GAP_REGEX = /[\s\u200B-\u200D\uFEFF]/u;
+const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A()\[\]]/u;
+
+function nearestVisibleCharLeft(text = "", startIndex = -1) {
+  if (typeof text !== "string" || !text.length) return { char: "", index: -1 };
+  let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+  while (idx >= 0 && INVISIBLE_GAP_REGEX.test(text[idx] || "")) idx--;
+  return idx >= 0 ? { char: text[idx] || "", index: idx } : { char: "", index: -1 };
+}
+
+function nearestVisibleCharRight(text = "", startIndex = 0) {
+  if (typeof text !== "string" || !text.length) return { char: "", index: -1 };
+  let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+  while (idx < text.length && INVISIBLE_GAP_REGEX.test(text[idx] || "")) idx++;
+  return idx < text.length ? { char: text[idx] || "", index: idx } : { char: "", index: -1 };
+}
+
+function classifyBoundaryQuoteRole(text = "", quoteIndex = -1) {
+  if (!Number.isFinite(quoteIndex) || quoteIndex < 0 || quoteIndex >= text.length) {
+    return "closing";
+  }
+  const char = text[quoteIndex] || "";
+  if (/[\(\[]/u.test(char)) return "opening";
+  if (/[\)\]]/u.test(char)) return "closing";
+  const left = nearestVisibleCharLeft(text, quoteIndex - 1).char;
+  const right = nearestVisibleCharRight(text, quoteIndex + 1).char;
+  const leftIsWord = /[\p{L}\p{N}]/u.test(left || "");
+  const rightIsWord = /[\p{L}\p{N}]/u.test(right || "");
+  if (rightIsWord && !leftIsWord) return "opening";
+  if (leftIsWord && !rightIsWord) return "closing";
+  return "closing";
+}
+
+function inferQuoteIntentFromBoundary(text = "", boundaryPos = -1) {
+  if (typeof text !== "string" || !text.length || !Number.isFinite(boundaryPos) || boundaryPos < 0) return null;
+  const safePos = Math.max(0, Math.min(Math.floor(boundaryPos), text.length));
+  const skipBoundaryChars = (char) => INVISIBLE_GAP_REGEX.test(char || "") || char === ",";
+  const scanLeft = (startIndex) => {
+    let cursor = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+    let probe = nearestVisibleCharLeft(text, cursor);
+    while (probe.index >= 0 && skipBoundaryChars(probe.char)) {
+      cursor = probe.index - 1;
+      probe = nearestVisibleCharLeft(text, cursor);
+    }
+    return probe;
+  };
+  const scanRight = (startIndex) => {
+    let cursor = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+    let probe = nearestVisibleCharRight(text, cursor);
+    while (probe.index >= 0 && skipBoundaryChars(probe.char)) {
+      cursor = probe.index + 1;
+      probe = nearestVisibleCharRight(text, cursor);
+    }
+    return probe;
+  };
+  const left = scanLeft(safePos - 1);
+  const right = scanRight(safePos);
+  if (right.index >= 0 && BOUNDARY_QUOTE_REGEX.test(right.char || "")) {
+    const side = classifyBoundaryQuoteRole(text, right.index);
+    return side === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (left.index >= 0 && BOUNDARY_QUOTE_REGEX.test(left.char || "")) {
+    const side = classifyBoundaryQuoteRole(text, left.index);
+    return side === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
+  return null;
+}
+
+function extractExplicitQuoteIntentFromCorrectionEntry(entry = {}, group = {}) {
+  const sideHint = firstDefinedValue([
+    entry?.quote_side,
+    entry?.quoteSide,
+    entry?.boundary_quote_side,
+    entry?.boundaryQuoteSide,
+    entry?.quote_type,
+    entry?.quoteType,
+    group?.quote_side,
+    group?.quoteSide,
+    group?.boundary_quote_side,
+    group?.boundaryQuoteSide,
+    group?.quote_type,
+    group?.quoteType,
+    entry?.boundary_side,
+    entry?.boundarySide,
+    entry?.side,
+    group?.boundary_side,
+    group?.boundarySide,
+    group?.side,
+  ]);
+  const explicitIntentRaw = firstDefinedValue([
+    entry?.explicit_quote_intent,
+    entry?.explicitQuoteIntent,
+    entry?.quote_intent,
+    entry?.quoteIntent,
+    entry?.quote_policy,
+    entry?.quotePolicy,
+    group?.explicit_quote_intent,
+    group?.explicitQuoteIntent,
+    group?.quote_intent,
+    group?.quoteIntent,
+    group?.quote_policy,
+    group?.quotePolicy,
+  ]);
+  const explicitFromPayload = normalizeQuoteIntent(explicitIntentRaw, sideHint);
+  if (explicitFromPayload) return { intent: explicitFromPayload, source: "corrections_payload" };
+
+  const fromFlags = inferQuoteIntentFromFlags({ ...(group || {}), ...(entry || {}) });
+  if (fromFlags) return { intent: fromFlags, source: "corrections_flags" };
+  return { intent: null, source: null };
+}
+
+function resolveCorrectionSourceTokenId(entry = {}, group = {}) {
+  return (
+    entry?.source_id ??
+    entry?.sourceId ??
+    entry?.token_id ??
+    entry?.tokenId ??
+    group?.source_start ??
+    group?.sourceStart ??
+    group?.source_id ??
+    group?.sourceId ??
+    null
+  );
+}
+
+function resolveCorrectionTargetTokenId(entry = {}, group = {}) {
+  return (
+    entry?.target_id ??
+    entry?.targetId ??
+    entry?.target_start ??
+    entry?.targetStart ??
+    group?.target_start ??
+    group?.targetStart ??
+    group?.target_id ??
+    group?.targetId ??
+    null
+  );
+}
+
+function synthesizeCommaOpsFromCorrections(corrections, sourceTokens, targetTokens) {
+  if (!corrections) return [];
+  const groups = Array.isArray(corrections)
+    ? corrections
+    : typeof corrections === "object"
+      ? Object.values(corrections)
+      : [];
+  if (!groups.length) return [];
+
+  const sourceIndex = buildTokenPositionIndex(sourceTokens);
+  const targetIndex = buildTokenPositionIndex(targetTokens);
+  const seen = new Set();
+  const ops = [];
+
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+    const group = groups[groupIndex];
+    if (!group || typeof group !== "object") continue;
+    const groupKind = normalizeCorrectionOperationKind(group.operation ?? group.type ?? group.op);
+    const entries = flattenCorrectionEntries(group.corrections);
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      const entry = entries[entryIndex];
+      if (!entry || typeof entry !== "object") continue;
+      const sourceSegment = firstDefinedValue([
+        entry.source_text,
+        entry.sourceText,
+        entry.source,
+        entry.original_text,
+        entry.originalText,
+      ]) || "";
+      const correctedSegment = firstDefinedValue([
+        entry.text,
+        entry.target_text,
+        entry.targetText,
+        entry.corrected_text,
+        entry.correctedText,
+        entry.suggested_text,
+        entry.suggestedText,
+      ]) || "";
+      const sourceHasComma = typeof sourceSegment === "string" && sourceSegment.includes(",");
+      const correctedHasComma = typeof correctedSegment === "string" && correctedSegment.includes(",");
+      let kind = null;
+      if (!sourceHasComma && correctedHasComma) kind = "insert";
+      else if (sourceHasComma && !correctedHasComma) kind = "delete";
+      else if (groupKind === "insert" || groupKind === "delete") kind = groupKind;
+      if (!kind) continue;
+
+      const sourceTokenId = resolveCorrectionSourceTokenId(entry, group);
+      const targetTokenId = resolveCorrectionTargetTokenId(entry, group);
+      const sourceToken = sourceTokenId ? sourceIndex.byId[sourceTokenId] : null;
+      const targetToken = targetTokenId ? targetIndex.byId[targetTokenId] : null;
+      if (!sourceToken && !targetToken) continue;
+
+      let originalPos = null;
+      let correctedPos = null;
+      if (kind === "insert") {
+        let relativeInsertIndex = findInsertedCommaIndexFromSegments(sourceSegment, correctedSegment);
+        if (
+          relativeInsertIndex < 0 &&
+          targetToken &&
+          typeof targetToken.text === "string" &&
+          targetToken.text.includes(",")
+        ) {
+          relativeInsertIndex = targetToken.text.indexOf(",");
+        }
+        if (sourceToken) {
+          const fallbackRelative = typeof sourceSegment === "string" ? sourceSegment.length : sourceToken.text.length;
+          const safeRelative =
+            relativeInsertIndex >= 0
+              ? Math.min(relativeInsertIndex, sourceToken.text.length)
+              : Math.max(0, Math.min(fallbackRelative, sourceToken.text.length));
+          originalPos = sourceToken.start + safeRelative;
+        }
+        if (targetToken) {
+          const targetCommaIndex =
+            relativeInsertIndex >= 0
+              ? Math.min(relativeInsertIndex, targetToken.text.length)
+              : targetToken.text.includes(",")
+                ? targetToken.text.indexOf(",")
+                : targetToken.text.length;
+          correctedPos = targetToken.start + Math.max(0, targetCommaIndex);
+        }
+      } else {
+        let relativeDeleteIndex = findRemovedCommaIndexFromSegments(sourceSegment, correctedSegment);
+        if (
+          relativeDeleteIndex < 0 &&
+          sourceToken &&
+          typeof sourceToken.text === "string" &&
+          sourceToken.text.includes(",")
+        ) {
+          relativeDeleteIndex = sourceToken.text.indexOf(",");
+        }
+        if (sourceToken) {
+          const safeRelative =
+            relativeDeleteIndex >= 0
+              ? Math.min(relativeDeleteIndex, Math.max(0, sourceToken.text.length - 1))
+              : Math.max(0, sourceToken.text.length - 1);
+          originalPos = sourceToken.start + safeRelative;
+        }
+        if (targetToken) {
+          const correctedFallback =
+            relativeDeleteIndex >= 0
+              ? Math.min(relativeDeleteIndex, targetToken.text.length)
+              : targetToken.text.length;
+          correctedPos = targetToken.start + Math.max(0, correctedFallback);
+        }
+      }
+
+      if (!Number.isFinite(originalPos) && Number.isFinite(correctedPos)) originalPos = correctedPos;
+      if (!Number.isFinite(correctedPos) && Number.isFinite(originalPos)) correctedPos = originalPos;
+      if (!Number.isFinite(originalPos) || !Number.isFinite(correctedPos)) continue;
+
+      const payloadIntent = extractExplicitQuoteIntentFromCorrectionEntry(entry, group);
+      const inferredIntent =
+        kind === "insert"
+          ? inferQuoteIntentFromBoundary(
+              correctedSegment,
+              findInsertedCommaIndexFromSegments(sourceSegment, correctedSegment)
+            )
+          : inferQuoteIntentFromBoundary(
+              sourceSegment,
+              findRemovedCommaIndexFromSegments(sourceSegment, correctedSegment)
+            );
+      const explicitQuoteIntent = payloadIntent.intent ?? inferredIntent;
+      const explicitQuoteIntentSource = payloadIntent.intent
+        ? payloadIntent.source
+        : inferredIntent
+          ? "corrections_segment"
+          : null;
+
+      const safeOriginalPos = Math.max(0, Math.floor(originalPos));
+      const safeCorrectedPos = Math.max(0, Math.floor(correctedPos));
+      const identity = `${kind}:${safeOriginalPos}:${safeCorrectedPos}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+
+      const syntheticOp = {
+        kind,
+        pos: kind === "delete" ? safeOriginalPos : safeCorrectedPos,
+        originalPos: safeOriginalPos,
+        correctedPos: safeCorrectedPos,
+        traceId: `synthetic:corr:${groupIndex}:${entryIndex}:${kind}:${safeOriginalPos}:${safeCorrectedPos}`,
+        syntheticFallback: true,
+        syntheticSource: "corrections",
+      };
+      if (explicitQuoteIntent) {
+        syntheticOp.explicitQuoteIntent = explicitQuoteIntent;
+        syntheticOp.explicitQuoteIntentSource = explicitQuoteIntentSource || "corrections_segment";
+      }
+      ops.push(syntheticOp);
+    }
+  }
+
+  return ops;
+}
+
+function synthesizeCommaOpsFromTextDiff(sourceText = "", targetText = "") {
+  if (typeof sourceText !== "string" || typeof targetText !== "string") return [];
+  if (!sourceText.length && !targetText.length) return [];
+  let i = 0;
+  let j = 0;
+  let guard = 0;
+  const guardLimit = Math.max(256, (sourceText.length + targetText.length) * 4);
+  const ops = [];
+  const seen = new Set();
+
+  while (i < sourceText.length || j < targetText.length) {
+    if (guard++ > guardLimit) return [];
+    const sourceChar = sourceText[i] ?? "";
+    const targetChar = targetText[j] ?? "";
+    if (sourceChar === targetChar) {
+      i++;
+      j++;
+      continue;
+    }
+    if (targetChar === "," && sourceChar !== ",") {
+      const originalPos = Math.max(0, Math.min(i, sourceText.length));
+      const correctedPos = Math.max(0, Math.min(j, targetText.length));
+      const identity = `insert:${originalPos}:${correctedPos}`;
+      if (!seen.has(identity)) {
+        seen.add(identity);
+        const op = {
+          kind: "insert",
+          pos: correctedPos,
+          originalPos,
+          correctedPos,
+          traceId: `synthetic:diff:insert:${originalPos}:${correctedPos}`,
+          syntheticFallback: true,
+          syntheticSource: "text_diff",
+        };
+        const inferredIntent = inferQuoteIntentFromBoundary(targetText, correctedPos);
+        if (inferredIntent) {
+          op.explicitQuoteIntent = inferredIntent;
+          op.explicitQuoteIntentSource = "text_diff_boundary";
+        }
+        ops.push(op);
+      }
+      j++;
+      continue;
+    }
+    if (sourceChar === "," && targetChar !== ",") {
+      const originalPos = Math.max(0, Math.min(i, sourceText.length));
+      const correctedPos = Math.max(0, Math.min(j, targetText.length));
+      const identity = `delete:${originalPos}:${correctedPos}`;
+      if (!seen.has(identity)) {
+        seen.add(identity);
+        ops.push({
+          kind: "delete",
+          pos: originalPos,
+          originalPos,
+          correctedPos,
+          traceId: `synthetic:diff:delete:${originalPos}:${correctedPos}`,
+          syntheticFallback: true,
+          syntheticSource: "text_diff",
+        });
+      }
+      i++;
+      continue;
+    }
+    if (sourceText[i + 1] === targetChar) {
+      i++;
+      continue;
+    }
+    if (targetText[j + 1] === sourceChar) {
+      j++;
+      continue;
+    }
+    // Non-comma drift: abort synthetic diff ops to avoid wrong placements.
+    return [];
+  }
+
+  return ops;
+}
+
+function synthesizeCommaOpsFallback({
+  rawPayload,
+  corrections,
+  sourceTokens,
+  targetTokens,
+  sourceText,
+  targetText,
+} = {}) {
+  const fromCorrections = synthesizeCommaOpsFromCorrections(corrections, sourceTokens, targetTokens);
+  if (fromCorrections.length) {
+    quoteTraceLog("synthetic_comma_ops_from_corrections", {
+      count: fromCorrections.length,
+      hasQuoteIntent: fromCorrections.some((op) => typeof op.explicitQuoteIntent === "string"),
+    });
+    return fromCorrections;
+  }
+  const fromDiff = synthesizeCommaOpsFromTextDiff(sourceText, targetText);
+  if (fromDiff.length) {
+    quoteTraceLog("synthetic_comma_ops_from_diff", {
+      count: fromDiff.length,
+      hasQuoteIntent: fromDiff.some((op) => typeof op.explicitQuoteIntent === "string"),
+    });
+    return fromDiff;
+  }
+  quoteTraceLog("synthetic_comma_ops_empty", {
+    hasCorrections: Boolean(corrections),
+    hasRawPayload: Boolean(rawPayload),
+  });
+  return [];
+}
+
 function resolveFeatureFlag({ windowKeys = [], envKey, defaultValue }) {
   if (typeof window !== "undefined") {
     for (const key of windowKeys) {
@@ -1621,7 +2161,17 @@ export async function popraviPovedDetailed(poved, options = {}) {
       ? raw.target_text
       : tokensToSentenceText(targetTokens) || correctedText;
   const corrections = pickCorrectionsPayload(raw);
-  const commaOps = extractCommaOps(raw, sourceText, targetText);
+  const payloadCommaOps = extractCommaOps(raw, sourceText, targetText);
+  const commaOps = payloadCommaOps.length
+    ? payloadCommaOps
+    : synthesizeCommaOpsFallback({
+        rawPayload: raw,
+        corrections,
+        sourceTokens,
+        targetTokens,
+        sourceText,
+        targetText,
+      });
   return {
     correctedText,
     raw,
