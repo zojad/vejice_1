@@ -24,6 +24,51 @@ const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
 // Temporary kill-switch for the online accept/reject workflow while the flow is unstable.
 const ENABLE_ONLINE_REVIEW_ACTIONS = false;
 
+const isLikelyAddinRuntimeError = (eventOrReason) => {
+  try {
+    const filename = String(eventOrReason?.filename || "").toLowerCase();
+    const stack = String(eventOrReason?.stack || eventOrReason?.reason?.stack || "").toLowerCase();
+    if (filename.includes("localhost:4001")) return true;
+    if (stack.includes("localhost:4001")) return true;
+    if (stack.includes("taskpane.js") || stack.includes("preverivejice.js")) return true;
+  } catch (_err) {
+    // ignore inspection failures
+  }
+  return false;
+};
+
+const reportStartupError = (label, payload) => {
+  errL(label, payload);
+  try {
+    const rawMessage =
+      payload?.message ||
+      payload?.reason?.message ||
+      payload?.reason ||
+      payload?.error?.message ||
+      payload?.error ||
+      payload;
+    const message = String(rawMessage || "Neznana napaka");
+    const statusLine = document.getElementById("status-line");
+    if (statusLine) {
+      statusLine.textContent = `Napaka ob zagonu: ${message}`;
+    }
+  } catch (_err) {
+    // ignore UI reporting failures
+  }
+};
+
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (event) => {
+    if (!isLikelyAddinRuntimeError(event)) return;
+    reportStartupError("window.error", event?.error || event?.message || event);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event?.reason ?? event;
+    if (!isLikelyAddinRuntimeError(reason)) return;
+    reportStartupError("window.unhandledrejection", reason);
+  });
+}
+
 let busy = false;
 let online = false;
 let checkRunInFlight = false;

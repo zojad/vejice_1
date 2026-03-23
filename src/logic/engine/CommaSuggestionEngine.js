@@ -63,7 +63,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : false;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -158,7 +158,7 @@ function isQuoteTraceEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return true;
+  return false;
 }
 
 function isQuoteTraceVerboseEnabled() {
@@ -170,7 +170,7 @@ function isQuoteTraceVerboseEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE_VERBOSE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return true;
+  return false;
 }
 
 function quoteTraceLog(stage, payload = {}) {

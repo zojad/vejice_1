@@ -44,7 +44,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : false;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
@@ -162,7 +162,7 @@ function isQuoteTraceEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return true;
+  return false;
 }
 
 function isQuoteIntentInferenceEnabled() {
@@ -187,7 +187,7 @@ function isQuoteTraceVerboseEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE_VERBOSE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return true;
+  return false;
 }
 
 function hasQuoteTraceChar(value) {
@@ -1464,7 +1464,8 @@ function persistPendingSuggestionsOnline() {
       .filter(Boolean);
     storage.setItem(storageKey, JSON.stringify(payload));
   } catch (storageErr) {
-    if (storageErr?.name === "QuotaExceededError") {
+    const errorName = typeof storageErr?.name === "string" ? storageErr.name : "";
+    if (errorName === "QuotaExceededError" || errorName === "SecurityError") {
       pendingSuggestionsStorageDisabled = true;
     }
     warn("persistPendingSuggestionsOnline failed", storageErr);
@@ -1473,6 +1474,7 @@ function persistPendingSuggestionsOnline() {
 
 function restorePendingSuggestionsOnline() {
   if (pendingSuggestionsOnline.length) return pendingSuggestionsOnline.length;
+  if (pendingSuggestionsStorageDisabled) return 0;
   if (typeof window === "undefined") return 0;
   try {
     const storage = window.localStorage;
@@ -1493,6 +1495,10 @@ function restorePendingSuggestionsOnline() {
     }
     return restoredCount;
   } catch (storageErr) {
+    const errorName = typeof storageErr?.name === "string" ? storageErr.name : "";
+    if (errorName === "SecurityError") {
+      pendingSuggestionsStorageDisabled = true;
+    }
     warn("restorePendingSuggestionsOnline failed", storageErr);
     return 0;
   }
@@ -4671,12 +4677,166 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         if (!quoteCharRegex.test(quoteVariant || "")) continue;
         if (!variants.includes(quoteVariant)) variants.push(quoteVariant);
       }
+      const collectVariantPositions = (text, variant) => {
+        if (typeof text !== "string" || !text.length || typeof variant !== "string" || !variant.length) return [];
+        const out = [];
+        let cursor = 0;
+        while (cursor <= text.length - variant.length) {
+          const hit = text.indexOf(variant, cursor);
+          if (hit < 0) break;
+          out.push(hit);
+          cursor = hit + Math.max(1, variant.length);
+        }
+        return out;
+      };
+      const isVariantCompatibleWithIntent = (variant) => {
+        if (typeof variant !== "string" || !variant.length) return false;
+        if (!expectedQuoteRoleForIntent) return true;
+        if (expectedQuoteRoleForIntent === "opening" && directionalClosingQuoteChars.has(variant)) return false;
+        if (expectedQuoteRoleForIntent === "closing" && directionalOpeningQuoteChars.has(variant)) return false;
+        return true;
+      };
+      const chooseBestMatchIndex = (variant, matchesCount) => {
+        const positions = collectVariantPositions(liveText, variant);
+        if (!positions.length || !Number.isFinite(mappedStart)) {
+          return {
+            index: 0,
+            position: positions[0] ?? null,
+            roleCompatible: !expectedQuoteRoleForIntent,
+            roleUnknown: false,
+          };
+        }
+        let bestIdx = 0;
+        let bestScore = Number.POSITIVE_INFINITY;
+        let bestRoleIdx = -1;
+        let bestRoleScore = Number.POSITIVE_INFINITY;
+        let bestUnknownIdx = -1;
+        let bestUnknownScore = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < positions.length; i++) {
+          const role = classifyQuoteRoleAt(liveText, positions[i]);
+          const score = Math.abs(positions[i] - mappedStart);
+          if (score < bestScore) {
+            bestScore = score;
+            bestIdx = i;
+          }
+          if (!expectedQuoteRoleForIntent) {
+            continue;
+          }
+          if (role === expectedQuoteRoleForIntent && score < bestRoleScore) {
+            bestRoleScore = score;
+            bestRoleIdx = i;
+            continue;
+          }
+          if (!role && score < bestUnknownScore) {
+            bestUnknownScore = score;
+            bestUnknownIdx = i;
+          }
+        }
+        if (expectedQuoteRoleForIntent) {
+          if (bestRoleIdx >= 0) {
+            const clamped = Math.max(0, Math.min(bestRoleIdx, Math.max(0, matchesCount - 1)));
+            return {
+              index: clamped,
+              position: positions[clamped] ?? null,
+              roleCompatible: true,
+              roleUnknown: false,
+            };
+          }
+          if (bestUnknownIdx >= 0) {
+            const clamped = Math.max(0, Math.min(bestUnknownIdx, Math.max(0, matchesCount - 1)));
+            return {
+              index: clamped,
+              position: positions[clamped] ?? null,
+              roleCompatible: true,
+              roleUnknown: true,
+            };
+          }
+          return null;
+        }
+        const clamped = Math.max(0, Math.min(bestIdx, Math.max(0, matchesCount - 1)));
+        return {
+          index: clamped,
+          position: positions[clamped] ?? null,
+          roleCompatible: true,
+          roleUnknown: false,
+        };
+      };
       for (const quoteVariant of variants) {
+        if (!isVariantCompatibleWithIntent(quoteVariant)) continue;
         const matches = await searchParagraphForSnippet(context, paragraph, quoteVariant);
         if (!matches?.items?.length) continue;
-        const occurrence = countSnippetOccurrencesBefore(liveText, quoteVariant, mappedStart);
-        const idx = Math.min(occurrence, matches.items.length - 1);
-        return matches.items[idx] || null;
+        try {
+          for (const item of matches.items) {
+            item.load("text");
+          }
+          await context.sync();
+        } catch (loadErr) {
+          traceQuoteSuggestion("highlight_insert.quote_variant_skip", suggestion, {
+            force: true,
+            traceId: suggestion?.meta?.op?.traceId || null,
+            boundaryIntent,
+            expectedQuoteRole: expectedQuoteRoleForIntent,
+            quoteVariant,
+            mappedStart,
+            reason: "match-text-load-failed",
+            error: loadErr?.message || String(loadErr),
+          });
+          // If host cannot load text for search hits, continue with raw matches.
+        }
+        const exactMatchIndexes = [];
+        for (let i = 0; i < matches.items.length; i++) {
+          const matchText = typeof matches.items[i]?.text === "string" ? matches.items[i].text : "";
+          if (!matchText || matchText !== quoteVariant) continue;
+          exactMatchIndexes.push(i);
+        }
+        if (!exactMatchIndexes.length) {
+          traceQuoteSuggestion("highlight_insert.quote_variant_skip", suggestion, {
+            force: true,
+            traceId: suggestion?.meta?.op?.traceId || null,
+            boundaryIntent,
+            expectedQuoteRole: expectedQuoteRoleForIntent,
+            quoteVariant,
+            mappedStart,
+            reason: "no-exact-glyph-match",
+            rawMatchCount: matches.items.length,
+          });
+          continue;
+        }
+        const selected = chooseBestMatchIndex(quoteVariant, exactMatchIndexes.length);
+        if (!selected) {
+          traceQuoteSuggestion("highlight_insert.quote_variant_skip", suggestion, {
+            force: true,
+            traceId: suggestion?.meta?.op?.traceId || null,
+            boundaryIntent,
+            expectedQuoteRole: expectedQuoteRoleForIntent,
+            quoteVariant,
+            mappedStart,
+            reason: "no-role-compatible-match",
+          });
+          continue;
+        }
+        const idx = Math.max(0, Math.min(selected.index, exactMatchIndexes.length - 1));
+        const resolvedMatchIndex = exactMatchIndexes[idx];
+        traceQuoteSuggestion("highlight_insert.quote_variant_pick", suggestion, {
+          force: true,
+          traceId: suggestion?.meta?.op?.traceId || null,
+          boundaryIntent,
+          expectedQuoteRole: expectedQuoteRoleForIntent,
+          quoteVariant,
+          mappedStart,
+          selectedMatchIndex: idx,
+          selectedRawMatchIndex: resolvedMatchIndex,
+          exactMatchCount: exactMatchIndexes.length,
+          rawMatchCount: matches.items.length,
+          selectedPosition: selected.position,
+          selectedRoleCompatible: selected.roleCompatible,
+          selectedRoleUnknown: selected.roleUnknown,
+          selectedRole:
+            Number.isFinite(selected.position) && selected.position >= 0
+              ? classifyQuoteRoleAt(liveText, selected.position)
+              : null,
+        });
+        return matches.items[resolvedMatchIndex] || null;
       }
       return null;
     };
@@ -4848,7 +5008,7 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         [anchor.highlightCharStart],
         boundaryIntent
       );
-      if (quotePosFromHighlight >= 0) {
+      if (!range && quotePosFromHighlight >= 0) {
         range = await resolveQuoteRangeNearPos(quotePosFromHighlight);
       }
     }
@@ -4861,24 +5021,8 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       for (const hint of fallbackHints) {
         const quotePos = resolveQuotePosFromCandidates(baseText, [hint], boundaryIntent);
         if (quotePos < 0) continue;
-        range = await resolveQuoteContextRangeNearPos(quotePos);
+        range = await resolveQuoteRangeNearPos(quotePos);
         if (range) break;
-      }
-    }
-    if (!range && suggestion?.meta?.op) {
-      try {
-        const strictResolved = await resolveStrictInsertRangeForSuggestion(
-          context,
-          paragraph,
-          suggestion.meta.op,
-          suggestion,
-          "highlight-insert-quote-strict-fallback"
-        );
-        if (strictResolved?.range) {
-          range = strictResolved.range;
-        }
-      } catch (strictErr) {
-        warn("highlightInsertSuggestion: strict quote fallback failed", strictErr);
       }
     }
     if (!range) {
