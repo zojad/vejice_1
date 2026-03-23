@@ -1050,6 +1050,7 @@ function buildSuggestionFromOp({
   const metadata = buildInsertSuggestionMetadata(anchorsEntry, {
     originalCharIndex: op.originalPos ?? op.pos,
     targetCharIndex: op.correctedPos ?? op.pos,
+    op,
   });
   if (!metadata) return null;
   const confidence = computeSuggestionConfidence({
@@ -2421,6 +2422,17 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
     if (!raw || typeof raw !== "object") continue;
     const kind = raw.kind === "delete" || raw.kind === "insert" ? raw.kind : null;
     if (!kind) continue;
+    const explicitQuoteIntent = normalizeExplicitQuoteIntent(
+      raw.explicitQuoteIntent ??
+        raw.explicit_quote_intent ??
+        raw.quoteIntent ??
+        raw.quote_intent ??
+        raw.quotePolicy ??
+        raw.quote_policy ??
+        raw.boundarySide ??
+        raw.boundary_side ??
+        raw.side
+    );
     let originalPos = toBoundedIndex(
       Number.isFinite(raw.originalPos) ? raw.originalPos : kind === "delete" ? raw.pos : undefined,
       sourceLen
@@ -2436,7 +2448,7 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
     const identity = `${kind}:${originalPos}:${correctedPos}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    normalized.push({
+    const normalizedOp = {
       ...raw,
       kind,
       pos,
@@ -2445,7 +2457,11 @@ function normalizeApiCommaOps(rawOps, originalText = "", correctedText = "") {
       fromApiCommaOps: true,
       fromCorrections: false,
       viaDiffFallback: false,
-    });
+    };
+    if (explicitQuoteIntent) {
+      normalizedOp.explicitQuoteIntent = explicitQuoteIntent;
+    }
+    normalized.push(normalizedOp);
   }
 
   return collapseDuplicateDiffOps(filterCommaOps(originalText, correctedText, normalized));
@@ -2624,6 +2640,256 @@ function analyzeCommaChangeFromCorrections(originalSegment = "", correctedSegmen
     correctedSegment,
     baseText: orig.base || corr.base,
   };
+}
+
+function normalizeExplicitQuoteIntent(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "none") return "none";
+  if (compact === "unknown") return "unknown";
+  if (compact === "before") return "before_closing_quote";
+  if (compact === "after") return "after_closing_quote";
+  if (compact === "beforeclosingquote" || compact === "beforequote") return "before_closing_quote";
+  if (compact === "afterclosingquote" || compact === "afterquote") return "after_closing_quote";
+  if (compact === "beforeopeningquote") return "before_opening_quote";
+  if (compact === "afteropeningquote") return "after_opening_quote";
+  return null;
+}
+
+function firstDefinedCorrectionValue(values = []) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function parseLooseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return null;
+  }
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return null;
+}
+
+function normalizeQuoteBoundarySide(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "opening" || compact === "open" || compact === "left") return "opening";
+  if (compact === "closing" || compact === "close" || compact === "right") return "closing";
+  return null;
+}
+
+function extractExplicitQuoteIntentFromCorrection(entry, group) {
+  const directIntent = normalizeExplicitQuoteIntent(
+    firstDefinedCorrectionValue([
+      entry?.explicit_quote_intent,
+      entry?.explicitQuoteIntent,
+      entry?.quote_intent,
+      entry?.quoteIntent,
+      entry?.quote_policy,
+      entry?.quotePolicy,
+      entry?.boundary_side,
+      entry?.boundarySide,
+      entry?.side,
+      group?.explicit_quote_intent,
+      group?.explicitQuoteIntent,
+      group?.quote_intent,
+      group?.quoteIntent,
+      group?.quote_policy,
+      group?.quotePolicy,
+      group?.boundary_side,
+      group?.boundarySide,
+      group?.side,
+    ])
+  );
+  if (directIntent) return directIntent;
+
+  const beforeQuoteFlag = parseLooseBoolean(
+    firstDefinedCorrectionValue([
+      entry?.comma_before_quote,
+      entry?.commaBeforeQuote,
+      entry?.before_quote,
+      entry?.beforeQuote,
+      entry?.insert_before_quote,
+      entry?.insertBeforeQuote,
+      entry?.place_before_quote,
+      entry?.placeBeforeQuote,
+      entry?.is_before_quote,
+      entry?.isBeforeQuote,
+      group?.comma_before_quote,
+      group?.commaBeforeQuote,
+      group?.before_quote,
+      group?.beforeQuote,
+      group?.insert_before_quote,
+      group?.insertBeforeQuote,
+      group?.place_before_quote,
+      group?.placeBeforeQuote,
+      group?.is_before_quote,
+      group?.isBeforeQuote,
+    ])
+  );
+  const afterQuoteFlag = parseLooseBoolean(
+    firstDefinedCorrectionValue([
+      entry?.comma_after_quote,
+      entry?.commaAfterQuote,
+      entry?.after_quote,
+      entry?.afterQuote,
+      entry?.insert_after_quote,
+      entry?.insertAfterQuote,
+      entry?.place_after_quote,
+      entry?.placeAfterQuote,
+      entry?.is_after_quote,
+      entry?.isAfterQuote,
+      group?.comma_after_quote,
+      group?.commaAfterQuote,
+      group?.after_quote,
+      group?.afterQuote,
+      group?.insert_after_quote,
+      group?.insertAfterQuote,
+      group?.place_after_quote,
+      group?.placeAfterQuote,
+      group?.is_after_quote,
+      group?.isAfterQuote,
+    ])
+  );
+  const quoteSide = normalizeQuoteBoundarySide(
+    firstDefinedCorrectionValue([
+      entry?.quote_side,
+      entry?.quoteSide,
+      entry?.boundary_quote_side,
+      entry?.boundaryQuoteSide,
+      entry?.quote_type,
+      entry?.quoteType,
+      group?.quote_side,
+      group?.quoteSide,
+      group?.boundary_quote_side,
+      group?.boundaryQuoteSide,
+      group?.quote_type,
+      group?.quoteType,
+    ])
+  );
+  if (beforeQuoteFlag === true) {
+    return quoteSide === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (afterQuoteFlag === true) {
+    return quoteSide === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
+  return null;
+}
+
+function nearestVisibleCharLeft(text = "", startIndex = -1) {
+  if (typeof text !== "string" || !text.length) return { char: "", index: -1 };
+  let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+  while (idx >= 0 && INVISIBLE_GAP_REGEX.test(text[idx] || "")) idx--;
+  return idx >= 0 ? { char: text[idx] || "", index: idx } : { char: "", index: -1 };
+}
+
+function nearestVisibleCharRight(text = "", startIndex = 0) {
+  if (typeof text !== "string" || !text.length) return { char: "", index: -1 };
+  let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+  while (idx < text.length && INVISIBLE_GAP_REGEX.test(text[idx] || "")) idx++;
+  return idx < text.length ? { char: text[idx] || "", index: idx } : { char: "", index: -1 };
+}
+
+function classifyBoundaryQuoteRole(text = "", quoteIndex = -1) {
+  if (typeof text !== "string" || !text.length || !Number.isFinite(quoteIndex) || quoteIndex < 0) {
+    return "closing";
+  }
+  const char = text[quoteIndex] || "";
+  if (/[\(\[]/u.test(char)) return "opening";
+  if (/[\)\]]/u.test(char)) return "closing";
+  const left = nearestVisibleCharLeft(text, quoteIndex - 1).char;
+  const right = nearestVisibleCharRight(text, quoteIndex + 1).char;
+  const leftIsWord = /[\p{L}\p{N}]/u.test(left || "");
+  const rightIsWord = /[\p{L}\p{N}]/u.test(right || "");
+  if (rightIsWord && !leftIsWord) return "opening";
+  if (leftIsWord && !rightIsWord) return "closing";
+  return "closing";
+}
+
+function inferQuoteIntentFromBoundary(text = "", boundaryPos = -1) {
+  if (typeof text !== "string" || !text.length || !Number.isFinite(boundaryPos) || boundaryPos < 0) return null;
+  const safePos = Math.max(0, Math.min(Math.floor(boundaryPos), text.length));
+  const skipBoundaryChars = (char) => INVISIBLE_GAP_REGEX.test(char || "") || char === ",";
+  const scanLeft = (startIndex) => {
+    let cursor = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
+    let probe = nearestVisibleCharLeft(text, cursor);
+    while (probe.index >= 0 && skipBoundaryChars(probe.char)) {
+      cursor = probe.index - 1;
+      probe = nearestVisibleCharLeft(text, cursor);
+    }
+    return probe;
+  };
+  const scanRight = (startIndex) => {
+    let cursor = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
+    let probe = nearestVisibleCharRight(text, cursor);
+    while (probe.index >= 0 && skipBoundaryChars(probe.char)) {
+      cursor = probe.index + 1;
+      probe = nearestVisibleCharRight(text, cursor);
+    }
+    return probe;
+  };
+  const left = scanLeft(safePos - 1);
+  const right = scanRight(safePos);
+  if (right.index >= 0 && BOUNDARY_QUOTE_REGEX.test(right.char || "")) {
+    const side = classifyBoundaryQuoteRole(text, right.index);
+    return side === "opening" ? "before_opening_quote" : "before_closing_quote";
+  }
+  if (left.index >= 0 && BOUNDARY_QUOTE_REGEX.test(left.char || "")) {
+    const side = classifyBoundaryQuoteRole(text, left.index);
+    return side === "opening" ? "after_opening_quote" : "after_closing_quote";
+  }
+  return null;
+}
+
+function findInsertedCommaIndexFromCorrectionSegments(originalSegment = "", correctedSegment = "") {
+  if (typeof correctedSegment !== "string" || !correctedSegment.includes(",")) return -1;
+  const safeOriginal = typeof originalSegment === "string" ? originalSegment : "";
+  const normalizeForCompare = (value) => value.replace(/[\s\u200B-\u200D\uFEFF]+/gu, " ").trim();
+  const commaPositions = [];
+  for (let i = 0; i < correctedSegment.length; i++) {
+    if (correctedSegment[i] === ",") commaPositions.push(i);
+  }
+  for (const idx of commaPositions) {
+    const withoutComma = `${correctedSegment.slice(0, idx)}${correctedSegment.slice(idx + 1)}`;
+    if (normalizeForCompare(withoutComma) === normalizeForCompare(safeOriginal)) {
+      return idx;
+    }
+  }
+  if (!safeOriginal.includes(",") && commaPositions.length === 1) {
+    return commaPositions[0];
+  }
+  return commaPositions.length ? commaPositions[commaPositions.length - 1] : -1;
+}
+
+function inferQuoteIntentFromCorrectionSegments(originalSegment = "", correctedSegment = "") {
+  const commaIndex = findInsertedCommaIndexFromCorrectionSegments(originalSegment, correctedSegment);
+  if (commaIndex < 0) return null;
+  return inferQuoteIntentFromBoundary(correctedSegment, commaIndex);
+}
+
+function resolveExplicitQuoteIntentForInsert({
+  originalSegment = "",
+  correctedSegment = "",
+  boundaryText = "",
+  boundaryPos = -1,
+} = {}) {
+  const fromSegments = inferQuoteIntentFromCorrectionSegments(originalSegment, correctedSegment);
+  if (fromSegments) return fromSegments;
+  return inferQuoteIntentFromBoundary(boundaryText, boundaryPos);
 }
 
 function normalizeTokenForComparison(text) {
@@ -2970,14 +3236,27 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
         const key = `ins-${absolutePos}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        ops.push({
+        const explicitQuoteIntentFromPayload = extractExplicitQuoteIntentFromCorrection(entry, group);
+        const explicitQuoteIntent =
+          explicitQuoteIntentFromPayload ??
+          resolveExplicitQuoteIntentForInsert({
+          originalSegment: entrySource || effectiveBase,
+          correctedSegment,
+          boundaryText: paragraphOriginalText,
+          boundaryPos: absolutePos,
+        });
+        const insertOp = {
           kind: "insert",
           pos: absolutePos,
           originalPos: absolutePos,
           correctedPos: absolutePos,
           paragraphIndex,
           fromCorrections: true,
-        });
+        };
+        if (explicitQuoteIntent) {
+          insertOp.explicitQuoteIntent = explicitQuoteIntent;
+        }
+        ops.push(insertOp);
       }
     }
     if (entries.length || !operationKind || !looksLikeCommaCorrectionGroup(group, anchorsEntry)) continue;
@@ -3040,14 +3319,27 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     const key = `ins-${absolutePos}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    ops.push({
+    const explicitQuoteIntentFromPayload = extractExplicitQuoteIntentFromCorrection(null, group);
+    const explicitQuoteIntent =
+      explicitQuoteIntentFromPayload ??
+      resolveExplicitQuoteIntentForInsert({
+      originalSegment: baseText,
+      correctedSegment: "",
+      boundaryText: paragraphOriginalText,
+      boundaryPos: absolutePos,
+    });
+    const insertOp = {
       kind: "insert",
       pos: absolutePos,
       originalPos: absolutePos,
       correctedPos: absolutePos,
       paragraphIndex,
       fromCorrections: true,
-    });
+    };
+    if (explicitQuoteIntent) {
+      insertOp.explicitQuoteIntent = explicitQuoteIntent;
+    }
+    ops.push(insertOp);
   }
 
   if (tracking && tracking.intents?.length) {
@@ -3299,7 +3591,7 @@ function buildExactApplyWindowMeta(sourceText, correctedText, sourceBoundaryPos,
   };
 }
 
-function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharIndex }) {
+function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharIndex, op = null }) {
   if (!entry) return null;
   const srcIndex = typeof originalCharIndex === "number" ? originalCharIndex : -1;
   const targetIndex = typeof targetCharIndex === "number" ? targetCharIndex : srcIndex;
@@ -3348,9 +3640,15 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     
     if (checkPos < 0 || checkPos >= correctedText.length) return "unknown";
     const leftChar = nearestNonSpaceLeft(checkPos - 1);
-    const rightChar = nearestNonSpaceRight(checkPos + 1);
+    const atChar = correctedText[checkPos] || "";
+    const rightChar =
+      existingComma >= 0
+        ? nearestNonSpaceRight(checkPos + 1)
+        : nearestNonSpaceRight(checkPos);
     
     
+    if (quoteCharsClosing.test(atChar) && existingComma < 0) return "before_closing_quote";
+    if (quoteCharsOpening.test(atChar) && existingComma < 0) return "before_opening_quote";
     if (quoteCharsClosing.test(rightChar)) return "before_closing_quote";
     if (quoteCharsClosing.test(leftChar)) return "after_closing_quote";
     if (quoteCharsOpening.test(rightChar)) return "before_opening_quote";
@@ -3358,7 +3656,11 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     return "none";
   };
   
-  const explicitQuoteIntent = classifyIntent();
+  const opExplicitQuoteIntent = normalizeExplicitQuoteIntent(
+    op?.explicitQuoteIntent ?? op?.quoteIntent ?? op?.quotePolicy
+  );
+  const explicitQuoteIntent =
+    opExplicitQuoteIntent && opExplicitQuoteIntent !== "unknown" ? opExplicitQuoteIntent : classifyIntent();
   const resolveDashBoundaryInfo = () => {
     if (!correctedText || !Number.isFinite(resolvedInsertBoundaryIndex) || resolvedInsertBoundaryIndex < 0) {
       return { isDashBoundary: false, dashChar: null };

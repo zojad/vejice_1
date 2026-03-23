@@ -8,10 +8,10 @@ export class DesktopTextBridge extends TextBridge {
       forceSpacingCleanup: false,
       normalizationProfile: {
         // Keep canonical mapping profile aligned with Word Online.
-        // Preserve quote/dash distinction to reduce ambiguous remapping.
+        // Preserve quote distinction, but normalize dash variants for stable remapping.
         collapseWhitespace: true,
         normalizeQuotes: false,
-        normalizeDashes: false,
+        normalizeDashes: true,
         normalizeEllipsis: true,
       },
     });

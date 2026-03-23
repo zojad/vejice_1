@@ -538,6 +538,19 @@ function normalizeCommaOpKind(value) {
   return null;
 }
 
+function normalizeQuoteIntent(value) {
+  if (typeof value !== "string") return null;
+  const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!compact) return null;
+  if (compact === "none") return "none";
+  if (compact === "unknown") return "unknown";
+  if (compact === "beforeclosingquote" || compact === "beforequote") return "before_closing_quote";
+  if (compact === "afterclosingquote" || compact === "afterquote") return "after_closing_quote";
+  if (compact === "beforeopeningquote") return "before_opening_quote";
+  if (compact === "afteropeningquote") return "after_opening_quote";
+  return null;
+}
+
 function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
   const rawOps = Array.isArray(rawPayload?.comma_ops)
     ? rawPayload.comma_ops
@@ -578,6 +591,19 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
       rawOp.targetIndex,
       kind === "insert" ? rawOp.pos : undefined,
     ]);
+    const explicitQuoteIntent = normalizeQuoteIntent(
+      firstDefinedValue([
+        rawOp.explicit_quote_intent,
+        rawOp.explicitQuoteIntent,
+        rawOp.quote_intent,
+        rawOp.quoteIntent,
+        rawOp.quote_policy,
+        rawOp.quotePolicy,
+        rawOp.boundary_side,
+        rawOp.boundarySide,
+        rawOp.side,
+      ])
+    );
 
     let originalPos = toBoundedIndex(originalCandidate, sourceLen);
     let correctedPos = toBoundedIndex(correctedCandidate, targetLen);
@@ -591,12 +617,16 @@ function extractCommaOps(rawPayload, sourceText = "", targetText = "") {
     if (seen.has(identity)) continue;
     seen.add(identity);
 
-    commaOps.push({
+    const normalizedOp = {
       kind,
       pos,
       originalPos,
       correctedPos,
-    });
+    };
+    if (explicitQuoteIntent) {
+      normalizedOp.explicitQuoteIntent = explicitQuoteIntent;
+    }
+    commaOps.push(normalizedOp);
   }
 
   return commaOps;
