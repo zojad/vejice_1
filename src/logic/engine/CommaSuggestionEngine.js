@@ -36,8 +36,10 @@ const API_FAILURE_RETRY_COOLDOWN_MS = 12000;
 const API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN = 2;
 const TRAILING_COMMA_REGEX = /[,\s\u200B-\u200D\uFEFF]+$/;
 const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A]/u;
-const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A)\]]/u;
-const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A(\[]/u;
+const BOUNDARY_CLOSER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u2039)\]]/u;
+const BOUNDARY_OPENER_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00BB\u203A(\[]/u;
+const HARD_OPENING_QUOTE_CHARS = new Set(["\u00BB", "\u203A", "(", "["]);
+const HARD_CLOSING_QUOTE_CHARS = new Set(["\u00AB", "\u2039", ")", "]"]);
 const BOUNDARY_DASH_REGEX = /[-\u2013\u2014\u2212]/u;
 const TRAILING_BOUNDARY_CLOSER_REGEX = BOUNDARY_CLOSER_REGEX;
 const INVISIBLE_GAP_REGEX = /[\s\u200B-\u200D\uFEFF]/u;
@@ -61,7 +63,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : false;
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -156,7 +158,7 @@ function isQuoteTraceEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return false;
+  return true;
 }
 
 function isQuoteTraceVerboseEnabled() {
@@ -168,7 +170,7 @@ function isQuoteTraceVerboseEnabled() {
     const envOverride = parseBooleanFlag(process.env?.VEJICE_QUOTE_TRACE_VERBOSE);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return false;
+  return true;
 }
 
 function quoteTraceLog(stage, payload = {}) {
@@ -2974,17 +2976,36 @@ function nearestVisibleCharRight(text = "", startIndex = 0) {
 
 function classifyBoundaryQuoteRole(text = "", quoteIndex = -1) {
   if (typeof text !== "string" || !text.length || !Number.isFinite(quoteIndex) || quoteIndex < 0) {
-    return "closing";
+    return null;
   }
   const char = text[quoteIndex] || "";
-  if (/[\(\[]/u.test(char)) return "opening";
-  if (/[\)\]]/u.test(char)) return "closing";
+  if (!char) return null;
+  if (HARD_OPENING_QUOTE_CHARS.has(char)) return "opening";
+  if (HARD_CLOSING_QUOTE_CHARS.has(char)) return "closing";
+  if (!BOUNDARY_QUOTE_REGEX.test(char)) return null;
   const left = nearestVisibleCharLeft(text, quoteIndex - 1).char;
   const right = nearestVisibleCharRight(text, quoteIndex + 1).char;
   const leftIsWord = /[\p{L}\p{N}]/u.test(left || "");
   const rightIsWord = /[\p{L}\p{N}]/u.test(right || "");
+  const immediateLeft = quoteIndex > 0 ? text[quoteIndex - 1] || "" : "";
+  const immediateRight = quoteIndex + 1 < text.length ? text[quoteIndex + 1] || "" : "";
+  const leftAdjacentIsWord = /[\p{L}\p{N}]/u.test(immediateLeft || "");
+  const rightAdjacentIsWord = /[\p{L}\p{N}]/u.test(immediateRight || "");
+  const leftHasGap = INVISIBLE_GAP_REGEX.test(immediateLeft || "");
+  const rightHasGap = INVISIBLE_GAP_REGEX.test(immediateRight || "");
   if (rightIsWord && !leftIsWord) return "opening";
   if (leftIsWord && !rightIsWord) return "closing";
+  if (leftIsWord && rightIsWord) {
+    // Apostrophe-like joiner (no surrounding gaps) should stay unresolved.
+    if (leftAdjacentIsWord && rightAdjacentIsWord) return null;
+    // Quote followed by whitespace + word is typically a closing quote.
+    if (rightHasGap && !leftHasGap) return "closing";
+    // Quote preceded by whitespace + word is typically an opening quote.
+    if (leftHasGap && !rightHasGap) return "opening";
+    if (leftAdjacentIsWord && !rightAdjacentIsWord) return "closing";
+    if (!leftAdjacentIsWord && rightAdjacentIsWord) return "opening";
+    return "closing";
+  }
   return "closing";
 }
 
@@ -3014,11 +3035,13 @@ function inferQuoteIntentFromBoundary(text = "", boundaryPos = -1) {
   const right = scanRight(safePos);
   if (right.index >= 0 && BOUNDARY_QUOTE_REGEX.test(right.char || "")) {
     const side = classifyBoundaryQuoteRole(text, right.index);
-    return side === "opening" ? "before_opening_quote" : "before_closing_quote";
+    if (side === "opening") return "before_opening_quote";
+    if (side === "closing") return "before_closing_quote";
   }
   if (left.index >= 0 && BOUNDARY_QUOTE_REGEX.test(left.char || "")) {
     const side = classifyBoundaryQuoteRole(text, left.index);
-    return side === "opening" ? "after_opening_quote" : "after_closing_quote";
+    if (side === "opening") return "after_opening_quote";
+    if (side === "closing") return "after_closing_quote";
   }
   return null;
 }
@@ -3412,26 +3435,24 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
           entrySource || effectiveBase,
           correctedEntryText
         );
-        const explicitQuoteIntentFromParagraph = inferQuoteIntentFromParagraphBoundary(
-          paragraphOriginalText,
-          absolutePos
-        );
+        const allowParagraphQuoteInference =
+          isQuoteIntentInferenceEnabled() &&
+          !explicitQuoteIntentFromPayload &&
+          !explicitQuoteIntentFromSegments;
+        const explicitQuoteIntentFromParagraph = allowParagraphQuoteInference
+          ? inferQuoteIntentFromParagraphBoundary(paragraphOriginalText, absolutePos)
+          : null;
         const explicitQuoteIntentSource = explicitQuoteIntentFromPayload
           ? "corrections_payload"
           : explicitQuoteIntentFromSegments
             ? "corrections_segment"
             : explicitQuoteIntentFromParagraph
               ? "corrections_paragraph_boundary"
-            : isQuoteIntentInferenceEnabled()
-              ? "heuristic_boundary"
               : null;
         const explicitQuoteIntent =
           explicitQuoteIntentFromPayload ??
           explicitQuoteIntentFromSegments ??
-          explicitQuoteIntentFromParagraph ??
-          (isQuoteIntentInferenceEnabled()
-            ? inferQuoteIntentFromBoundary(paragraphOriginalText, absolutePos)
-            : null);
+          explicitQuoteIntentFromParagraph;
         const insertOp = {
           kind: "insert",
           pos: absolutePos,
@@ -3508,23 +3529,18 @@ function collectCommaOpsFromCorrections(detail, anchorsEntry, paragraphIndex, tr
     if (seen.has(key)) continue;
     seen.add(key);
     const explicitQuoteIntentFromPayload = extractExplicitQuoteIntentFromCorrection(null, group);
-    const explicitQuoteIntentFromParagraph = inferQuoteIntentFromParagraphBoundary(
-      paragraphOriginalText,
-      absolutePos
-    );
+    const explicitQuoteIntentFromParagraph =
+      isQuoteIntentInferenceEnabled() && !explicitQuoteIntentFromPayload
+        ? inferQuoteIntentFromParagraphBoundary(paragraphOriginalText, absolutePos)
+        : null;
     const explicitQuoteIntentSource = explicitQuoteIntentFromPayload
       ? "corrections_payload"
       : explicitQuoteIntentFromParagraph
         ? "corrections_paragraph_boundary"
-      : isQuoteIntentInferenceEnabled()
-        ? "heuristic_boundary"
         : null;
     const explicitQuoteIntent =
       explicitQuoteIntentFromPayload ??
-      explicitQuoteIntentFromParagraph ??
-      (isQuoteIntentInferenceEnabled()
-        ? inferQuoteIntentFromBoundary(paragraphOriginalText, absolutePos)
-        : null);
+      explicitQuoteIntentFromParagraph;
     const insertOp = {
       kind: "insert",
       pos: absolutePos,
@@ -3868,19 +3884,17 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   const originalText = typeof entry?.originalText === "string" ? entry.originalText : "";
   const correctedText = typeof entry?.correctedText === "string" ? entry.correctedText : "";
   // Extract quote intent classification EARLY so we can use it for anchor selection
-  const quoteCharsClosing = BOUNDARY_CLOSER_REGEX;
-  const quoteCharsOpening = BOUNDARY_OPENER_REGEX;
   // Match whitespace AND zero-width characters (Format category: \u200B, \u200C, \u200D, etc)
   const invisibleCharRegex = /[\s\u200B-\u200D\uFEFF]/u;
   const nearestNonSpaceLeft = (startIndex) => {
     let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : -1;
     while (idx >= 0 && invisibleCharRegex.test(correctedText[idx] || "")) idx--;
-    return idx >= 0 ? correctedText[idx] || "" : "";
+    return idx >= 0 ? { char: correctedText[idx] || "", index: idx } : { char: "", index: -1 };
   };
   const nearestNonSpaceRight = (startIndex) => {
     let idx = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
     while (idx < correctedText.length && invisibleCharRegex.test(correctedText[idx] || "")) idx++;
-    return idx < correctedText.length ? correctedText[idx] || "" : "";
+    return idx < correctedText.length ? { char: correctedText[idx] || "", index: idx } : { char: "", index: -1 };
   };
   const resolveCommaIndex = () => {
     if (!correctedText || !Number.isFinite(targetIndex) || targetIndex < 0) return -1;
@@ -3906,40 +3920,64 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     }
     
     if (checkPos < 0 || checkPos >= correctedText.length) return "unknown";
-    const leftChar = nearestNonSpaceLeft(checkPos - 1);
+    const leftProbe = nearestNonSpaceLeft(checkPos - 1);
     const atChar = correctedText[checkPos] || "";
-    const rightChar =
+    const rightProbe =
       existingComma >= 0
         ? nearestNonSpaceRight(checkPos + 1)
         : nearestNonSpaceRight(checkPos);
-    
-    
-    if (quoteCharsClosing.test(atChar) && existingComma < 0) return "before_closing_quote";
-    if (quoteCharsOpening.test(atChar) && existingComma < 0) return "before_opening_quote";
-    if (quoteCharsClosing.test(rightChar)) return "before_closing_quote";
-    if (quoteCharsClosing.test(leftChar)) return "after_closing_quote";
-    if (quoteCharsOpening.test(rightChar)) return "before_opening_quote";
-    if (quoteCharsOpening.test(leftChar)) return "after_opening_quote";
+
+    const resolveQuoteRole = (probeChar, probeIndex) => {
+      if (!probeChar) return null;
+      if (HARD_OPENING_QUOTE_CHARS.has(probeChar)) return "opening";
+      if (HARD_CLOSING_QUOTE_CHARS.has(probeChar)) return "closing";
+      if (!BOUNDARY_QUOTE_REGEX.test(probeChar)) return null;
+      return classifyBoundaryQuoteRole(correctedText, probeIndex);
+    };
+
+    const atRole = resolveQuoteRole(atChar, checkPos);
+    const leftRole = resolveQuoteRole(leftProbe.char, leftProbe.index);
+    const rightRole = resolveQuoteRole(rightProbe.char, rightProbe.index);
+
+    if (atRole === "closing" && existingComma < 0) return "before_closing_quote";
+    if (atRole === "opening" && existingComma < 0) return "before_opening_quote";
+    if (rightRole === "closing") return "before_closing_quote";
+    if (leftRole === "closing") return "after_closing_quote";
+    if (rightRole === "opening") return "before_opening_quote";
+    if (leftRole === "opening") return "after_opening_quote";
     return "none";
   };
   
+  const shouldInferQuoteIntentForOp = () => {
+    if (!isQuoteIntentInferenceEnabled()) return false;
+    // Keep authoritative API ops as-is. Only infer for synthetic/correction flows.
+    if (op?.fromApiCommaOps === true && !op?.syntheticFallback && !op?.fromSyntheticApiOps) {
+      return false;
+    }
+    return Boolean(op?.fromCorrections || op?.viaDiffFallback || op?.fromSyntheticApiOps || op?.syntheticFallback);
+  };
   const opExplicitQuoteIntent = normalizeExplicitQuoteIntent(
     op?.explicitQuoteIntent ?? op?.quoteIntent ?? op?.quotePolicy
   );
+  const inferredQuoteIntent = shouldInferQuoteIntentForOp() ? classifyIntent() : "none";
   const explicitQuoteIntent =
     opExplicitQuoteIntent && opExplicitQuoteIntent !== "unknown"
       ? opExplicitQuoteIntent
-      : isQuoteIntentInferenceEnabled()
-        ? classifyIntent()
-        : "none";
+      : inferredQuoteIntent;
+  const explicitQuoteIntentSource =
+    opExplicitQuoteIntent && opExplicitQuoteIntent !== "unknown"
+      ? op?.explicitQuoteIntentSource || "op_explicit"
+      : inferredQuoteIntent && inferredQuoteIntent !== "none" && inferredQuoteIntent !== "unknown"
+        ? "anchor_classify_intent"
+        : null;
   const resolveDashBoundaryInfo = () => {
     if (!correctedText || !Number.isFinite(resolvedInsertBoundaryIndex) || resolvedInsertBoundaryIndex < 0) {
       return { isDashBoundary: false, dashChar: null };
     }
     const boundaryPos = Math.max(0, Math.min(correctedText.length, Math.floor(resolvedInsertBoundaryIndex)));
-    const leftChar = nearestNonSpaceLeft(boundaryPos - 1);
+    const leftChar = nearestNonSpaceLeft(boundaryPos - 1).char;
     const atChar = boundaryPos < correctedText.length ? correctedText[boundaryPos] || "" : "";
-    const rightChar = nearestNonSpaceRight(boundaryPos);
+    const rightChar = nearestNonSpaceRight(boundaryPos).char;
     const dashChar = [atChar, leftChar, rightChar].find((ch) => BOUNDARY_DASH_REGEX.test(ch || "")) || "";
     return { isDashBoundary: Boolean(dashChar), dashChar: dashChar || null };
   };
@@ -3964,6 +4002,7 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       afterToken: snapshotAnchor(afterAnchor),
       preferredSide,
       explicitQuoteIntent,
+      explicitQuoteIntentSource,
       forcePunctuationHighlight: dashBoundaryInfo.isDashBoundary,
       punctuationBoundaryChar: dashBoundaryInfo.dashChar,
       leftContext: correctedText.slice(
@@ -4054,7 +4093,6 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   let highlightCharStart = highlightAnchor?.charStart ?? srcIndex;
   let highlightCharEnd = highlightAnchor?.charEnd;
   const shouldHighlightQuoteOnly =
-    explicitQuoteIntent === "before_closing_quote" ||
     explicitQuoteIntent === "after_closing_quote" ||
     explicitQuoteIntent === "after_opening_quote";
   if (
@@ -4064,22 +4102,43 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
   ) {
     const quoteSearchText = typeof originalText === "string" && originalText.length ? originalText : correctedText;
     const boundaryHint = Number.isFinite(srcIndex) && srcIndex >= 0 ? srcIndex : resolvedInsertBoundaryIndex;
+    const expectedRole =
+      explicitQuoteIntent === "after_opening_quote" ? "opening" : "closing";
+    const preferRight =
+      explicitQuoteIntent === "before_closing_quote" || explicitQuoteIntent === "before_opening_quote";
+    const preferLeft =
+      explicitQuoteIntent === "after_closing_quote" || explicitQuoteIntent === "after_opening_quote";
+    const isExpectedQuoteAt = (idx) => {
+      if (!Number.isFinite(idx) || idx < 0 || idx >= quoteSearchText.length) return false;
+      if (!BOUNDARY_QUOTE_REGEX.test(quoteSearchText[idx] || "")) return false;
+      const role = classifyBoundaryQuoteRole(quoteSearchText, idx);
+      if (!expectedRole) return true;
+      return role === expectedRole;
+    };
     let quotePos = -1;
     let leftCandidate = -1;
     let rightCandidate = -1;
-    let left = Math.min(quoteSearchText.length - 1, Math.floor(boundaryHint) - 1);
-    while (left >= 0 && invisibleCharRegex.test(quoteSearchText[left] || "")) left--;
-    leftCandidate = left;
-    if (left >= 0 && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[left] || "")) {
-      quotePos = left;
-    }
-    if (quotePos < 0) {
+    const probeLeft = () => {
+      let left = Math.min(quoteSearchText.length - 1, Math.floor(boundaryHint) - 1);
+      while (left >= 0 && invisibleCharRegex.test(quoteSearchText[left] || "")) left--;
+      leftCandidate = left;
+      return isExpectedQuoteAt(left) ? left : -1;
+    };
+    const probeRight = () => {
       let right = Math.max(0, Math.floor(boundaryHint));
       while (right < quoteSearchText.length && invisibleCharRegex.test(quoteSearchText[right] || "")) right++;
       rightCandidate = right;
-      if (right < quoteSearchText.length && BOUNDARY_QUOTE_REGEX.test(quoteSearchText[right] || "")) {
-        quotePos = right;
-      }
+      return isExpectedQuoteAt(right) ? right : -1;
+    };
+    if (preferRight) {
+      quotePos = probeRight();
+      if (quotePos < 0) quotePos = probeLeft();
+    } else if (preferLeft) {
+      quotePos = probeLeft();
+      if (quotePos < 0) quotePos = probeRight();
+    } else {
+      quotePos = probeLeft();
+      if (quotePos < 0) quotePos = probeRight();
     }
     if (quotePos >= 0) {
       highlightCharStart = quotePos;
@@ -4088,12 +4147,17 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
     quoteTraceLog("highlight_quote_boundary_resolve", {
       traceId: op?.traceId || null,
       explicitQuoteIntent,
+      expectedRole,
       boundaryHint,
       leftCandidate,
       rightCandidate,
       selectedQuotePos: quotePos,
       selectedQuoteChar:
         quotePos >= 0 && quotePos < quoteSearchText.length ? quoteSearchText[quotePos] || "" : null,
+      selectedQuoteRole:
+        quotePos >= 0 && quotePos < quoteSearchText.length
+          ? classifyBoundaryQuoteRole(quoteSearchText, quotePos)
+          : null,
       highlightTarget: quotePos >= 0 ? "quote" : "fallback",
     });
   } else if (explicitQuoteIntent && explicitQuoteIntent !== "none" && explicitQuoteIntent !== "unknown") {

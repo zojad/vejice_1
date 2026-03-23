@@ -21,7 +21,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : false;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
@@ -38,7 +38,7 @@ function isQuoteTraceEnabled() {
     const parsed = parseQuietBoolean(process.env?.VEJICE_QUOTE_TRACE);
     if (typeof parsed === "boolean") return parsed;
   }
-  return false;
+  return true;
 }
 function quoteTraceLog(stage, payload = {}) {
   if (!isQuoteTraceEnabled()) return;
@@ -960,6 +960,8 @@ function findRemovedCommaIndexFromSegments(sourceSegment = "", correctedSegment 
 
 const INVISIBLE_GAP_REGEX = /[\s\u200B-\u200D\uFEFF]/u;
 const BOUNDARY_QUOTE_REGEX = /["'`\u2018\u2019\u201A\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A()\[\]]/u;
+const HARD_OPENING_QUOTE_CHARS = new Set(["\u00BB", "\u203A", "(", "["]);
+const HARD_CLOSING_QUOTE_CHARS = new Set(["\u00AB", "\u2039", ")", "]"]);
 
 function nearestVisibleCharLeft(text = "", startIndex = -1) {
   if (typeof text !== "string" || !text.length) return { char: "", index: -1 };
@@ -977,17 +979,33 @@ function nearestVisibleCharRight(text = "", startIndex = 0) {
 
 function classifyBoundaryQuoteRole(text = "", quoteIndex = -1) {
   if (!Number.isFinite(quoteIndex) || quoteIndex < 0 || quoteIndex >= text.length) {
-    return "closing";
+    return null;
   }
   const char = text[quoteIndex] || "";
-  if (/[\(\[]/u.test(char)) return "opening";
-  if (/[\)\]]/u.test(char)) return "closing";
+  if (!char) return null;
+  if (HARD_OPENING_QUOTE_CHARS.has(char)) return "opening";
+  if (HARD_CLOSING_QUOTE_CHARS.has(char)) return "closing";
+  if (!BOUNDARY_QUOTE_REGEX.test(char)) return null;
   const left = nearestVisibleCharLeft(text, quoteIndex - 1).char;
   const right = nearestVisibleCharRight(text, quoteIndex + 1).char;
   const leftIsWord = /[\p{L}\p{N}]/u.test(left || "");
   const rightIsWord = /[\p{L}\p{N}]/u.test(right || "");
+  const immediateLeft = quoteIndex > 0 ? text[quoteIndex - 1] || "" : "";
+  const immediateRight = quoteIndex + 1 < text.length ? text[quoteIndex + 1] || "" : "";
+  const leftAdjacentIsWord = /[\p{L}\p{N}]/u.test(immediateLeft || "");
+  const rightAdjacentIsWord = /[\p{L}\p{N}]/u.test(immediateRight || "");
+  const leftHasGap = INVISIBLE_GAP_REGEX.test(immediateLeft || "");
+  const rightHasGap = INVISIBLE_GAP_REGEX.test(immediateRight || "");
   if (rightIsWord && !leftIsWord) return "opening";
   if (leftIsWord && !rightIsWord) return "closing";
+  if (leftIsWord && rightIsWord) {
+    if (leftAdjacentIsWord && rightAdjacentIsWord) return null;
+    if (rightHasGap && !leftHasGap) return "closing";
+    if (leftHasGap && !rightHasGap) return "opening";
+    if (leftAdjacentIsWord && !rightAdjacentIsWord) return "closing";
+    if (!leftAdjacentIsWord && rightAdjacentIsWord) return "opening";
+    return "closing";
+  }
   return "closing";
 }
 
@@ -1017,11 +1035,13 @@ function inferQuoteIntentFromBoundary(text = "", boundaryPos = -1) {
   const right = scanRight(safePos);
   if (right.index >= 0 && BOUNDARY_QUOTE_REGEX.test(right.char || "")) {
     const side = classifyBoundaryQuoteRole(text, right.index);
-    return side === "opening" ? "before_opening_quote" : "before_closing_quote";
+    if (side === "opening") return "before_opening_quote";
+    if (side === "closing") return "before_closing_quote";
   }
   if (left.index >= 0 && BOUNDARY_QUOTE_REGEX.test(left.char || "")) {
     const side = classifyBoundaryQuoteRole(text, left.index);
-    return side === "opening" ? "after_opening_quote" : "after_closing_quote";
+    if (side === "opening") return "after_opening_quote";
+    if (side === "closing") return "after_closing_quote";
   }
   return null;
 }
