@@ -475,12 +475,27 @@ function isDesktopVerboseLoggingEnabled() {
       parseBooleanFlag(process.env?.VEJICE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return false;
+  // Debug default: keep desktop flow logs enabled unless explicitly turned off.
+  return true;
 }
 
 const DESKTOP_VERBOSE_LOGS = isDesktopVerboseLoggingEnabled();
-const logDesktopVerbose = (...a) => DESKTOP_VERBOSE_LOGS && log(...a);
-const warnDesktopVerbose = (...a) => DESKTOP_VERBOSE_LOGS && warn(...a);
+const logDesktopVerbose = (...a) => {
+  if (!DESKTOP_VERBOSE_LOGS) return;
+  try {
+    console.log("[Vejice CHECK][Desktop]", ...a);
+  } catch (_err) {
+    // ignore console failures
+  }
+};
+const warnDesktopVerbose = (...a) => {
+  if (!DESKTOP_VERBOSE_LOGS) return;
+  try {
+    console.warn("[Vejice CHECK][Desktop]", ...a);
+  } catch (_err) {
+    // ignore console failures
+  }
+};
 
 function isParagraphCacheDisabled() {
   if (typeof window !== "undefined") {
@@ -2570,8 +2585,14 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
   if (!suggestions.length) return "failed";
   if (suggestions.some((candidate) => suggestionTouchesQuoteBoundary(candidate))) return "failed";
   const suggestion = suggestions[0];
+  const suggestionLog = buildDesktopSuggestionLogEntry(suggestion);
   const meta = suggestion?.meta?.anchor;
   if (!meta) return "failed";
+  logDesktopVerbose("Desktop direct insert:start", {
+    paragraphIndex,
+    suggestion: suggestionLog,
+    op: buildDesktopOperationLogEntry(op, sourceText, sourceText),
+  });
 
   paragraph.load("text");
   await context.sync();
@@ -2615,6 +2636,12 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
     hasQuoteNearBoundary(liveText, liveBoundaryHint, 3)
   ) {
     // Route quote-adjacent edits through strict resolver to avoid generic after-anchor placement.
+    logDesktopVerbose("Desktop direct insert:failed quote-adjacent", {
+      paragraphIndex,
+      suggestion: suggestionLog,
+      sourceBoundaryHint,
+      liveBoundaryHint,
+    });
     return "failed";
   }
 
@@ -2630,7 +2657,23 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
     while (adjustedBoundary > 0 && /\s/u.test(liveText[adjustedBoundary - 1] || "")) {
       adjustedBoundary--;
     }
+    logDesktopVerbose("Desktop direct insert:boundary candidate", {
+      paragraphIndex,
+      suggestion: suggestionLog,
+      traceLabel,
+      sourceBoundary,
+      mappedBoundary,
+      adjustedBoundary,
+      sourcePreview: clipDesktopPreviewWindow(sourceText, sourceBoundary),
+      livePreview: clipDesktopPreviewWindow(liveText, adjustedBoundary),
+    });
     if (hasCommaNearMappedHint(liveText, adjustedBoundary, 0)) {
+      logDesktopVerbose("Desktop direct insert:boundary noop", {
+        paragraphIndex,
+        suggestion: suggestionLog,
+        traceLabel,
+        adjustedBoundary,
+      });
       return "noop";
     }
     if (adjustedBoundary < liveText.length) {
@@ -2645,6 +2688,13 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
       );
       if (!range) return false;
       range.insertText(",", Word.InsertLocation.before);
+      logDesktopVerbose("Desktop direct insert:boundary applied", {
+        paragraphIndex,
+        suggestion: suggestionLog,
+        traceLabel,
+        adjustedBoundary,
+        insertLocation: "before",
+      });
       return true;
     }
     if (!liveText.length) return false;
@@ -2659,6 +2709,13 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
     );
     if (!range) return false;
     range.insertText(",", Word.InsertLocation.after);
+    logDesktopVerbose("Desktop direct insert:boundary applied", {
+      paragraphIndex,
+      suggestion: suggestionLog,
+      traceLabel,
+      adjustedBoundary,
+      insertLocation: "after",
+    });
     return true;
   };
 
@@ -2709,6 +2766,13 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
       candidate.location,
       `desktop-authoritative-${candidate.label}`
     );
+    logDesktopVerbose("Desktop direct insert:anchor candidate result", {
+      paragraphIndex,
+      suggestion: suggestionLog,
+      anchorLabel: candidate.label,
+      insertLocation: candidate.location,
+      status,
+    });
     if (status === "noop") return "noop";
     if (status) return "applied";
   }
@@ -2728,10 +2792,20 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
       "desktop-authoritative-boundary",
       op?.snippet || meta?.highlightText || ","
     );
+    logDesktopVerbose("Desktop direct insert:fallback boundary result", {
+      paragraphIndex,
+      suggestion: suggestionLog,
+      sourceBoundary,
+      status,
+    });
     if (status === "noop") return "noop";
     if (status) return "applied";
   }
 
+  logDesktopVerbose("Desktop direct insert:failed no-boundary-match", {
+    paragraphIndex,
+    suggestion: suggestionLog,
+  });
   return "failed";
 }
 
@@ -3007,6 +3081,7 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
   // Disable exact-window replace for inserts; it rewrites spans and can mangle words.
   const shouldUseExactWindowInsertResolution = false;
   const strictResolutionOnlineOnly = isWordOnline();
+  const isDesktopRuntime = !strictResolutionOnlineOnly;
   for (let opIndex = 0; opIndex < plan.length; opIndex++) {
     const op = plan[opIndex];
     if (!op) continue;
@@ -3054,7 +3129,37 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
     );
     const shouldUseStrictInsertResolutionForOp =
       strictResolutionOnlineOnly ||
-      (op.kind === "insert" && (hasExplicitQuoteIntent || opTouchesQuoteBoundary));
+      (op.kind === "insert" &&
+        (() => {
+          const hasBoundaryTokenCue = Boolean(
+            op?.boundary?.beforeToken?.tokenText ||
+              op?.boundary?.afterToken?.tokenText ||
+              suggestion?.meta?.anchor?.sourceTokenBefore?.tokenText ||
+              suggestion?.meta?.anchor?.sourceTokenAfter?.tokenText
+          );
+          const opStart =
+            Number.isFinite(op?.start) && op.start >= 0
+              ? Math.floor(op.start)
+              : Number.isFinite(op?.pos) && op.pos >= 0
+                ? Math.floor(op.pos)
+                : -1;
+          const snippetChar =
+            opStart >= 0 && opStart < text.length ? text.slice(opStart, Math.min(text.length, opStart + 1)) : "";
+          const weakSnippet = !snippetChar.trim();
+          const isAfterInsert = op?.insertLocation === Word.InsertLocation.after;
+          const shouldForceDesktopStrict =
+            isDesktopRuntime && suggestion && (hasBoundaryTokenCue || weakSnippet || isAfterInsert);
+          if (shouldForceDesktopStrict) {
+            logDesktopVerbose("Desktop strict insert forced", {
+              opIndex,
+              suggestionId: suggestion?.id ?? null,
+              hasBoundaryTokenCue,
+              weakSnippet,
+              isAfterInsert,
+            });
+          }
+          return hasExplicitQuoteIntent || opTouchesQuoteBoundary || shouldForceDesktopStrict;
+        })());
     const shouldUseStrictDeleteResolutionForOp =
       strictResolutionOnlineOnly ||
       (op.kind === "delete" && (hasExplicitQuoteIntent || opTouchesQuoteBoundary));
@@ -10028,6 +10133,105 @@ function buildSkippedSuggestionLogEntry(skippedItem, sourceText = "") {
   };
 }
 
+function clipDesktopPreviewWindow(text, center, leftRadius = 28, rightRadius = 40) {
+  const safeText = typeof text === "string" ? text : "";
+  if (!safeText.length) return "";
+  const safeCenter = Number.isFinite(center) ? Math.max(0, Math.min(safeText.length, Math.floor(center))) : 0;
+  const from = Math.max(0, safeCenter - Math.max(0, leftRadius));
+  const to = Math.min(safeText.length, safeCenter + Math.max(0, rightRadius));
+  return safeText.slice(from, to);
+}
+
+function buildDesktopSuggestionLogEntry(suggestion) {
+  if (!suggestion || typeof suggestion !== "object") return null;
+  const opMeta = suggestion?.meta?.op || {};
+  const anchor = suggestion?.meta?.anchor || {};
+  const traceId =
+    typeof opMeta?.traceId === "string" && opMeta.traceId.trim()
+      ? opMeta.traceId.trim()
+      : null;
+  return {
+    id: suggestion?.id ?? null,
+    kind: suggestion?.kind ?? null,
+    traceId,
+    paragraphIndex: Number.isFinite(suggestion?.paragraphIndex) ? suggestion.paragraphIndex : null,
+    charHintStart: Number.isFinite(suggestion?.charHint?.start) ? suggestion.charHint.start : null,
+    charHintEnd: Number.isFinite(suggestion?.charHint?.end) ? suggestion.charHint.end : null,
+    opOriginalPos: Number.isFinite(opMeta?.originalPos) ? opMeta.originalPos : null,
+    opCorrectedPos: Number.isFinite(opMeta?.correctedPos) ? opMeta.correctedPos : null,
+    opPos: Number.isFinite(opMeta?.pos) ? opMeta.pos : null,
+    quoteIntent: resolveSuggestionQuoteBoundaryIntent(suggestion, opMeta) || null,
+    quoteIntentSource: opMeta?.explicitQuoteIntentSource || null,
+    highlightText:
+      typeof anchor?.highlightText === "string"
+        ? anchor.highlightText
+        : typeof suggestion?.meta?.highlightText === "string"
+          ? suggestion.meta.highlightText
+          : null,
+    sourceTokenBefore: anchor?.sourceTokenBefore?.tokenText || null,
+    sourceTokenAfter: anchor?.sourceTokenAfter?.tokenText || null,
+  };
+}
+
+function buildDesktopOperationLogEntry(op, planText = "", sourceText = "") {
+  if (!op || typeof op !== "object") return null;
+  const opStart = Number.isFinite(op?.start) ? op.start : Number.isFinite(op?.pos) ? op.pos : null;
+  const opEnd = Number.isFinite(op?.end) ? op.end : opStart;
+  const opSnippet =
+    typeof op?.snippet === "string" && op.snippet.length
+      ? op.snippet
+      : Number.isFinite(opStart) && Number.isFinite(opEnd)
+        ? (planText || "").slice(Math.max(0, opStart), Math.max(0, opEnd))
+        : "";
+  const sourceHint = firstFiniteValue([
+    op?.boundary?.sourceBoundaryPos,
+    op?.boundary?.sourceBoundaryStart,
+    op?.boundary?.sourceBoundaryEnd,
+    op?.boundary?.resolvedPos,
+    op?.boundary?.requestedPos,
+    op?.suggestions?.[0]?.meta?.op?.originalPos,
+    op?.suggestions?.[0]?.charHint?.start,
+    opStart,
+  ]);
+  return {
+    kind: op?.kind || null,
+    start: Number.isFinite(opStart) ? opStart : null,
+    end: Number.isFinite(opEnd) ? opEnd : null,
+    replacement: typeof op?.replacement === "string" ? op.replacement : null,
+    insertLocation: op?.insertLocation ?? null,
+    snippet: opSnippet || null,
+    preview: clipDesktopPreviewWindow(planText, opStart),
+    sourcePreview: clipDesktopPreviewWindow(sourceText, sourceHint),
+    boundary: op?.boundary
+      ? {
+          sourceBoundaryPos: Number.isFinite(op.boundary?.sourceBoundaryPos)
+            ? op.boundary.sourceBoundaryPos
+            : null,
+          sourceBoundaryStart: Number.isFinite(op.boundary?.sourceBoundaryStart)
+            ? op.boundary.sourceBoundaryStart
+            : null,
+          sourceBoundaryEnd: Number.isFinite(op.boundary?.sourceBoundaryEnd)
+            ? op.boundary.sourceBoundaryEnd
+            : null,
+          targetBoundaryPos: Number.isFinite(op.boundary?.targetBoundaryPos)
+            ? op.boundary.targetBoundaryPos
+            : null,
+          beforeToken: op.boundary?.beforeToken?.tokenText || null,
+          afterToken: op.boundary?.afterToken?.tokenText || null,
+          leftContext:
+            typeof op.boundary?.leftContext === "string" ? op.boundary.leftContext.slice(-24) : null,
+          rightContext:
+            typeof op.boundary?.rightContext === "string"
+              ? op.boundary.rightContext.slice(0, 24)
+              : null,
+        }
+      : null,
+    suggestions: (Array.isArray(op?.suggestions) ? op.suggestions : [])
+      .map((suggestion) => buildDesktopSuggestionLogEntry(suggestion))
+      .filter(Boolean),
+  };
+}
+
 function normalizeInsertVerificationWindowText(text) {
   const canonical = canonicalizeWithBoundaryMap((text || "").replace(/,/gu, ""), getNormalizationProfile());
   return (canonical?.canonical || "").trim();
@@ -11658,6 +11862,27 @@ async function checkDocumentTextDesktop(checkToken) {
             noop: noop.length,
             skippedByReason: summarizeSkippedReasons(skipped),
           });
+          if (plan.length) {
+            logDesktopVerbose("Desktop apply op details", {
+              paragraphIndex: job.paragraphIndex,
+              ops: plan.map((op, opIndex) => ({
+                opIndex,
+                ...buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
+              })),
+            });
+          }
+          if (skipped.length) {
+            logDesktopVerbose("Desktop apply skipped details", {
+              paragraphIndex: job.paragraphIndex,
+              skipped: skipped.map((item) => buildSkippedSuggestionLogEntry(item, sourceForPlan)),
+            });
+          }
+          if (noop.length) {
+            logDesktopVerbose("Desktop apply noop details", {
+              paragraphIndex: job.paragraphIndex,
+              noop: noop.map((suggestion) => buildDesktopSuggestionLogEntry(suggestion)).filter(Boolean),
+            });
+          }
           deterministicPlannerSkips += countDeterministicSkippedReasons(skipped);
 
           let appliedInParagraph = 0;
@@ -11677,6 +11902,11 @@ async function checkDocumentTextDesktop(checkToken) {
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
             try {
+              logDesktopVerbose("Desktop apply op:attempt", {
+                paragraphIndex: job.paragraphIndex,
+                opIndex,
+                op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
+              });
               if (!deterministicMappingV2 && isDesktopDirectInsertOp(op)) {
                 const directStatus = await applyDesktopAuthoritativeInsertOp(
                   context,
@@ -11685,6 +11915,12 @@ async function checkDocumentTextDesktop(checkToken) {
                   sourceForPlan,
                   op
                 );
+                logDesktopVerbose("Desktop apply op:direct result", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex,
+                  status: directStatus,
+                  op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
+                });
                 if (directStatus === "noop") {
                   continue;
                 }
@@ -11729,6 +11965,31 @@ async function checkDocumentTextDesktop(checkToken) {
               noop: deferredNoop.length,
               skippedByReason: summarizeSkippedReasons(deferredSkipped),
             });
+            if (deferredPlan.length) {
+              logDesktopVerbose("Desktop deferred op details", {
+                paragraphIndex: job.paragraphIndex,
+                ops: deferredPlan.map((op, deferredOpIndex) => ({
+                  deferredOpIndex,
+                  ...buildDesktopOperationLogEntry(op, currentSnapshotText, sourceForPlan),
+                })),
+              });
+            }
+            if (deferredSkipped.length) {
+              logDesktopVerbose("Desktop deferred skipped details", {
+                paragraphIndex: job.paragraphIndex,
+                skipped: deferredSkipped.map((item) =>
+                  buildSkippedSuggestionLogEntry(item, sourceForPlan)
+                ),
+              });
+            }
+            if (deferredNoop.length) {
+              logDesktopVerbose("Desktop deferred noop details", {
+                paragraphIndex: job.paragraphIndex,
+                noop: deferredNoop
+                  .map((suggestion) => buildDesktopSuggestionLogEntry(suggestion))
+                  .filter(Boolean),
+              });
+            }
             deterministicPlannerSkips += countDeterministicSkippedReasons(deferredSkipped);
             const deferredRanges = await getRangesForPlannedOperations(
               context,
@@ -11750,12 +12011,23 @@ async function checkDocumentTextDesktop(checkToken) {
                 continue;
               }
               try {
+                logDesktopVerbose("Desktop deferred op:attempt", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
+                });
                 const insertLocation =
                   deferredOp?.insertLocation ??
                   (deferredOp.kind === "insert"
                     ? Word.InsertLocation.before
                     : Word.InsertLocation.replace);
                 deferredRange.insertText(deferredOp.replacement, insertLocation);
+                logDesktopVerbose("Desktop deferred op:queued", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  insertLocation,
+                  op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
+                });
                 countAppliedSuggestions(deferredOp);
               } catch (err) {
                 applyOpFailures++;
