@@ -194,6 +194,13 @@ function hasQuoteTraceChar(value) {
   return typeof value === "string" && QUOTE_TRACE_REGEX.test(value);
 }
 
+function getBoundaryTokenText(boundaryToken) {
+  if (!boundaryToken) return "";
+  if (typeof boundaryToken === "string") return boundaryToken;
+  if (typeof boundaryToken?.tokenText === "string") return boundaryToken.tokenText;
+  return "";
+}
+
 function normalizeQuoteBoundaryIntent(value) {
   if (typeof value !== "string") return null;
   const compact = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
@@ -350,8 +357,8 @@ function suggestionTouchesQuoteBoundary(suggestion) {
     meta?.targetTokenAfter?.tokenText,
     meta?.boundaryMeta?.leftContext,
     meta?.boundaryMeta?.rightContext,
-    meta?.boundaryMeta?.beforeToken?.tokenText,
-    meta?.boundaryMeta?.afterToken?.tokenText,
+    getBoundaryTokenText(meta?.boundaryMeta?.beforeToken),
+    getBoundaryTokenText(meta?.boundaryMeta?.afterToken),
   ];
   return candidates.some((value) => hasQuoteTraceChar(value));
 }
@@ -479,7 +486,21 @@ function isDesktopVerboseLoggingEnabled() {
   return true;
 }
 
+function isDesktopDirectInsertEnabled() {
+  if (typeof window !== "undefined") {
+    const override = parseBooleanFlag(window.__VEJICE_DESKTOP_DIRECT_INSERT__);
+    if (typeof override === "boolean") return override;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseBooleanFlag(process.env?.VEJICE_DESKTOP_DIRECT_INSERT);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  // Safety default: keep desktop deterministic/strict path only.
+  return false;
+}
+
 const DESKTOP_VERBOSE_LOGS = isDesktopVerboseLoggingEnabled();
+const DESKTOP_DIRECT_INSERT_ENABLED = isDesktopDirectInsertEnabled();
 const logDesktopVerbose = (...a) => {
   if (!DESKTOP_VERBOSE_LOGS) return;
   try {
@@ -2603,8 +2624,8 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
   const boundaryHasQuoteCue =
     quoteCharRegex.test(boundary?.leftContext || "") ||
     quoteCharRegex.test(boundary?.rightContext || "") ||
-    quoteCharRegex.test(boundary?.beforeToken?.tokenText || "") ||
-    quoteCharRegex.test(boundary?.afterToken?.tokenText || "") ||
+    quoteCharRegex.test(getBoundaryTokenText(boundary?.beforeToken)) ||
+    quoteCharRegex.test(getBoundaryTokenText(boundary?.afterToken)) ||
     quoteCharRegex.test(meta?.sourceTokenBefore?.tokenText || "") ||
     quoteCharRegex.test(meta?.sourceTokenAfter?.tokenText || "");
   const hasQuoteNearBoundary = (text, pos, radius = 2) => {
@@ -3131,11 +3152,19 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
       strictResolutionOnlineOnly ||
       (op.kind === "insert" &&
         (() => {
+          const boundaryBeforeTokenText = getBoundaryTokenText(op?.boundary?.beforeToken);
+          const boundaryAfterTokenText = getBoundaryTokenText(op?.boundary?.afterToken);
           const hasBoundaryTokenCue = Boolean(
-            op?.boundary?.beforeToken?.tokenText ||
-              op?.boundary?.afterToken?.tokenText ||
+            boundaryBeforeTokenText ||
+              boundaryAfterTokenText ||
               suggestion?.meta?.anchor?.sourceTokenBefore?.tokenText ||
               suggestion?.meta?.anchor?.sourceTokenAfter?.tokenText
+          );
+          const hasBoundaryPositionCue = Boolean(
+            Number.isFinite(op?.boundary?.sourceBoundaryStart) ||
+              Number.isFinite(op?.boundary?.sourceBoundaryEnd) ||
+              Number.isFinite(op?.boundary?.resolvedPos) ||
+              Number.isFinite(op?.boundary?.requestedPos)
           );
           const opStart =
             Number.isFinite(op?.start) && op.start >= 0
@@ -3148,12 +3177,17 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
           const weakSnippet = !snippetChar.trim();
           const isAfterInsert = op?.insertLocation === Word.InsertLocation.after;
           const shouldForceDesktopStrict =
-            isDesktopRuntime && suggestion && (hasBoundaryTokenCue || weakSnippet || isAfterInsert);
+            isDesktopRuntime &&
+            suggestion &&
+            (hasBoundaryTokenCue || hasBoundaryPositionCue || weakSnippet || isAfterInsert);
           if (shouldForceDesktopStrict) {
             logDesktopVerbose("Desktop strict insert forced", {
               opIndex,
               suggestionId: suggestion?.id ?? null,
+              boundaryBeforeTokenText: boundaryBeforeTokenText || null,
+              boundaryAfterTokenText: boundaryAfterTokenText || null,
               hasBoundaryTokenCue,
+              hasBoundaryPositionCue,
               weakSnippet,
               isAfterInsert,
             });
@@ -3208,6 +3242,14 @@ async function getRangesForPlannedOperations(context, paragraph, snapshotText, p
         op.insertLocation = strictResolution.insertLocation ?? Word.InsertLocation.replace;
         if (typeof strictResolution.replacement === "string") {
           op.replacement = strictResolution.replacement;
+        }
+        if (isDesktopRuntime) {
+          logDesktopVerbose("Desktop strict insert resolved", {
+            opIndex,
+            suggestionId: suggestion?.id ?? null,
+            insertLocation: op.insertLocation ?? null,
+            resolutionReason: strictResolution?.reason ?? null,
+          });
         }
         op.strictResolutionBlocked = false;
         continue;
@@ -3943,8 +3985,8 @@ function shouldUseMarkerFirstInsertApply(suggestion, plan) {
   const boundaryHasQuoteCue =
     quoteCharRegex.test(boundary?.leftContext || "") ||
     quoteCharRegex.test(boundary?.rightContext || "") ||
-    quoteCharRegex.test(boundary?.beforeToken?.tokenText || "") ||
-    quoteCharRegex.test(boundary?.afterToken?.tokenText || "");
+    quoteCharRegex.test(getBoundaryTokenText(boundary?.beforeToken)) ||
+    quoteCharRegex.test(getBoundaryTokenText(boundary?.afterToken));
   const snippetHasQuoteCue =
     quoteCharRegex.test(suggestion?.snippets?.leftSnippet || "") ||
     quoteCharRegex.test(suggestion?.snippets?.rightSnippet || "");
@@ -5552,8 +5594,28 @@ async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot, optio
           : fallbackOrdinal;
     let targetIndex = Math.max(0, Math.min(ordinal, matches.items.length - 1));
     let resolvedStart = -1;
+    const mappedHint = resolveMappedHint(text, Boolean(variantOptions.preferEnd));
+    const resolveClosestOccurrenceIndex = (positions = []) => {
+      if (!positions.length) return { index: -1, score: Number.POSITIVE_INFINITY };
+      if (!Number.isFinite(mappedHint)) {
+        const ordinalIndex = Math.max(0, Math.min(targetIndex, positions.length - 1));
+        return { index: ordinalIndex, score: Number.POSITIVE_INFINITY };
+      }
+      let bestIndex = -1;
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (let idx = 0; idx < positions.length; idx++) {
+        const start = positions[idx];
+        if (!Number.isFinite(start) || start < 0) continue;
+        const boundaryPos = variantOptions.preferEnd ? start + text.length : start;
+        const score = Math.abs(boundaryPos - mappedHint);
+        if (score < bestScore) {
+          bestScore = score;
+          bestIndex = idx;
+        }
+      }
+      return { index: bestIndex, score: bestScore };
+    };
     if (wholeWord && liveText) {
-      const mappedHint = resolveMappedHint(text, Boolean(variantOptions.preferEnd));
       const lookupOptions = resolveLemmaAwareTokenLookupOptions(options.suggestion, anchorSnapshot);
       const positions = getWordTokenPositionsInText(liveText, text);
       const hintedIndex = findWordTokenMatchIndexInText(
@@ -5578,6 +5640,27 @@ async function findTokenRangeForAnchor(context, paragraph, anchorSnapshot, optio
         })
       ) {
         return null;
+      }
+    } else if (liveText) {
+      const positions = findAllExactSnippetOccurrences(liveText, text);
+      if (positions.length) {
+        const closest = resolveClosestOccurrenceIndex(positions);
+        if (closest.index >= 0) {
+          const maxDrift = variantOptions.maxResolvedHintDrift;
+          if (
+            Number.isFinite(mappedHint) &&
+            Number.isFinite(maxDrift) &&
+            maxDrift >= 0 &&
+            Number.isFinite(closest.score) &&
+            closest.score > maxDrift
+          ) {
+            return null;
+          }
+          targetIndex = Math.max(0, Math.min(closest.index, matches.items.length - 1));
+          if (targetIndex < positions.length) {
+            resolvedStart = positions[targetIndex];
+          }
+        }
       }
     }
     return {
@@ -5820,14 +5903,14 @@ async function resolveStrictInsertRangeForSuggestion(
     return null;
   };
   const beforeAnchor =
-    persistedBoundary?.beforeToken ??
     boundary?.beforeToken ??
+    persistedBoundary?.beforeToken ??
     meta.targetTokenBefore ??
     meta.sourceTokenBefore ??
     null;
   const afterAnchor =
-    persistedBoundary?.afterToken ??
     boundary?.afterToken ??
+    persistedBoundary?.afterToken ??
     meta.targetTokenAfter ??
     meta.sourceTokenAfter ??
     null;
@@ -5840,42 +5923,61 @@ async function resolveStrictInsertRangeForSuggestion(
   const liveText = paragraph.text || "";
   const explicitQuoteIntent =
     normalizeQuoteBoundaryIntent(
-      persistedBoundary?.explicitQuoteIntent ??
+      boundary?.explicitQuoteIntent ??
+        boundary?.quotePolicy ??
+        persistedBoundary?.explicitQuoteIntent ??
         suggestion?.meta?.op?.explicitQuoteIntent ??
         op?.explicitQuoteIntent ??
-        boundary?.explicitQuoteIntent ??
-        boundary?.quotePolicy
+        persistedBoundary?.quotePolicy
     ) ?? "unknown";
   const preferRawQuoteAnchors = explicitQuoteIntent !== "unknown" && explicitQuoteIntent !== "none";
   const requiresAfterQuoteBoundary =
     explicitQuoteIntent === "after_closing_quote" || explicitQuoteIntent === "after_opening_quote";
-  const preferredCandidates = [
-    persistedBoundary?.sourceBoundaryPos,
-    suggestion?.meta?.op?.originalPos,
-    boundary?.resolvedPos,
-    boundary?.requestedPos,
-    boundary?.sourceBoundaryEnd,
-    boundary?.sourceBoundaryStart,
-    suggestion?.meta?.op?.correctedPos,
-    suggestion?.meta?.op?.pos,
-    suggestion?.charHint?.start,
-    meta?.targetCharStart,
-    meta?.charStart,
-  ].filter((value, index, array) => Number.isFinite(value) && value >= 0 && array.indexOf(value) === index);
+  const preferredCandidateSpecs = [
+    { value: boundary?.resolvedPos, isLive: true },
+    { value: boundary?.requestedPos, isLive: true },
+    { value: boundary?.sourceBoundaryStart, isLive: true },
+    { value: boundary?.sourceBoundaryEnd, isLive: true },
+    { value: persistedBoundary?.sourceBoundaryPos, isLive: false },
+    { value: suggestion?.meta?.op?.originalPos, isLive: false },
+    { value: suggestion?.meta?.op?.correctedPos, isLive: false },
+    { value: suggestion?.meta?.op?.pos, isLive: false },
+    { value: suggestion?.charHint?.start, isLive: false },
+    { value: meta?.targetCharStart, isLive: false },
+    { value: meta?.charStart, isLive: false },
+  ];
+  const seenPreferredHints = new Set();
+  const preferredCandidates = preferredCandidateSpecs
+    .filter((candidate) => Number.isFinite(candidate?.value) && candidate.value >= 0)
+    .filter((candidate) => {
+      const key = `${candidate.isLive ? "live" : "source"}:${Math.floor(candidate.value)}`;
+      if (seenPreferredHints.has(key)) return false;
+      seenPreferredHints.add(key);
+      return true;
+    });
   const preferredLiveHint = preferredCandidates.reduce((resolved, candidate) => {
     if (resolved >= 0) return resolved;
-    const mapped = sourceText
-      ? mapIndexAcrossCanonical(sourceText, liveText, candidate, { allowEnd: true })
-      : candidate;
+    if (candidate?.isLive) {
+      const safeLive = Math.max(0, Math.min(liveText.length, Math.floor(candidate.value)));
+      return Number.isFinite(safeLive) ? safeLive : -1;
+    }
+    const mapped =
+      sourceText && typeof sourceText === "string" && sourceText.length
+        ? mapIndexAcrossCanonical(sourceText, liveText, candidate.value, { allowEnd: true })
+        : candidate.value;
     return Number.isFinite(mapped) && mapped >= 0 ? mapped : -1;
   }, -1);
+  const beforeHintIsLive = Number.isFinite(boundary?.sourceBoundaryStart);
+  const afterHintIsLive = Number.isFinite(boundary?.sourceBoundaryEnd);
+  const pairSourceText =
+    beforeHintIsLive || afterHintIsLive ? "" : sourceText;
   const pairResolved =
     beforeAnchor && afterAnchor
       ? await resolveTokenPairRangesForAnchors(
           context,
           paragraph,
           liveText,
-          sourceText,
+          pairSourceText,
           suggestion,
           beforeAnchor,
           afterAnchor,
@@ -5890,7 +5992,7 @@ async function resolveStrictInsertRangeForSuggestion(
   const beforeResolved = pairResolved?.beforeResolved ??
     (beforeAnchor
       ? await findTokenRangeForAnchor(context, paragraph, beforeAnchor, {
-          sourceText,
+          sourceText: beforeHintIsLive ? "" : sourceText,
           liveText,
           suggestion,
           preferEnd: true,
@@ -5902,7 +6004,7 @@ async function resolveStrictInsertRangeForSuggestion(
   const afterResolved = pairResolved?.afterResolved ??
     (afterAnchor
       ? await findTokenRangeForAnchor(context, paragraph, afterAnchor, {
-          sourceText,
+          sourceText: afterHintIsLive ? "" : sourceText,
           liveText,
           suggestion,
           hintIndex: boundary?.sourceBoundaryEnd,
@@ -5973,6 +6075,163 @@ async function resolveStrictInsertRangeForSuggestion(
     });
     if (Number.isFinite(mappedAfterStart) && mappedAfterStart >= 0) {
       afterStart = mappedAfterStart;
+    }
+  }
+
+  const beforeAnchorRawToken =
+    typeof beforeAnchor?.tokenText === "string" ? beforeAnchor.tokenText.trim() : "";
+  const beforeAnchorWordToken = getCleanWordTokenFromAnchor(beforeAnchor);
+  const afterAnchorWordToken = getCleanWordTokenFromAnchor(afterAnchor);
+  const beforeAnchorIsPunctuationOnly = Boolean(beforeAnchorRawToken) && !beforeAnchorWordToken;
+  if (beforeAnchorIsPunctuationOnly) {
+    logDesktopVerbose("Desktop strict insert punctuation boundary entry", {
+      suggestionId: suggestion?.id ?? null,
+      traceId: suggestion?.meta?.op?.traceId ?? null,
+      punctuationToken: beforeAnchorRawToken,
+      afterToken: afterAnchorWordToken || null,
+      beforeStart: Number.isFinite(beforeStart) ? beforeStart : null,
+      afterStart: Number.isFinite(afterStart) ? afterStart : null,
+      preferredLiveHint: Number.isFinite(preferredLiveHint) ? preferredLiveHint : null,
+    });
+  }
+  if (beforeAnchorIsPunctuationOnly && afterAnchorWordToken && typeof liveText === "string" && liveText.length) {
+    const punctuationPositions = findAllExactSnippetOccurrences(liveText, beforeAnchorRawToken).filter(
+      (idx) => Number.isFinite(idx) && idx >= 0
+    );
+    const afterPositions = getWordTokenPositionsInText(liveText, afterAnchorWordToken).filter(
+      (idx) => Number.isFinite(idx) && idx >= 0
+    );
+    const preferredBoundaryHint = Number.isFinite(preferredLiveHint)
+      ? preferredLiveHint
+      : Number.isFinite(afterStart) && afterStart >= 0
+        ? afterStart
+        : Number.isFinite(beforeStart) && beforeStart >= 0
+          ? beforeStart
+          : -1;
+    let bestMatch = null;
+    for (const candidateAfterStart of afterPositions) {
+      let scan = candidateAfterStart - 1;
+      while (scan >= 0 && /\s/u.test(liveText[scan] || "")) scan--;
+      if (scan < 0) continue;
+      let punctuationStart = -1;
+      for (const punctIdx of punctuationPositions) {
+        const punctEnd = punctIdx + beforeAnchorRawToken.length - 1;
+        if (punctEnd === scan) {
+          punctuationStart = punctIdx;
+          break;
+        }
+      }
+      if (punctuationStart < 0) continue;
+      const boundaryPos = punctuationStart + beforeAnchorRawToken.length;
+      const score =
+        preferredBoundaryHint >= 0 ? Math.abs(boundaryPos - preferredBoundaryHint) : candidateAfterStart;
+      if (!bestMatch || score < bestMatch.score) {
+        bestMatch = {
+          punctuationStart,
+          punctuationEnd: punctuationStart + beforeAnchorRawToken.length,
+          afterStart: candidateAfterStart,
+          score,
+        };
+      }
+    }
+    if (bestMatch) {
+      const gapText = liveText.slice(bestMatch.punctuationEnd, bestMatch.afterStart);
+      if (gapText.includes(",")) {
+        logDesktopVerbose("Desktop strict insert punctuation pair noop(existing comma)", {
+          suggestionId: suggestion?.id ?? null,
+          traceId: suggestion?.meta?.op?.traceId ?? null,
+          punctuationToken: beforeAnchorRawToken,
+          afterToken: afterAnchorWordToken,
+          punctuationStart: bestMatch.punctuationStart,
+          afterStart: bestMatch.afterStart,
+          gapText,
+        });
+        return {
+          range: null,
+          insertLocation: null,
+          reason: "insert_gap_already_has_comma",
+        };
+      }
+      const punctuationRange = await getRangeForCharacterSpan(
+        context,
+        paragraph,
+        liveText,
+        bestMatch.punctuationStart,
+        bestMatch.punctuationEnd,
+        `${reason}-punctuation-before-word`,
+        beforeAnchorRawToken
+      );
+      if (punctuationRange) {
+        logDesktopVerbose("Desktop strict insert punctuation pair resolved", {
+          suggestionId: suggestion?.id ?? null,
+          traceId: suggestion?.meta?.op?.traceId ?? null,
+          punctuationToken: beforeAnchorRawToken,
+          afterToken: afterAnchorWordToken,
+          punctuationStart: bestMatch.punctuationStart,
+          afterStart: bestMatch.afterStart,
+        });
+        return {
+          range: punctuationRange,
+          insertLocation: Word.InsertLocation.after,
+          reason: null,
+        };
+      }
+      logDesktopVerbose("Desktop strict insert punctuation pair range unresolved", {
+        suggestionId: suggestion?.id ?? null,
+        traceId: suggestion?.meta?.op?.traceId ?? null,
+        punctuationToken: beforeAnchorRawToken,
+        afterToken: afterAnchorWordToken,
+        punctuationStart: bestMatch.punctuationStart,
+        afterStart: bestMatch.afterStart,
+      });
+    } else {
+      logDesktopVerbose("Desktop strict insert punctuation pair unresolved", {
+        suggestionId: suggestion?.id ?? null,
+        traceId: suggestion?.meta?.op?.traceId ?? null,
+        punctuationToken: beforeAnchorRawToken,
+        afterToken: afterAnchorWordToken,
+        punctuationCandidates: punctuationPositions.length,
+        afterCandidates: afterPositions.length,
+      });
+    }
+  }
+  if (beforeAnchorIsPunctuationOnly && beforeRange && Number.isFinite(beforeStart) && beforeStart >= 0) {
+    const beforeEnd = beforeStart + (typeof beforeText === "string" ? beforeText.length : 0);
+    if (Number.isFinite(beforeEnd) && beforeEnd >= beforeStart) {
+      const gapEnd =
+        Number.isFinite(afterStart) && afterStart >= beforeEnd
+          ? afterStart
+          : Math.min(liveText.length, beforeEnd + 8);
+      const gapText = liveText.slice(beforeEnd, gapEnd);
+      if (gapText.includes(",")) {
+        logDesktopVerbose("Desktop strict insert punctuation fallback noop(existing comma)", {
+          suggestionId: suggestion?.id ?? null,
+          traceId: suggestion?.meta?.op?.traceId ?? null,
+          punctuationToken: beforeAnchorRawToken,
+          beforeStart,
+          beforeEnd,
+          gapEnd,
+          gapText,
+        });
+        return {
+          range: null,
+          insertLocation: null,
+          reason: "insert_gap_already_has_comma",
+        };
+      }
+      logDesktopVerbose("Desktop strict insert punctuation fallback resolved", {
+        suggestionId: suggestion?.id ?? null,
+        traceId: suggestion?.meta?.op?.traceId ?? null,
+        punctuationToken: beforeAnchorRawToken,
+        beforeStart,
+        beforeEnd,
+        gapEnd,
+      });
+      return {
+        range: beforeRange,
+        insertLocation: Word.InsertLocation.after,
+        reason: null,
+      };
     }
   }
 
@@ -6260,6 +6519,13 @@ async function resolveStrictInsertRangeForSuggestion(
     const beforeEnd = beforeStart + beforeText.length;
     if (beforeEnd <= afterStart) {
       const gapText = pairResolved?.gapText ?? liveText.slice(beforeEnd, afterStart);
+      if (gapText.includes(",")) {
+        return {
+          range: null,
+          insertLocation: null,
+          reason: "insert_gap_already_has_comma",
+        };
+      }
       if (!gapText.includes(",")) {
         const gapNoLeadingWs = gapText.replace(/^\s+/u, "");
         const gapNoTrailingWs = gapText.replace(/\s+$/u, "");
@@ -6334,6 +6600,13 @@ async function resolveStrictInsertRangeForSuggestion(
     const gapEnd =
       Number.isFinite(afterStart) && afterStart >= beforeEnd ? afterStart : liveText.length;
     const gapText = liveText.slice(beforeEnd, gapEnd);
+    if (gapText.includes(",")) {
+      return {
+        range: null,
+        insertLocation: null,
+        reason: "insert_gap_already_has_comma",
+      };
+    }
     let closingQuoteRun = "";
     let quoteCursor = 0;
     while (quoteCursor < gapText.length && isClosingQuoteChar(gapText[quoteCursor], beforeEnd + quoteCursor, liveText)) {
@@ -10216,8 +10489,8 @@ function buildDesktopOperationLogEntry(op, planText = "", sourceText = "") {
           targetBoundaryPos: Number.isFinite(op.boundary?.targetBoundaryPos)
             ? op.boundary.targetBoundaryPos
             : null,
-          beforeToken: op.boundary?.beforeToken?.tokenText || null,
-          afterToken: op.boundary?.afterToken?.tokenText || null,
+          beforeToken: getBoundaryTokenText(op.boundary?.beforeToken) || null,
+          afterToken: getBoundaryTokenText(op.boundary?.afterToken) || null,
           leftContext:
             typeof op.boundary?.leftContext === "string" ? op.boundary.leftContext.slice(-24) : null,
           rightContext:
@@ -11829,6 +12102,9 @@ async function checkDocumentTextDesktop(checkToken) {
         }
         const paras = await wordDesktopAdapter.getParagraphs(context);
         const deterministicMappingV2 = isDeterministicMappingV2Enabled();
+        if (!DESKTOP_DIRECT_INSERT_ENABLED) {
+          logDesktopVerbose("Desktop direct insert fast-path disabled");
+        }
         for (const job of applyJobs) {
           const paragraph = paras.items[job.paragraphIndex];
           if (!paragraph) {
@@ -11907,7 +12183,11 @@ async function checkDocumentTextDesktop(checkToken) {
                 opIndex,
                 op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
               });
-              if (!deterministicMappingV2 && isDesktopDirectInsertOp(op)) {
+              if (
+                DESKTOP_DIRECT_INSERT_ENABLED &&
+                !deterministicMappingV2 &&
+                isDesktopDirectInsertOp(op)
+              ) {
                 const directStatus = await applyDesktopAuthoritativeInsertOp(
                   context,
                   paragraph,
