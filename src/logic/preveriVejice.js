@@ -3580,6 +3580,10 @@ function buildInsertSuggestionMetadata(entry, { originalCharIndex, targetCharInd
       explicitQuoteIntent: classifyIntent(),
       leftContext: correctedText.slice(Math.max(0, targetIndex - 12), Math.max(0, targetIndex)),
       rightContext: correctedText.slice(targetIndex + 1, Math.min(correctedText.length, targetIndex + 13)),
+      beforeTokenOccurrence: Number.isFinite(beforeAnchor?.textOccurrence) ? beforeAnchor.textOccurrence : null,
+      afterTokenOccurrence: Number.isFinite(afterAnchor?.textOccurrence) ? afterAnchor.textOccurrence : null,
+      beforeTokenIndex: Number.isFinite(beforeAnchor?.tokenIndex) ? beforeAnchor.tokenIndex : null,
+      afterTokenIndex: Number.isFinite(afterAnchor?.tokenIndex) ? afterAnchor.tokenIndex : null,
       exactApplyWindow: buildExactApplyWindowMeta(originalText, correctedText, srcIndex, targetIndex),
     };
   };
@@ -5730,13 +5734,34 @@ function resolveTokenPairMatchInText(
   afterAnchor,
   options = {}
 ) {
+  const returnDiagnostics = Boolean(options?.returnDiagnostics);
   const beforeToken = getCleanWordTokenFromAnchor(beforeAnchor);
   const afterToken = getCleanWordTokenFromAnchor(afterAnchor);
-  if (!beforeToken || !afterToken || !liveText) return null;
+  if (!beforeToken || !afterToken || !liveText) {
+    return returnDiagnostics
+      ? {
+          match: null,
+          ambiguous: false,
+          reason: "missing_tokens_or_text",
+          candidateCount: 0,
+          topCandidateCount: 0,
+        }
+      : null;
+  }
 
   const beforePositions = getWordTokenPositionsInText(liveText, beforeToken);
   const afterPositions = getWordTokenPositionsInText(liveText, afterToken);
-  if (!beforePositions.length || !afterPositions.length) return null;
+  if (!beforePositions.length || !afterPositions.length) {
+    return returnDiagnostics
+      ? {
+          match: null,
+          ambiguous: false,
+          reason: "missing_token_positions",
+          candidateCount: 0,
+          topCandidateCount: 0,
+        }
+      : null;
+  }
 
   const beforeLookup = resolveLemmaAwareTokenLookupOptions(suggestion, beforeAnchor);
   const afterLookup = resolveLemmaAwareTokenLookupOptions(suggestion, afterAnchor);
@@ -5750,6 +5775,12 @@ function resolveTokenPairMatchInText(
   });
   const preferredGapHint = Number.isFinite(options.preferredGapHintIndex)
     ? Math.max(0, Math.min(Math.floor(options.preferredGapHintIndex), liveText.length))
+    : null;
+  const preferredBeforeOccurrence = Number.isFinite(options.beforeOccurrence)
+    ? Math.max(0, Math.floor(options.beforeOccurrence))
+    : null;
+  const preferredAfterOccurrence = Number.isFinite(options.afterOccurrence)
+    ? Math.max(0, Math.floor(options.afterOccurrence))
     : null;
   const allowQuoteGap = options.allowQuoteGap !== false;
   const allowCommaInGap = Boolean(options.allowCommaInGap);
@@ -5793,6 +5824,8 @@ function resolveTokenPairMatchInText(
       if (Number.isFinite(beforeHint)) score += Math.abs(beforeStart - beforeHint);
       if (Number.isFinite(afterHint)) score += Math.abs(afterStart - afterHint);
       if (Number.isFinite(preferredGapHint)) score += Math.abs(beforeEnd - preferredGapHint);
+      if (Number.isFinite(preferredBeforeOccurrence)) score += Math.abs(beforeIndex - preferredBeforeOccurrence) * 3;
+      if (Number.isFinite(preferredAfterOccurrence)) score += Math.abs(afterIndex - preferredAfterOccurrence) * 3;
       candidates.push({
         beforeIndex,
         afterIndex,
@@ -5805,17 +5838,50 @@ function resolveTokenPairMatchInText(
     }
   }
 
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    return returnDiagnostics
+      ? {
+          match: null,
+          ambiguous: false,
+          reason: "no_candidates",
+          candidateCount: 0,
+          topCandidateCount: 0,
+        }
+      : null;
+  }
   candidates.sort((left, right) => left.score - right.score);
-  if (candidates.length > 1 && candidates[1].score === candidates[0].score) {
-    return null;
+  const bestScore = candidates[0].score;
+  const topCandidateCount = candidates.reduce((count, candidate) => {
+    if (candidate.score === bestScore) return count + 1;
+    return count;
+  }, 0);
+  if (topCandidateCount > 1) {
+    return returnDiagnostics
+      ? {
+          match: null,
+          ambiguous: true,
+          reason: "score_tie",
+          candidateCount: candidates.length,
+          topCandidateCount,
+        }
+      : null;
   }
 
-  return {
+  const match = {
     beforeToken,
     afterToken,
     ...candidates[0],
   };
+  if (returnDiagnostics) {
+    return {
+      match,
+      ambiguous: false,
+      reason: null,
+      candidateCount: candidates.length,
+      topCandidateCount,
+    };
+  }
+  return match;
 }
 
 async function resolveTokenPairRangesForAnchors(
@@ -5850,8 +5916,32 @@ async function resolveTokenPairRangesForAnchors(
   afterMatches.load("items");
   await context.sync();
 
-  const beforeRange = beforeMatches.items[pairMatch.beforeIndex] || null;
-  const afterRange = afterMatches.items[pairMatch.afterIndex] || null;
+  const beforeCharEnd = pairMatch.beforeStart + pairMatch.beforeToken.length;
+  const afterCharEnd = pairMatch.afterStart + pairMatch.afterToken.length;
+  let beforeRange = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    liveText,
+    pairMatch.beforeStart,
+    beforeCharEnd,
+    "strict-token-pair-before",
+    pairMatch.beforeToken
+  );
+  let afterRange = await getRangeForCharacterSpan(
+    context,
+    paragraph,
+    liveText,
+    pairMatch.afterStart,
+    afterCharEnd,
+    "strict-token-pair-after",
+    pairMatch.afterToken
+  );
+  if (!beforeRange) {
+    beforeRange = beforeMatches.items[pairMatch.beforeIndex] || null;
+  }
+  if (!afterRange) {
+    afterRange = afterMatches.items[pairMatch.afterIndex] || null;
+  }
   if (!beforeRange || !afterRange) return null;
 
   return {
@@ -5985,6 +6075,16 @@ async function resolveStrictInsertRangeForSuggestion(
             beforeHintIndex: boundary?.sourceBoundaryStart,
             afterHintIndex: boundary?.sourceBoundaryEnd,
             preferredGapHintIndex: preferredLiveHint,
+            beforeOccurrence: Number.isFinite(boundary?.beforeTokenOccurrence)
+              ? boundary.beforeTokenOccurrence
+              : Number.isFinite(persistedBoundary?.beforeTokenOccurrence)
+                ? persistedBoundary.beforeTokenOccurrence
+                : null,
+            afterOccurrence: Number.isFinite(boundary?.afterTokenOccurrence)
+              ? boundary.afterTokenOccurrence
+              : Number.isFinite(persistedBoundary?.afterTokenOccurrence)
+                ? persistedBoundary.afterTokenOccurrence
+                : null,
             allowQuoteGap: true,
           }
         )
@@ -9201,6 +9301,22 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
     const gapEnd = afterStart >= 0 ? afterStart : gapStart;
     const gapText =
       gapStart >= 0 && gapEnd >= gapStart ? snapshotText.slice(gapStart, gapEnd) : "";
+    const boundaryCenter = Number.isFinite(gapStart)
+      ? gapStart
+      : Number.isFinite(resolvedPos)
+        ? resolvedPos
+        : Number.isFinite(requestedPos)
+          ? requestedPos
+          : -1;
+    const contextRadius = 24;
+    const leftContext =
+      boundaryCenter >= 0
+        ? snapshotText.slice(Math.max(0, boundaryCenter - contextRadius), Math.max(0, boundaryCenter))
+        : "";
+    const rightContext =
+      boundaryCenter >= 0
+        ? snapshotText.slice(boundaryCenter, Math.min(snapshotText.length, boundaryCenter + contextRadius))
+        : "";
     let preferredSide = "after_before_token";
     if (afterStart >= 0 && Number.isFinite(resolvedPos) && resolvedPos >= afterStart) {
       preferredSide = "before_after_token";
@@ -9246,6 +9362,16 @@ function resolveInsertOperationFromSnapshot(snapshotText, sourceText, suggestion
       sourceBoundaryEnd: gapEnd >= gapStart ? gapEnd : null,
       requestedPos: Number.isFinite(requestedPos) ? requestedPos : null,
       resolvedPos: Number.isFinite(resolvedPos) ? resolvedPos : null,
+      leftContext,
+      rightContext,
+      beforeTokenOccurrence:
+        Number.isFinite(boundaryBeforeAnchor?.textOccurrence) ? boundaryBeforeAnchor.textOccurrence : null,
+      afterTokenOccurrence:
+        Number.isFinite(boundaryAfterAnchor?.textOccurrence) ? boundaryAfterAnchor.textOccurrence : null,
+      beforeTokenIndex:
+        Number.isFinite(boundaryBeforeAnchor?.tokenIndex) ? boundaryBeforeAnchor.tokenIndex : null,
+      afterTokenIndex:
+        Number.isFinite(boundaryAfterAnchor?.tokenIndex) ? boundaryAfterAnchor.tokenIndex : null,
       authoritative: authoritativeInsert,
     };
   };
@@ -10045,6 +10171,53 @@ function hasCommaNearMappedHint(snapshotText, mappedHint, radius = 4) {
   return false;
 }
 
+function collectBoundaryFingerprintPositionsInText(liveText, boundaryMeta = {}) {
+  if (typeof liveText !== "string" || !liveText.length) return [];
+  const leftRaw = typeof boundaryMeta?.leftContext === "string" ? boundaryMeta.leftContext : "";
+  const rightRaw = typeof boundaryMeta?.rightContext === "string" ? boundaryMeta.rightContext : "";
+  let leftProbe = leftRaw ? leftRaw.slice(-18) : "";
+  let rightProbe = rightRaw ? rightRaw.slice(0, 18) : "";
+  if (!leftProbe && !rightProbe) return [];
+  const positions = [];
+  for (let pos = 0; pos <= liveText.length; pos++) {
+    if (leftProbe) {
+      const leftStart = Math.max(0, pos - leftProbe.length);
+      if (liveText.slice(leftStart, pos) !== leftProbe) continue;
+    }
+    if (rightProbe) {
+      const rightEnd = Math.min(liveText.length, pos + rightProbe.length);
+      if (liveText.slice(pos, rightEnd) !== rightProbe) continue;
+    }
+    positions.push(pos);
+  }
+  return positions;
+}
+
+function evaluateBoundaryFingerprintUniquenessInText(
+  liveText,
+  boundaryMeta = {},
+  expectedPos = null,
+  nearRadius = 24
+) {
+  const positions = collectBoundaryFingerprintPositionsInText(liveText, boundaryMeta);
+  if (!positions.length) {
+    return { unique: false, ambiguous: false, reason: "fingerprint_not_found", positions: [] };
+  }
+  if (positions.length === 1) {
+    return { unique: true, ambiguous: false, reason: null, positions, resolvedPos: positions[0] };
+  }
+  if (Number.isFinite(expectedPos)) {
+    const near = positions.filter((candidate) => Math.abs(candidate - expectedPos) <= Math.max(0, nearRadius));
+    if (near.length === 1) {
+      return { unique: true, ambiguous: false, reason: null, positions, resolvedPos: near[0] };
+    }
+    if (near.length > 1) {
+      return { unique: false, ambiguous: true, reason: "fingerprint_multiple_near_expected", positions };
+    }
+  }
+  return { unique: false, ambiguous: true, reason: "fingerprint_multiple_candidates", positions };
+}
+
 function findCommaIndexNearMappedHint(snapshotText, mappedHint, radius = 4) {
   if (
     typeof snapshotText !== "string" ||
@@ -10575,6 +10748,12 @@ function isInsertSuggestionBoundaryIntact(liveText, sourceText, suggestion) {
       beforeHintIndex: boundaryMeta?.sourceBoundaryStart,
       afterHintIndex: boundaryMeta?.sourceBoundaryEnd,
       preferredGapHintIndex: preferredGapHint,
+      beforeOccurrence: Number.isFinite(boundaryMeta?.beforeTokenOccurrence)
+        ? boundaryMeta.beforeTokenOccurrence
+        : null,
+      afterOccurrence: Number.isFinite(boundaryMeta?.afterTokenOccurrence)
+        ? boundaryMeta.afterTokenOccurrence
+        : null,
       allowQuoteGap: true,
       allowCommaInGap: true,
     })
@@ -12271,16 +12450,294 @@ async function checkDocumentTextDesktop(checkToken) {
               });
             }
             deterministicPlannerSkips += countDeterministicSkippedReasons(deferredSkipped);
-            const deferredRanges = await getRangesForPlannedOperations(
-              context,
-              paragraph,
-              currentSnapshotText,
-              deferredPlan,
-              "desktop-batch"
-            );
+            const applyOpToVirtualText = (text, op) => {
+              if (typeof text !== "string" || !op || typeof op !== "object") return text;
+              const startRaw =
+                Number.isFinite(op?.start) && op.start >= 0
+                  ? Math.floor(op.start)
+                  : Number.isFinite(op?.pos) && op.pos >= 0
+                    ? Math.floor(op.pos)
+                    : 0;
+              const safeStart = Math.max(0, Math.min(text.length, startRaw));
+              const endRaw = Number.isFinite(op?.end) && op.end >= 0 ? Math.floor(op.end) : safeStart;
+              const safeEnd = Math.max(safeStart, Math.min(text.length, endRaw));
+              const replacement = typeof op?.replacement === "string" ? op.replacement : "";
+              if (op.kind === "insert") {
+                return `${text.slice(0, safeStart)}${replacement}${text.slice(safeStart)}`;
+              }
+              if (op.kind === "delete" || op.kind === "replace") {
+                return `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
+              }
+              return text;
+            };
+            let deferredVirtualText = currentSnapshotText;
             for (let deferredIndex = 0; deferredIndex < deferredPlan.length; deferredIndex++) {
               const deferredOp = deferredPlan[deferredIndex];
-              const deferredRange = deferredRanges[deferredIndex];
+              // Re-sync paragraph text each deferred step so range resolution uses live
+              // content after previous queued operations (prevents drift on repeated tokens).
+              try {
+                paragraph.load("text");
+                await context.sync();
+                if (typeof paragraph.text === "string") {
+                  deferredVirtualText = paragraph.text;
+                }
+              } catch (refreshErr) {
+                warnDesktopVerbose("Desktop deferred step text refresh failed", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  err: refreshErr,
+                });
+              }
+              const deferredOpSuggestions = Array.isArray(deferredOp?.suggestions)
+                ? deferredOp.suggestions.filter(Boolean)
+                : [];
+              if (deferredOp?.kind === "insert" && deferredOpSuggestions.length) {
+                const alreadyApplied = deferredOpSuggestions.every((suggestion) =>
+                  isSuggestionAppliedInLiveText(deferredVirtualText, sourceForPlan, suggestion, planOptions)
+                );
+                if (alreadyApplied) {
+                  logDesktopVerbose("Desktop deferred op:skipped already applied", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+                const hasCommaAlreadyInTokenGap = deferredOpSuggestions.some((suggestion) => {
+                  const meta = suggestion?.meta?.anchor || {};
+                  const boundaryMeta = meta?.boundaryMeta || {};
+                  const beforeAnchor =
+                    boundaryMeta?.beforeToken ??
+                    meta?.sourceTokenBefore ??
+                    meta?.targetTokenBefore ??
+                    null;
+                  const afterAnchor =
+                    boundaryMeta?.afterToken ??
+                    meta?.sourceTokenAfter ??
+                    meta?.targetTokenAfter ??
+                    null;
+                  if (!beforeAnchor || !afterAnchor) return false;
+                  const preferredGapHint = firstFiniteValue([
+                    boundaryMeta?.sourceBoundaryPos,
+                    boundaryMeta?.sourceBoundaryStart,
+                    suggestion?.meta?.op?.originalPos,
+                    suggestion?.charHint?.start,
+                    meta?.charStart,
+                  ]);
+                  const pairMatch = resolveTokenPairMatchInText(
+                    deferredVirtualText,
+                    sourceForPlan,
+                    suggestion,
+                    beforeAnchor,
+                    afterAnchor,
+                    {
+                      beforeHintIndex: boundaryMeta?.sourceBoundaryStart,
+                      afterHintIndex: boundaryMeta?.sourceBoundaryEnd,
+                      preferredGapHintIndex: preferredGapHint,
+                      beforeOccurrence: Number.isFinite(boundaryMeta?.beforeTokenOccurrence)
+                        ? boundaryMeta.beforeTokenOccurrence
+                        : null,
+                      afterOccurrence: Number.isFinite(boundaryMeta?.afterTokenOccurrence)
+                        ? boundaryMeta.afterTokenOccurrence
+                        : null,
+                      allowQuoteGap: true,
+                      allowCommaInGap: true,
+                    }
+                  );
+                  return Boolean(pairMatch && typeof pairMatch.gapText === "string" && pairMatch.gapText.includes(","));
+                });
+                if (hasCommaAlreadyInTokenGap) {
+                  logDesktopVerbose("Desktop deferred op:skipped existing comma in token gap", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+                const hasAmbiguousTokenPair = deferredOpSuggestions.some((suggestion) => {
+                  const meta = suggestion?.meta?.anchor || {};
+                  const boundaryMeta = meta?.boundaryMeta || {};
+                  const beforeAnchor =
+                    boundaryMeta?.beforeToken ??
+                    meta?.sourceTokenBefore ??
+                    meta?.targetTokenBefore ??
+                    null;
+                  const afterAnchor =
+                    boundaryMeta?.afterToken ??
+                    meta?.sourceTokenAfter ??
+                    meta?.targetTokenAfter ??
+                    null;
+                  if (!beforeAnchor || !afterAnchor) return false;
+                  const preferredGapHint = firstFiniteValue([
+                    boundaryMeta?.sourceBoundaryPos,
+                    boundaryMeta?.sourceBoundaryStart,
+                    suggestion?.meta?.op?.originalPos,
+                    suggestion?.charHint?.start,
+                    meta?.charStart,
+                  ]);
+                  const pairDiagnostics = resolveTokenPairMatchInText(
+                    deferredVirtualText,
+                    sourceForPlan,
+                    suggestion,
+                    beforeAnchor,
+                    afterAnchor,
+                    {
+                      beforeHintIndex: boundaryMeta?.sourceBoundaryStart,
+                      afterHintIndex: boundaryMeta?.sourceBoundaryEnd,
+                      preferredGapHintIndex: preferredGapHint,
+                      beforeOccurrence: Number.isFinite(boundaryMeta?.beforeTokenOccurrence)
+                        ? boundaryMeta.beforeTokenOccurrence
+                        : null,
+                      afterOccurrence: Number.isFinite(boundaryMeta?.afterTokenOccurrence)
+                        ? boundaryMeta.afterTokenOccurrence
+                        : null,
+                      allowQuoteGap: true,
+                      allowCommaInGap: true,
+                      returnDiagnostics: true,
+                    }
+                  );
+                  return Boolean(pairDiagnostics?.ambiguous);
+                });
+                if (hasAmbiguousTokenPair) {
+                  logDesktopVerbose("Desktop deferred op:skipped ambiguous token pair", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+                const boundaryHintCandidates = [
+                  deferredOp?.boundary?.sourceBoundaryPos,
+                  deferredOp?.boundary?.sourceBoundaryStart,
+                  deferredOp?.boundary?.sourceBoundaryEnd,
+                  deferredOp?.boundary?.resolvedPos,
+                  deferredOp?.boundary?.requestedPos,
+                  deferredOp?.start,
+                  deferredOp?.end,
+                ]
+                  .filter((value, index, list) => Number.isFinite(value) && list.indexOf(value) === index)
+                  .map((hint) => {
+                    const mapped = mapIndexAcrossCanonical(currentSnapshotText, deferredVirtualText, hint, {
+                      allowEnd: true,
+                    });
+                    return Number.isFinite(mapped) ? mapped : hint;
+                  });
+                const expectedBoundaryPos =
+                  boundaryHintCandidates.find((hint) => Number.isFinite(hint) && hint >= 0) ?? null;
+                const fingerprintCheck = evaluateBoundaryFingerprintUniquenessInText(
+                  deferredVirtualText,
+                  deferredOp?.boundary || {},
+                  expectedBoundaryPos,
+                  24
+                );
+                if (fingerprintCheck?.ambiguous) {
+                  logDesktopVerbose("Desktop deferred op:skipped ambiguous boundary fingerprint", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    reason: fingerprintCheck?.reason || null,
+                    fingerprintPositions: fingerprintCheck?.positions || [],
+                    expectedBoundaryPos,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+                const commaAlreadyNearBoundary = boundaryHintCandidates.some((hint) =>
+                  hasCommaNearMappedHint(deferredVirtualText, hint, 0)
+                );
+                if (commaAlreadyNearBoundary) {
+                  logDesktopVerbose("Desktop deferred op:skipped existing comma near boundary", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    boundaryHintCandidates,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+                if (typeof deferredOp?.replacement === "string" && deferredOp.replacement.includes(",")) {
+                  const simulatedText = applyOpToVirtualText(deferredVirtualText, deferredOp);
+                  const insertPosRaw =
+                    Number.isFinite(deferredOp?.start) && deferredOp.start >= 0
+                      ? Math.floor(deferredOp.start)
+                      : Number.isFinite(deferredOp?.pos) && deferredOp.pos >= 0
+                        ? Math.floor(deferredOp.pos)
+                        : 0;
+                  const insertPos = Math.max(0, Math.min(simulatedText.length, insertPosRaw));
+                  const checkFrom = Math.max(0, insertPos - 4);
+                  const checkTo = Math.min(simulatedText.length, insertPos + 4);
+                  const localWindow = simulatedText.slice(checkFrom, checkTo);
+                  if (/,\s*,/u.test(localWindow)) {
+                    logDesktopVerbose("Desktop deferred op:skipped double-comma guard", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      localWindow,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                    continue;
+                  }
+                }
+              }
+              const primaryDeferredSuggestion = deferredOpSuggestions[0] || null;
+              const hasBoundaryCue = Boolean(
+                deferredOp?.boundary?.beforeToken ||
+                  deferredOp?.boundary?.afterToken ||
+                  Number.isFinite(deferredOp?.boundary?.sourceBoundaryStart) ||
+                  Number.isFinite(deferredOp?.boundary?.sourceBoundaryEnd)
+              );
+              let deferredRange = null;
+              let deferredInsertLocation =
+                deferredOp?.insertLocation ??
+                (deferredOp.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace);
+              if (deferredOp?.kind === "insert" && primaryDeferredSuggestion) {
+                const strictInsertResolution = await resolveStrictInsertRangeForSuggestion(
+                  context,
+                  paragraph,
+                  deferredOp,
+                  primaryDeferredSuggestion,
+                  "desktop-batch-step-strict-insert"
+                );
+                if (strictInsertResolution?.range) {
+                  deferredRange = strictInsertResolution.range;
+                  deferredInsertLocation =
+                    strictInsertResolution.insertLocation ?? Word.InsertLocation.replace;
+                  if (typeof strictInsertResolution.replacement === "string") {
+                    deferredOp.replacement = strictInsertResolution.replacement;
+                  }
+                } else if (hasBoundaryCue) {
+                  applyRangeMisses++;
+                  logDesktopVerbose("Desktop deferred op:skipped strict boundary unresolved", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    reason: strictInsertResolution?.reason || "strict_insert_unresolved",
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
+                }
+              } else if (deferredOp?.kind === "delete" && primaryDeferredSuggestion) {
+                const strictDeleteResolution = await resolveStrictDeleteRangeForSuggestion(
+                  context,
+                  paragraph,
+                  primaryDeferredSuggestion,
+                  "desktop-batch-step-strict-delete"
+                );
+                if (strictDeleteResolution?.range) {
+                  deferredRange = strictDeleteResolution.range;
+                  deferredInsertLocation =
+                    strictDeleteResolution.insertLocation ?? Word.InsertLocation.replace;
+                  if (typeof strictDeleteResolution.replacement === "string") {
+                    deferredOp.replacement = strictDeleteResolution.replacement;
+                  }
+                }
+              }
+              if (!deferredRange) {
+                const deferredRangeResult = await getRangesForPlannedOperations(
+                  context,
+                  paragraph,
+                  deferredVirtualText,
+                  [deferredOp],
+                  "desktop-batch-step"
+                );
+                deferredRange = Array.isArray(deferredRangeResult) ? deferredRangeResult[0] : null;
+              }
               if (!deferredRange) {
                 applyRangeMisses++;
                 warn("Desktop batch op skipped: range not resolved", {
@@ -12290,25 +12747,66 @@ async function checkDocumentTextDesktop(checkToken) {
                 });
                 continue;
               }
+              let deferredResolvedRangeText = null;
+              const expectedDeleteComma =
+                deferredOp?.kind === "delete" &&
+                typeof deferredOp?.replacement === "string" &&
+                deferredOp.replacement.length === 0 &&
+                (typeof deferredOp?.snippet === "string"
+                  ? deferredOp.snippet.includes(",")
+                  : false ||
+                    deferredOpSuggestions.some((suggestion) => {
+                      const highlight =
+                        suggestion?.meta?.anchor?.highlightText ??
+                        suggestion?.highlightText ??
+                        "";
+                      return typeof highlight === "string" && highlight.includes(",");
+                    }));
+              if ((DESKTOP_VERBOSE_LOGS || expectedDeleteComma) && typeof deferredRange.load === "function") {
+                try {
+                  deferredRange.load("text");
+                  await context.sync();
+                  deferredResolvedRangeText =
+                    typeof deferredRange.text === "string" ? deferredRange.text : null;
+                } catch (rangeTextErr) {
+                  warnDesktopVerbose("Desktop deferred range text load failed", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    err: rangeTextErr,
+                  });
+                }
+              }
+              if (
+                expectedDeleteComma &&
+                typeof deferredResolvedRangeText === "string" &&
+                !deferredResolvedRangeText.includes(",")
+              ) {
+                applyRangeMisses++;
+                logDesktopVerbose("Desktop deferred op:skipped delete range mismatch", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex: deferredIndex,
+                  resolvedRangeText: deferredResolvedRangeText,
+                  op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                });
+                continue;
+              }
               try {
                 logDesktopVerbose("Desktop deferred op:attempt", {
                   paragraphIndex: job.paragraphIndex,
                   opIndex: deferredIndex,
+                  resolvedRangeText: deferredResolvedRangeText,
                   op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
                 });
-                const insertLocation =
-                  deferredOp?.insertLocation ??
-                  (deferredOp.kind === "insert"
-                    ? Word.InsertLocation.before
-                    : Word.InsertLocation.replace);
-                deferredRange.insertText(deferredOp.replacement, insertLocation);
+                deferredRange.insertText(deferredOp.replacement, deferredInsertLocation);
                 logDesktopVerbose("Desktop deferred op:queued", {
                   paragraphIndex: job.paragraphIndex,
                   opIndex: deferredIndex,
-                  insertLocation,
+                  insertLocation: deferredInsertLocation,
+                  resolvedRangeText: deferredResolvedRangeText,
                   op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
                 });
                 countAppliedSuggestions(deferredOp);
+                deferredVirtualText = applyOpToVirtualText(deferredVirtualText, deferredOp);
               } catch (err) {
                 applyOpFailures++;
                 warn("Desktop batch op failed", {
@@ -12316,6 +12814,67 @@ async function checkDocumentTextDesktop(checkToken) {
                   opIndex: deferredIndex,
                   kind: deferredOp?.kind,
                   err,
+                });
+              }
+            }
+            if (DESKTOP_VERBOSE_LOGS && deferredPlan.length) {
+              paragraph.load("text");
+              await context.sync();
+              const postDeferredText = paragraph.text || "";
+              const predictedText = typeof deferredVirtualText === "string" ? deferredVirtualText : "";
+              const hasPredictedDoubleComma = /,\s*,/u.test(predictedText);
+              const hasActualDoubleComma = /,\s*,/u.test(postDeferredText);
+              let firstDiffAt = -1;
+              const compareLen = Math.max(predictedText.length, postDeferredText.length);
+              for (let i = 0; i < compareLen; i++) {
+                const left = predictedText[i] ?? "";
+                const right = postDeferredText[i] ?? "";
+                if (left !== right) {
+                  firstDiffAt = i;
+                  break;
+                }
+              }
+              const commaInsertOps = deferredPlan
+                .map((op, opIndex) => ({ op, opIndex }))
+                .filter(({ op }) => op?.kind === "insert" && typeof op?.replacement === "string" && op.replacement.includes(","));
+              const shouldLogDriftDiagnostic =
+                hasActualDoubleComma || (firstDiffAt >= 0 && commaInsertOps.length > 0);
+              if (shouldLogDriftDiagnostic) {
+                const focusPos = firstDiffAt >= 0 ? firstDiffAt : postDeferredText.search(/,\s*,/u);
+                const contextStart = Math.max(0, (Number.isFinite(focusPos) ? focusPos : 0) - 28);
+                const contextEnd = Math.min(
+                  Math.max(postDeferredText.length, predictedText.length),
+                  (Number.isFinite(focusPos) ? focusPos : 0) + 28
+                );
+                const nearestOps = commaInsertOps
+                  .map(({ op, opIndex }) => {
+                    const start = Number.isFinite(op?.start) ? op.start : 0;
+                    const suggestion = Array.isArray(op?.suggestions) && op.suggestions.length ? op.suggestions[0] : null;
+                    return {
+                      opIndex,
+                      start,
+                      end: Number.isFinite(op?.end) ? op.end : start,
+                      beforeToken: op?.boundary?.beforeToken || null,
+                      afterToken: op?.boundary?.afterToken || null,
+                      traceId: suggestion?.traceId || null,
+                      distanceToFocus: Number.isFinite(focusPos) ? Math.abs(start - focusPos) : null,
+                    };
+                  })
+                  .sort((a, b) => {
+                    const left = Number.isFinite(a.distanceToFocus) ? a.distanceToFocus : Number.MAX_SAFE_INTEGER;
+                    const right = Number.isFinite(b.distanceToFocus) ? b.distanceToFocus : Number.MAX_SAFE_INTEGER;
+                    return left - right;
+                  })
+                  .slice(0, 5);
+                logDesktopVerbose("Desktop deferred apply drift diagnostic", {
+                  paragraphIndex: job.paragraphIndex,
+                  hasPredictedDoubleComma,
+                  hasActualDoubleComma,
+                  firstDiffAt,
+                  focusPos,
+                  predictedContext: predictedText.slice(contextStart, contextEnd),
+                  actualContext: postDeferredText.slice(contextStart, contextEnd),
+                  nearestCommaOps: nearestOps,
                 });
               }
             }
