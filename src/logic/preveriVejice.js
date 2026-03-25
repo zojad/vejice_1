@@ -44,7 +44,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
@@ -154,6 +154,7 @@ function parseBooleanFlag(value) {
 const QUOTE_TRACE_REGEX = /["'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]/u;
 
 function isQuoteTraceEnabled() {
+  if (QUIET_LOGS) return false;
   if (typeof window !== "undefined") {
     const override = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE__);
     if (typeof override === "boolean") return override;
@@ -470,6 +471,7 @@ function isDeterministicMappingV2Enabled() {
 }
 
 function isDesktopVerboseLoggingEnabled() {
+  if (QUIET_LOGS) return false;
   if (typeof window !== "undefined") {
     const override =
       parseBooleanFlag(window.__VEJICE_DESKTOP_VERBOSE_LOGS) ??
@@ -482,8 +484,7 @@ function isDesktopVerboseLoggingEnabled() {
       parseBooleanFlag(process.env?.VEJICE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  // Debug default: keep desktop flow logs enabled unless explicitly turned off.
-  return true;
+  return false;
 }
 
 function isDesktopDirectInsertEnabled() {
@@ -2109,9 +2110,11 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex, error = null) {
   if (failure.code) details.push(`code=${failure.code}`);
   if (failure.reason) details.push(`reason=${failure.reason}`);
   const detailSuffix = details.length ? ` | ${details.join(" | ")}` : "";
-  console.log(
-    `[Vejice CHECK] API chunk failed | paragraph=${paragraphLabel} | sentence=${sentenceLabel}${detailSuffix}`
-  );
+  if (!QUIET_LOGS && DEBUG) {
+    console.log(
+      `[Vejice CHECK] API chunk failed | paragraph=${paragraphLabel} | sentence=${sentenceLabel}${detailSuffix}`
+    );
+  }
   warn("Sentence skipped due to API error", {
     paragraphIndex,
     chunkIndex,
@@ -12470,27 +12473,112 @@ async function checkDocumentTextDesktop(checkToken) {
               }
               return text;
             };
+            const getDeferredOpSuggestions = (op) =>
+              Array.isArray(op?.suggestions) ? op.suggestions.filter(Boolean) : [];
+            const shouldTreatDeferredOpAsRisky = (op, liveText) => {
+              if (!op || op.kind !== "insert") return true;
+              const suggestions = getDeferredOpSuggestions(op);
+              if (suggestions.length !== 1) return true;
+              const suggestion = suggestions[0];
+              if (!suggestion || suggestionTouchesQuoteBoundary(suggestion)) return true;
+              const meta = suggestion?.meta?.anchor || {};
+              const boundaryMeta = meta?.boundaryMeta || {};
+              const boundary = op?.boundary || boundaryMeta || {};
+              const beforeAnchor =
+                boundary?.beforeToken ??
+                boundaryMeta?.beforeToken ??
+                meta?.sourceTokenBefore ??
+                meta?.targetTokenBefore ??
+                null;
+              const afterAnchor =
+                boundary?.afterToken ??
+                boundaryMeta?.afterToken ??
+                meta?.sourceTokenAfter ??
+                meta?.targetTokenAfter ??
+                null;
+              const beforeWord = getCleanWordTokenFromAnchor(beforeAnchor);
+              const afterWord = getCleanWordTokenFromAnchor(afterAnchor);
+              if (!beforeWord || !afterWord) return true;
+              const preferredGapHint = firstFiniteValue([
+                boundary?.sourceBoundaryPos,
+                boundary?.sourceBoundaryStart,
+                boundaryMeta?.sourceBoundaryPos,
+                boundaryMeta?.sourceBoundaryStart,
+                suggestion?.meta?.op?.originalPos,
+                suggestion?.charHint?.start,
+                meta?.charStart,
+              ]);
+              const pairDiagnostics = resolveTokenPairMatchInText(
+                liveText,
+                sourceForPlan,
+                suggestion,
+                beforeAnchor,
+                afterAnchor,
+                {
+                  beforeHintIndex: boundary?.sourceBoundaryStart ?? boundaryMeta?.sourceBoundaryStart,
+                  afterHintIndex: boundary?.sourceBoundaryEnd ?? boundaryMeta?.sourceBoundaryEnd,
+                  preferredGapHintIndex: preferredGapHint,
+                  beforeOccurrence: Number.isFinite(boundaryMeta?.beforeTokenOccurrence)
+                    ? boundaryMeta.beforeTokenOccurrence
+                    : null,
+                  afterOccurrence: Number.isFinite(boundaryMeta?.afterTokenOccurrence)
+                    ? boundaryMeta.afterTokenOccurrence
+                    : null,
+                  allowQuoteGap: true,
+                  allowCommaInGap: true,
+                  returnDiagnostics: true,
+                }
+              );
+              if (!pairDiagnostics?.match || pairDiagnostics?.ambiguous) return true;
+              const expectedBoundaryPos = firstFiniteValue([
+                pairDiagnostics?.match?.boundaryPos,
+                boundary?.sourceBoundaryPos,
+                boundary?.sourceBoundaryStart,
+                boundary?.sourceBoundaryEnd,
+                op?.start,
+                op?.end,
+              ]);
+              const fingerprintCheck = evaluateBoundaryFingerprintUniquenessInText(
+                liveText,
+                boundary,
+                Number.isFinite(expectedBoundaryPos) ? expectedBoundaryPos : null,
+                24
+              );
+              return Boolean(fingerprintCheck?.ambiguous);
+            };
             let deferredVirtualText = currentSnapshotText;
             for (let deferredIndex = 0; deferredIndex < deferredPlan.length; deferredIndex++) {
               const deferredOp = deferredPlan[deferredIndex];
+              const deferredOpSuggestions = getDeferredOpSuggestions(deferredOp);
+              const opIsRisky = shouldTreatDeferredOpAsRisky(deferredOp, deferredVirtualText);
+              const deleteSnippetHasComma =
+                typeof deferredOp?.snippet === "string" && deferredOp.snippet.includes(",");
+              const deleteSuggestionHighlightsComma = deferredOpSuggestions.some((suggestion) => {
+                const highlight = suggestion?.meta?.anchor?.highlightText ?? suggestion?.highlightText ?? "";
+                return typeof highlight === "string" && highlight.includes(",");
+              });
+              const isCommaDeleteOp =
+                deferredOp?.kind === "delete" &&
+                typeof deferredOp?.replacement === "string" &&
+                deferredOp.replacement.length === 0 &&
+                (deleteSnippetHasComma || deleteSuggestionHighlightsComma);
               // Re-sync paragraph text each deferred step so range resolution uses live
               // content after previous queued operations (prevents drift on repeated tokens).
-              try {
-                paragraph.load("text");
-                await context.sync();
-                if (typeof paragraph.text === "string") {
-                  deferredVirtualText = paragraph.text;
+              if (opIsRisky) {
+                try {
+                  paragraph.load("text");
+                  await context.sync();
+                  if (typeof paragraph.text === "string") {
+                    deferredVirtualText = paragraph.text;
+                  }
+                } catch (refreshErr) {
+                  warnDesktopVerbose("Desktop deferred step text refresh failed", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    err: refreshErr,
+                  });
                 }
-              } catch (refreshErr) {
-                warnDesktopVerbose("Desktop deferred step text refresh failed", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex: deferredIndex,
-                  err: refreshErr,
-                });
               }
-              const deferredOpSuggestions = Array.isArray(deferredOp?.suggestions)
-                ? deferredOp.suggestions.filter(Boolean)
-                : [];
               if (deferredOp?.kind === "insert" && deferredOpSuggestions.length) {
                 const alreadyApplied = deferredOpSuggestions.every((suggestion) =>
                   isSuggestionAppliedInLiveText(deferredVirtualText, sourceForPlan, suggestion, planOptions)
@@ -12554,7 +12642,8 @@ async function checkDocumentTextDesktop(checkToken) {
                   });
                   continue;
                 }
-                const hasAmbiguousTokenPair = deferredOpSuggestions.some((suggestion) => {
+                const hasAmbiguousTokenPair = opIsRisky
+                  ? deferredOpSuggestions.some((suggestion) => {
                   const meta = suggestion?.meta?.anchor || {};
                   const boundaryMeta = meta?.boundaryMeta || {};
                   const beforeAnchor =
@@ -12597,7 +12686,8 @@ async function checkDocumentTextDesktop(checkToken) {
                     }
                   );
                   return Boolean(pairDiagnostics?.ambiguous);
-                });
+                    })
+                  : false;
                 if (hasAmbiguousTokenPair) {
                   logDesktopVerbose("Desktop deferred op:skipped ambiguous token pair", {
                     paragraphIndex: job.paragraphIndex,
@@ -12624,22 +12714,24 @@ async function checkDocumentTextDesktop(checkToken) {
                   });
                 const expectedBoundaryPos =
                   boundaryHintCandidates.find((hint) => Number.isFinite(hint) && hint >= 0) ?? null;
-                const fingerprintCheck = evaluateBoundaryFingerprintUniquenessInText(
-                  deferredVirtualText,
-                  deferredOp?.boundary || {},
-                  expectedBoundaryPos,
-                  24
-                );
-                if (fingerprintCheck?.ambiguous) {
-                  logDesktopVerbose("Desktop deferred op:skipped ambiguous boundary fingerprint", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    reason: fingerprintCheck?.reason || null,
-                    fingerprintPositions: fingerprintCheck?.positions || [],
+                if (opIsRisky) {
+                  const fingerprintCheck = evaluateBoundaryFingerprintUniquenessInText(
+                    deferredVirtualText,
+                    deferredOp?.boundary || {},
                     expectedBoundaryPos,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
-                  continue;
+                    24
+                  );
+                  if (fingerprintCheck?.ambiguous) {
+                    logDesktopVerbose("Desktop deferred op:skipped ambiguous boundary fingerprint", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      reason: fingerprintCheck?.reason || null,
+                      fingerprintPositions: fingerprintCheck?.positions || [],
+                      expectedBoundaryPos,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                    continue;
+                  }
                 }
                 const commaAlreadyNearBoundary = boundaryHintCandidates.some((hint) =>
                   hasCommaNearMappedHint(deferredVirtualText, hint, 0)
@@ -12687,7 +12779,7 @@ async function checkDocumentTextDesktop(checkToken) {
               let deferredInsertLocation =
                 deferredOp?.insertLocation ??
                 (deferredOp.kind === "insert" ? Word.InsertLocation.before : Word.InsertLocation.replace);
-              if (deferredOp?.kind === "insert" && primaryDeferredSuggestion) {
+              if (opIsRisky && deferredOp?.kind === "insert" && primaryDeferredSuggestion) {
                 const strictInsertResolution = await resolveStrictInsertRangeForSuggestion(
                   context,
                   paragraph,
@@ -12712,7 +12804,7 @@ async function checkDocumentTextDesktop(checkToken) {
                   });
                   continue;
                 }
-              } else if (deferredOp?.kind === "delete" && primaryDeferredSuggestion) {
+              } else if (opIsRisky && deferredOp?.kind === "delete" && primaryDeferredSuggestion) {
                 const strictDeleteResolution = await resolveStrictDeleteRangeForSuggestion(
                   context,
                   paragraph,
@@ -12726,6 +12818,15 @@ async function checkDocumentTextDesktop(checkToken) {
                   if (typeof strictDeleteResolution.replacement === "string") {
                     deferredOp.replacement = strictDeleteResolution.replacement;
                   }
+                } else if (isCommaDeleteOp) {
+                  applyRangeMisses++;
+                  logDesktopVerbose("Desktop deferred op:skipped strict delete unresolved", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    reason: strictDeleteResolution?.reason || "strict_delete_unresolved",
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                  continue;
                 }
               }
               if (!deferredRange) {
@@ -12748,21 +12849,7 @@ async function checkDocumentTextDesktop(checkToken) {
                 continue;
               }
               let deferredResolvedRangeText = null;
-              const expectedDeleteComma =
-                deferredOp?.kind === "delete" &&
-                typeof deferredOp?.replacement === "string" &&
-                deferredOp.replacement.length === 0 &&
-                (typeof deferredOp?.snippet === "string"
-                  ? deferredOp.snippet.includes(",")
-                  : false ||
-                    deferredOpSuggestions.some((suggestion) => {
-                      const highlight =
-                        suggestion?.meta?.anchor?.highlightText ??
-                        suggestion?.highlightText ??
-                        "";
-                      return typeof highlight === "string" && highlight.includes(",");
-                    }));
-              if ((DESKTOP_VERBOSE_LOGS || expectedDeleteComma) && typeof deferredRange.load === "function") {
+              if (DESKTOP_VERBOSE_LOGS && typeof deferredRange.load === "function") {
                 try {
                   deferredRange.load("text");
                   await context.sync();
@@ -12775,20 +12862,6 @@ async function checkDocumentTextDesktop(checkToken) {
                     err: rangeTextErr,
                   });
                 }
-              }
-              if (
-                expectedDeleteComma &&
-                typeof deferredResolvedRangeText === "string" &&
-                !deferredResolvedRangeText.includes(",")
-              ) {
-                applyRangeMisses++;
-                logDesktopVerbose("Desktop deferred op:skipped delete range mismatch", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex: deferredIndex,
-                  resolvedRangeText: deferredResolvedRangeText,
-                  op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                });
-                continue;
               }
               try {
                 logDesktopVerbose("Desktop deferred op:attempt", {

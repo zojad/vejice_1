@@ -63,7 +63,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = true;
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -150,6 +150,7 @@ function isQuoteIntentInferenceEnabled() {
 }
 
 function isQuoteTraceEnabled() {
+  if (QUIET_LOGS) return false;
   if (typeof window !== "undefined") {
     const windowOverride = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE__);
     if (typeof windowOverride === "boolean") return windowOverride;

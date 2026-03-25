@@ -27,7 +27,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = true;
 const snip = (value) =>
   typeof value === "string" && value.length > MAX_LOG_LENGTH
     ? `${value.slice(0, MAX_LOG_LENGTH)}…`

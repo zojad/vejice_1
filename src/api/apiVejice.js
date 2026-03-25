@@ -21,7 +21,7 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
-const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
+const QUIET_LOGS = true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
@@ -30,6 +30,7 @@ const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd(
 const log = (...a) => !QUIET_LOGS && DEBUG && console.log("[Vejice API]", ...a);
 const QUOTE_TRACE_REGEX = /["'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]/u;
 function isQuoteTraceEnabled() {
+  if (QUIET_LOGS) return false;
   if (typeof window !== "undefined") {
     const parsed = parseQuietBoolean(window.__VEJICE_QUOTE_TRACE__);
     if (typeof parsed === "boolean") return parsed;
