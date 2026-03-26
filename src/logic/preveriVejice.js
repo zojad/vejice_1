@@ -44,12 +44,30 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
+const ONLINE_VERBOSE_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_VERBOSE_LOGS__ === "boolean"
+    ? window.__VEJICE_ONLINE_VERBOSE_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS)
+      : undefined;
 const QUIET_LOGS = true;
+const ONLINE_VERBOSE_LOGS =
+  typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean"
+    ? ONLINE_VERBOSE_LOGS_OVERRIDE
+    : isWordOnline();
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
+const shouldEmitRuntimeLogs = () => {
+  if (ONLINE_VERBOSE_LOGS && isWordOnline()) return true;
+  return !QUIET_LOGS && DEBUG;
+};
+const shouldEmitErrorLogs = () => {
+  if (ONLINE_VERBOSE_LOGS && isWordOnline()) return true;
+  return !QUIET_LOGS;
+};
 const isFinalCheckSummaryLog = (args = []) => {
   const first = args[0];
   if (typeof first !== "string") return false;
@@ -63,17 +81,17 @@ const log = (...a) => {
     console.log("[Vejice CHECK]", ...a);
     return;
   }
-  if (!QUIET_LOGS && DEBUG) {
+  if (shouldEmitRuntimeLogs()) {
     console.log("[Vejice CHECK]", ...a);
   }
 };
 const warn = (...a) => {
-  if (!QUIET_LOGS && DEBUG) {
+  if (shouldEmitRuntimeLogs()) {
     console.warn("[Vejice CHECK]", ...a);
   }
 };
 const errL = (...a) => {
-  if (!QUIET_LOGS) {
+  if (shouldEmitErrorLogs()) {
     console.error("[Vejice CHECK]", ...a);
   }
 };
@@ -81,6 +99,46 @@ const errL = (...a) => {
 const tnow = () => performance?.now?.() ?? Date.now();
 const roundMs = (ms) => (Number.isFinite(ms) ? Math.round(ms * 10) / 10 : 0);
 const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
+const DONE_LOG_SKIPPED_SEGMENTS_LIMIT = 60;
+const DONE_LOG_SKIPPED_SNIPPET_MAX_CHARS = 220;
+const sanitizeSkippedSnippetForDoneLog = (value, max = DONE_LOG_SKIPPED_SNIPPET_MAX_CHARS) =>
+  typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+const normalizeSkippedSegmentForDoneLog = (segment, fallbackParagraphIndex = null) => {
+  const paragraphIndex = Number.isFinite(segment?.paragraphIndex)
+    ? segment.paragraphIndex
+    : Number.isFinite(fallbackParagraphIndex)
+      ? fallbackParagraphIndex
+      : null;
+  const rawSentenceIndex =
+    Number.isFinite(segment?.sentenceIndex) || typeof segment?.sentenceIndex === "string"
+      ? segment.sentenceIndex
+      : Number.isFinite(segment?.chunkIndex) || typeof segment?.chunkIndex === "string"
+        ? segment.chunkIndex
+        : null;
+  const reason =
+    typeof segment?.reason === "string" && segment.reason.trim() ? segment.reason.trim() : "unknown";
+  return {
+    paragraphIndex,
+    sentenceIndex: rawSentenceIndex,
+    reason,
+    snippet: sanitizeSkippedSnippetForDoneLog(segment?.snippet || segment?.text || ""),
+  };
+};
+const appendSkippedSegmentsForDoneLog = (
+  target,
+  segments,
+  fallbackParagraphIndex = null,
+  limit = DONE_LOG_SKIPPED_SEGMENTS_LIMIT
+) => {
+  if (!Array.isArray(target) || !Array.isArray(segments) || !segments.length) return 0;
+  let appended = 0;
+  for (const segment of segments) {
+    if (target.length >= limit) break;
+    target.push(normalizeSkippedSegmentForDoneLog(segment, fallbackParagraphIndex));
+    appended++;
+  }
+  return appended;
+};
 const MAX_AUTOFIX_PASSES =
   typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
 
@@ -12024,6 +12082,8 @@ async function checkDocumentTextDesktop(checkToken) {
   let apiErrors = 0;
   let nonCommaSkips = 0;
   let nonCommaSalvaged = 0;
+  let skippedSegmentsTotal = 0;
+  const skippedSegmentsSample = [];
   let unchangedHardSkips = 0;
   let cacheHits = 0;
   let cacheMisses = 0;
@@ -12271,9 +12331,16 @@ async function checkDocumentTextDesktop(checkToken) {
       const paragraphApiErrors = result.apiErrors || 0;
       const paragraphNonCommaSkips = result.nonCommaSkips || 0;
       const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
+      const paragraphSkippedSegments = Array.isArray(result.skippedSegments) ? result.skippedSegments : [];
       apiErrors += paragraphApiErrors;
       nonCommaSkips += paragraphNonCommaSkips;
       nonCommaSalvaged += paragraphNonCommaSalvaged;
+      skippedSegmentsTotal += paragraphSkippedSegments.length;
+      appendSkippedSegmentsForDoneLog(
+        skippedSegmentsSample,
+        paragraphSkippedSegments,
+        analyzed.paragraphIndex
+      );
       const paragraphStable = paragraphApiErrors === 0 && paragraphNonCommaSkips === 0;
       if (!paragraphCacheDisabled && paragraphStable) {
         const cacheEntry = makeDesktopParagraphCacheEntry(analyzed.paragraphHash, result);
@@ -12973,6 +13040,12 @@ async function checkDocumentTextDesktop(checkToken) {
       applyRangeMisses,
       "| applyOpFailures:",
       applyOpFailures,
+      "| skippedSegments:",
+      skippedSegmentsTotal,
+      "| skippedSegmentsTruncated:",
+      skippedSegmentsTotal > skippedSegmentsSample.length,
+      "| skippedSegmentsSample:",
+      JSON.stringify(skippedSegmentsSample),
       "| totalMs:",
       roundMs(tnow() - checkStartedAt),
       "| perParagraphMs:",
@@ -13060,6 +13133,8 @@ async function checkDocumentTextOnline(checkToken) {
   let apiErrors = 0;
   let nonCommaSkips = 0;
   let nonCommaSalvaged = 0;
+  let skippedSegmentsTotal = 0;
+  const skippedSegmentsSample = [];
   let unchangedHardSkips = 0;
   let unstableBackoffSkips = 0;
   let rerenderSkipped = 0;
@@ -13492,9 +13567,16 @@ async function checkDocumentTextOnline(checkToken) {
           const paragraphApiErrors = result.apiErrors || 0;
           const paragraphNonCommaSkips = result.nonCommaSkips || 0;
           const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
+          const paragraphSkippedSegments = Array.isArray(result.skippedSegments) ? result.skippedSegments : [];
           apiErrors += paragraphApiErrors;
           nonCommaSkips += paragraphNonCommaSkips;
           nonCommaSalvaged += paragraphNonCommaSalvaged;
+          skippedSegmentsTotal += paragraphSkippedSegments.length;
+          appendSkippedSegmentsForDoneLog(
+            skippedSegmentsSample,
+            paragraphSkippedSegments,
+            job.paragraphIndex
+          );
           recordUnstableOnlineParagraphOutcome(job.paragraphIndex, job.sourceText, {
             nonCommaSkips: paragraphNonCommaSkips,
           });
@@ -13707,7 +13789,13 @@ async function checkDocumentTextOnline(checkToken) {
       "| nonCommaSalvaged:",
       nonCommaSalvaged,
       "| deterministicPlannerSkips:",
-      deterministicPlannerSkips
+      deterministicPlannerSkips,
+      "| skippedSegments:",
+      skippedSegmentsTotal,
+      "| skippedSegmentsTruncated:",
+      skippedSegmentsTotal > skippedSegmentsSample.length,
+      "| skippedSegmentsSample:",
+      JSON.stringify(skippedSegmentsSample)
     );
     if (
       paragraphsProcessed > 0 &&

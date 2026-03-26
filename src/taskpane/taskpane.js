@@ -98,6 +98,13 @@ const setStatus = (message) => {
   if (statusLine) statusLine.textContent = message;
 };
 
+const syncStatusLoadingIndicator = () => {
+  const statusRoot = document.querySelector(".taskpane-status");
+  if (!statusRoot) return;
+  const loading = busy || checkRunInFlight || isDocumentCheckInProgress();
+  statusRoot.classList.toggle("taskpane-status-loading", loading);
+};
+
 const buildNotificationSignature = (items) => {
   if (!Array.isArray(items) || !items.length) return "empty";
   return items.map((item) => `${item.id}:${item.timestamp}`).join("|");
@@ -161,6 +168,7 @@ const syncActionButtons = () => {
   const pendingCount = online ? getPendingSuggestionsOnline().length : 0;
   const hasPending = pendingCount > 0;
 
+  syncStatusLoadingIndicator();
   if (checkBtn) checkBtn.disabled = busy || checkInProgress;
   if (clearHighlightsBtn) clearHighlightsBtn.disabled = busy || !online || checkInProgress || !hasPending;
   if (acceptOneBtn) acceptOneBtn.disabled = busy || !reviewActionsEnabled || checkInProgress || !hasPending;
@@ -171,6 +179,7 @@ const syncActionButtons = () => {
 
 const setBusy = (nextBusy) => {
   busy = Boolean(nextBusy);
+  syncStatusLoadingIndicator();
   syncActionButtons();
 };
 
@@ -193,11 +202,10 @@ const refreshPendingStatus = () => {
   const pending = getPendingSuggestionsOnline();
   clampCurrentSuggestionIndex(pending.length);
   if (!pending.length) {
-    setStatus("Pripravljeno. Predlogi: 0.");
+    setStatus("Končano. Predlogi: 0.");
     return;
   }
-  const ordinal = currentSuggestionIndex + 1;
-  setStatus(`Pripravljeno. Predlogi: ${pending.length}. Trenutni: ${ordinal}/${pending.length}.`);
+  setStatus(`Končano. Predlogi: ${pending.length}.`);
 };
 
 const runCheck = async () => {
@@ -214,7 +222,7 @@ const runCheck = async () => {
   setBusy(true);
   clearTaskpaneNotifications();
   renderNotifications({ force: true });
-  setStatus("Preverjam dokument...");
+  setStatus("Preverjam dokument ...");
   try {
     const summary = await checkDocumentText();
     if (summary?.status === "deferred") {
@@ -257,7 +265,7 @@ const runClearHighlights = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Bri\u0161em ozna\u010dbe...");
+  setStatus("Bri\u0161em ozna\u010dbe ...");
   try {
     const summary = await clearPendingSuggestionHighlightsOnline();
     const cleared = Number(summary?.clearedMarkers ?? 0);
@@ -286,7 +294,7 @@ const runAccept = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Sprejemam vse predloge...");
+  setStatus("Sprejemam vse predloge ...");
   try {
     const summary = await applyAllSuggestionsOnline();
     const applied = Number(summary?.appliedSuggestions ?? 0);
@@ -309,7 +317,7 @@ const runReject = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Zavra\u010dam vse predloge...");
+  setStatus("Zavra\u010dam vse predloge ...");
   try {
     const summary = await rejectAllSuggestionsOnline();
     const rejected = Number(summary?.clearedMarkers ?? 0);
@@ -348,7 +356,7 @@ const runAcceptOne = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Sprejemam trenutni predlog...");
+  setStatus("Sprejemam trenutni predlog ...");
   try {
     const summary = await applySuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);
@@ -394,7 +402,7 @@ const runRejectOne = async () => {
     return;
   }
   setBusy(true);
-  setStatus("Zavračam trenutni predlog...");
+  setStatus("Zavračam trenutni predlog ...");
   try {
     const summary = await rejectSuggestionOnlineById(current.id);
     const pendingAfter = Number(summary?.pendingAfter ?? 0);

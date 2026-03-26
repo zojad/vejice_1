@@ -347,6 +347,7 @@ export class CommaSuggestionEngine {
         apiErrors: 0,
         nonCommaSkips: 0,
         nonCommaSalvaged: 0,
+        skippedSegments: [],
         processedAny: false,
         anchorsEntry: await this.anchorProvider.getAnchors({
           paragraphIndex,
@@ -429,6 +430,25 @@ export class CommaSuggestionEngine {
         nonCommaSalvaged: nonCommaSalvagedCount,
       };
     };
+    const buildSkippedSegments = (items = []) =>
+      (Array.isArray(items) ? items : [])
+        .filter((meta) => meta && !meta.detail && typeof meta.skipReason === "string" && meta.skipReason)
+        .map((meta) => {
+          const chunk = meta.chunk || {};
+          const rawSnippet =
+            typeof chunk.normalizedText === "string" && chunk.normalizedText
+              ? chunk.normalizedText
+              : typeof chunk.text === "string"
+                ? chunk.text
+                : "";
+          return {
+            paragraphIndex,
+            sentenceIndex:
+              Number.isFinite(chunk.index) || typeof chunk.index === "string" ? chunk.index : null,
+            reason: meta.skipReason,
+            snippet: makeSnippet(rawSnippet, 220),
+          };
+        });
 
     const mergeRetryArtifacts = (currentMeta, currentChunkDetails, retryMeta, retryChunkDetails) => {
       const metaMap = new Map();
@@ -814,6 +834,7 @@ export class CommaSuggestionEngine {
         apiErrors,
         nonCommaSkips: nonCommaChunkSkips,
         nonCommaSalvaged: nonCommaChunkSalvaged,
+        skippedSegments: buildSkippedSegments(processedMeta),
         processedAny: false,
         anchorsEntry,
       };
@@ -1081,6 +1102,7 @@ export class CommaSuggestionEngine {
       apiErrors,
       nonCommaSkips: nonCommaChunkSkips,
       nonCommaSalvaged: nonCommaChunkSalvaged,
+      skippedSegments: buildSkippedSegments(processedMeta),
       processedAny: Boolean(suggestions.length),
       anchorsEntry,
       correctedParagraph,
