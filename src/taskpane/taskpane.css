@@ -5,6 +5,7 @@ body {
     margin: 0;
     padding: 0;
     font-family: "Segoe UI", Tahoma, sans-serif;
+    background: #fff;
 }
 
 .ms-welcome__main {
@@ -80,7 +81,7 @@ body {
 }
 
 .task-btn-primary {
-    background: #0f6cbd;
+    background: #e12a26;
 }
 
 .task-btn-success {
@@ -97,6 +98,10 @@ body {
     color: #333;
     min-width: 72px;
     padding: 6px 10px;
+}
+
+#btn-clear-highlights {
+    background: #fff;
 }
 
 .taskpane-note {

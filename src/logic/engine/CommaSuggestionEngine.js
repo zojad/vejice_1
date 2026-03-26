@@ -26,9 +26,11 @@ const LEMMA_HEURISTIC_MIN_LEN = 700;
 const API_RECHUNK_MAX_DEPTH = 2;
 const API_RECHUNK_MIN_CHARS = 120;
 const SALVAGE_RECHUNK_MIN_DIFF_OPS = 12;
-const CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
+const CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 2;
 const LOCAL_CHUNK_ANALYZE_CONCURRENCY_DEFAULT = 1;
 const CHUNK_ANALYZE_CONCURRENCY_MAX = 4;
+const API_HEALTH_FAILURE_THRESHOLD = 3;
+const API_HEALTH_WINDOW_MS = 30000;
 const CHUNK_API_CACHE_MAX_ENTRIES_DEFAULT = 800;
 const CHUNK_API_CACHE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 const API_FAILURE_COOLDOWN_MS = 90000;
@@ -279,6 +281,8 @@ export class CommaSuggestionEngine {
     this.chunkApiCacheMaxEntries = resolveChunkApiCacheMaxEntries();
     this.chunkApiCacheTtlMs = resolveChunkApiCacheTtlMs();
     this.chunkApiResponseCache = new Map();
+    this.apiHealthFailures = [];
+    this.apiIsUnhealthy = false;
     this.notifiers = {
       onParagraphTooLong: notifiers.onParagraphTooLong || (() => {}),
       onSentenceTooLong: notifiers.onSentenceTooLong || (() => {}),
@@ -569,11 +573,13 @@ export class CommaSuggestionEngine {
             signal: abortSignal,
           });
           this.apiChunkFailureCooldownUntil.delete(chunkFailureKey);
+          this.recordApiSuccess();
           this.setChunkApiCachedDetail(chunkRequestText, detail);
         } catch (apiErr) {
           if (isAbortLikeError(apiErr, abortSignal)) {
             throw apiErr;
           }
+          this.recordApiFailure();
           const updatedFailureAttempts = failureAttempts + 1;
           chunkFailureAttemptsThisRun.set(chunkFailureKey, updatedFailureAttempts);
           const exhaustedRetryBudget =
@@ -706,7 +712,7 @@ export class CommaSuggestionEngine {
       return chunkResult;
     };
 
-    const chunkAnalyzeConcurrency = resolveChunkAnalyzeConcurrency();
+    const chunkAnalyzeConcurrency = this.getAdaptiveChunkAnalyzeConcurrency();
     const chunkResults = await runWithConcurrency(
       chunks,
       chunkAnalyzeConcurrency,
@@ -1115,6 +1121,31 @@ export class CommaSuggestionEngine {
 
   isChunkApiCacheEnabled() {
     return this.chunkApiCacheMaxEntries > 0 && this.chunkApiCacheTtlMs > 0;
+  }
+
+  recordApiFailure() {
+    const now = Date.now();
+    this.apiHealthFailures.push(now);
+    const cutoff = now - API_HEALTH_WINDOW_MS;
+    this.apiHealthFailures = this.apiHealthFailures.filter((ts) => ts > cutoff);
+    if (this.apiHealthFailures.length >= API_HEALTH_FAILURE_THRESHOLD) {
+      this.apiIsUnhealthy = true;
+    }
+  }
+
+  recordApiSuccess() {
+    const now = Date.now();
+    const cutoff = now - API_HEALTH_WINDOW_MS;
+    this.apiHealthFailures = this.apiHealthFailures.filter((ts) => ts > cutoff);
+    if (this.apiHealthFailures.length === 0) {
+      this.apiIsUnhealthy = false;
+    }
+  }
+
+  getAdaptiveChunkAnalyzeConcurrency() {
+    if (this.apiIsUnhealthy) return 1;
+    const baseValue = resolveChunkAnalyzeConcurrency();
+    return Math.min(baseValue, 2);
   }
 
   pruneChunkApiResponseCache(nowTs = Date.now()) {
