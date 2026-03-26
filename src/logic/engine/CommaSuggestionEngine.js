@@ -12,6 +12,7 @@ import {
   mapTokensToParagraphText,
   findAnchorsNearChar,
 } from "../anchoring/SyntheticAnchorProvider.js";
+import { isWordOnline } from "../../utils/host.js";
 
 const MAX_PARAGRAPH_CHARS = 3000;
 const PARAGRAPH_FIRST_MAX_CHARS = 1200;
@@ -65,7 +66,29 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
+const ONLINE_VERBOSE_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_VERBOSE_LOGS__ === "boolean"
+    ? window.__VEJICE_ONLINE_VERBOSE_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS)
+      : undefined;
 const QUIET_LOGS = true;
+const isOnlineVerboseLogsEnabled = () => {
+  if (typeof window !== "undefined") {
+    const direct = parseQuietBoolean(window.__VEJICE_ONLINE_VERBOSE_LOGS__);
+    if (typeof direct === "boolean") return direct;
+  }
+  if (typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean") {
+    return ONLINE_VERBOSE_LOGS_OVERRIDE;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isWordOnline();
+};
+const shouldAllowEngineRuntimeLogs = () =>
+  (isOnlineVerboseLogsEnabled() && isWordOnline()) || !QUIET_LOGS;
 
 function isAbortLikeError(err, signal) {
   if (signal?.aborted) return true;
@@ -110,7 +133,8 @@ if (typeof window !== "undefined") {
 }
 
 function isDeepDebugEnabled() {
-  if (QUIET_LOGS) return false;
+  if (!shouldAllowEngineRuntimeLogs()) return false;
+  if (isOnlineVerboseLogsEnabled() && isWordOnline()) return true;
   if (typeof window === "undefined") return false;
   const isTruthyFlag = (value) =>
     value === true || value === 1 || value === "1" || value === "true";
@@ -152,7 +176,7 @@ function isQuoteIntentInferenceEnabled() {
 }
 
 function isQuoteTraceEnabled() {
-  if (QUIET_LOGS) return false;
+  if (!shouldAllowEngineRuntimeLogs()) return false;
   if (typeof window !== "undefined") {
     const windowOverride = parseBooleanFlag(window.__VEJICE_QUOTE_TRACE__);
     if (typeof windowOverride === "boolean") return windowOverride;
@@ -327,14 +351,12 @@ export class CommaSuggestionEngine {
           final: {},
         }
       : null;
-    let chunks = null;
-    if (useSentenceChunks) {
-      chunks = await splitParagraphIntoChunksWithLemmas(
-        originalText,
-        MAX_PARAGRAPH_CHARS,
-        this.anchorProvider
-      );
-    }
+    // Always try lemma-aware chunking first. If unavailable/failing, fall back to regex chunking.
+    let chunks = await splitParagraphIntoChunksWithLemmas(
+      originalText,
+      MAX_PARAGRAPH_CHARS,
+      this.anchorProvider
+    );
     if (!Array.isArray(chunks) || !chunks.length) {
       chunks = splitParagraphIntoChunks(originalText, MAX_PARAGRAPH_CHARS, {
         preferWholeParagraph: !useSentenceChunks,
@@ -429,6 +451,54 @@ export class CommaSuggestionEngine {
         nonCommaSkips: nonCommaSkipsCount,
         nonCommaSalvaged: nonCommaSalvagedCount,
       };
+    };
+    const isApiErrorSkipReason = (reason) =>
+      reason === "apiError" || reason === "apiErrorCooldown" || reason === "apiErrorMaxAttempts";
+    const buildApiErrorChunkRanges = (items = []) =>
+      (Array.isArray(items) ? items : [])
+        .filter((meta) => meta && !meta.detail && isApiErrorSkipReason(meta.skipReason))
+        .map((meta) => {
+          const start = Number.isFinite(meta?.chunk?.start) ? Math.floor(meta.chunk.start) : -1;
+          const end = Number.isFinite(meta?.chunk?.end) ? Math.floor(meta.chunk.end) : -1;
+          if (start < 0 || end <= start) return null;
+          return {
+            chunkIndex:
+              Number.isFinite(meta?.chunk?.index) || typeof meta?.chunk?.index === "string"
+                ? meta.chunk.index
+                : null,
+            start,
+            end,
+          };
+        })
+        .filter(Boolean);
+    const suggestionTouchesApiErrorRange = (suggestion, ranges = []) => {
+      if (!Array.isArray(ranges) || !ranges.length || !suggestion) return false;
+      const probePositions = [];
+      const pushPos = (value) => {
+        if (!Number.isFinite(value)) return;
+        const pos = Math.floor(value);
+        if (pos < 0 || probePositions.includes(pos)) return;
+        probePositions.push(pos);
+      };
+      const op = suggestion?.meta?.op || {};
+      const anchor = suggestion?.meta?.anchor || {};
+      pushPos(suggestion?.charHint?.start);
+      pushPos(suggestion?.charHint?.end);
+      pushPos(op?.pos);
+      pushPos(op?.start);
+      pushPos(op?.end);
+      pushPos(op?.originalPos);
+      pushPos(op?.correctedPos);
+      pushPos(anchor?.highlightCharStart);
+      pushPos(anchor?.highlightCharEnd);
+      pushPos(anchor?.charStart);
+      pushPos(anchor?.charEnd);
+      pushPos(anchor?.targetCharStart);
+      pushPos(anchor?.targetCharEnd);
+      if (!probePositions.length) return false;
+      return ranges.some((range) =>
+        probePositions.some((pos) => pos >= range.start && pos < range.end)
+      );
     };
     const buildSkippedSegments = (items = []) =>
       (Array.isArray(items) ? items : [])
@@ -1056,14 +1126,30 @@ export class CommaSuggestionEngine {
         debugOpFlow.push(opFlow);
       }
     }
+    const apiErrorChunkRanges = buildApiErrorChunkRanges(processedMeta);
+    let apiErrorSuppressedSuggestions = 0;
+    const suggestionsAfterApiErrorRangeSuppression =
+      apiErrorChunkRanges.length > 0 && suggestions.length > 0
+        ? suggestions.filter((suggestion) => {
+            const touchedApiErrorRange = suggestionTouchesApiErrorRange(suggestion, apiErrorChunkRanges);
+            if (touchedApiErrorRange) {
+              apiErrorSuppressedSuggestions++;
+              return false;
+            }
+            return true;
+          })
+        : suggestions;
+    const filteredSuggestions = suggestionsAfterApiErrorRangeSuppression;
 
     if (debugEnabled && debugDump) {
       debugDump.final = {
         correctedParagraph,
-        suggestionsCount: suggestions.length,
+        suggestionsCount: filteredSuggestions.length,
+        apiErrorChunkRanges,
+        apiErrorSuppressedSuggestions,
         nonCommaSkips: nonCommaChunkSkips,
         nonCommaSalvaged: nonCommaChunkSalvaged,
-        suggestions: suggestions.map((s) => ({
+        suggestions: filteredSuggestions.map((s) => ({
           id: s.id,
           kind: s.kind,
           paragraphIndex: s.paragraphIndex,
@@ -1085,7 +1171,7 @@ export class CommaSuggestionEngine {
       pushDeepDebugDump(debugDump);
     }
 
-    if (!suggestions.length && canFallbackToSentences && nonCommaChunkSkips > 0) {
+    if (!filteredSuggestions.length && canFallbackToSentences && nonCommaChunkSkips > 0) {
       return this.analyzeParagraph({
         paragraphIndex,
         originalText,
@@ -1098,12 +1184,12 @@ export class CommaSuggestionEngine {
     }
 
     return {
-      suggestions,
+      suggestions: filteredSuggestions,
       apiErrors,
       nonCommaSkips: nonCommaChunkSkips,
       nonCommaSalvaged: nonCommaChunkSalvaged,
       skippedSegments: buildSkippedSegments(processedMeta),
-      processedAny: Boolean(suggestions.length),
+      processedAny: Boolean(filteredSuggestions.length),
       anchorsEntry,
       correctedParagraph,
     };
@@ -1143,6 +1229,11 @@ export class CommaSuggestionEngine {
 
   isChunkApiCacheEnabled() {
     return this.chunkApiCacheMaxEntries > 0 && this.chunkApiCacheTtlMs > 0;
+  }
+
+  clearChunkApiCache() {
+    if (!this.chunkApiResponseCache || typeof this.chunkApiResponseCache.clear !== "function") return;
+    this.chunkApiResponseCache.clear();
   }
 
   recordApiFailure() {
@@ -1903,7 +1994,8 @@ function resolveLemmaSplitMode() {
   if (envMode === "off" || envMode === "safe" || envMode === "force") {
     return envMode;
   }
-  return "safe";
+  // Default to force so lemma-aware chunking assists all runs unless explicitly overridden.
+  return "force";
 }
 
 function resolveChunkAnalyzeConcurrency() {

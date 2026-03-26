@@ -50,24 +50,56 @@ const ONLINE_VERBOSE_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS)
       : undefined;
+const ONLINE_DRIFT_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_DRIFT_LOGS__ === "boolean"
+    ? window.__VEJICE_ONLINE_DRIFT_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_ONLINE_DRIFT_LOGS)
+      : undefined;
 const QUIET_LOGS = true;
-const ONLINE_VERBOSE_LOGS =
-  typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean"
-    ? ONLINE_VERBOSE_LOGS_OVERRIDE
-    : isWordOnline();
+const isOnlineVerboseLogsEnabled = () => {
+  if (typeof window !== "undefined") {
+    const direct = parseQuietBoolean(window.__VEJICE_ONLINE_VERBOSE_LOGS__);
+    if (typeof direct === "boolean") return direct;
+  }
+  if (typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean") {
+    return ONLINE_VERBOSE_LOGS_OVERRIDE;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isWordOnline();
+};
+const isOnlineDriftLogsEnabled = () => {
+  if (typeof window !== "undefined") {
+    const direct = parseQuietBoolean(window.__VEJICE_ONLINE_DRIFT_LOGS__);
+    if (typeof direct === "boolean") return direct;
+  }
+  if (typeof ONLINE_DRIFT_LOGS_OVERRIDE === "boolean") {
+    return ONLINE_DRIFT_LOGS_OVERRIDE;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_DRIFT_LOGS);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isOnlineVerboseLogsEnabled();
+};
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
 const shouldEmitRuntimeLogs = () => {
-  if (ONLINE_VERBOSE_LOGS && isWordOnline()) return true;
+  if (isOnlineVerboseLogsEnabled() && isWordOnline()) return true;
   return !QUIET_LOGS && DEBUG;
 };
 const shouldEmitErrorLogs = () => {
-  if (ONLINE_VERBOSE_LOGS && isWordOnline()) return true;
+  if (isOnlineVerboseLogsEnabled() && isWordOnline()) return true;
   return !QUIET_LOGS;
 };
+const shouldEmitOnlineDriftLogs = () =>
+  isOnlineDriftLogsEnabled() && isWordOnline() && shouldEmitRuntimeLogs();
 const isFinalCheckSummaryLog = (args = []) => {
   const first = args[0];
   if (typeof first !== "string") return false;
@@ -95,12 +127,21 @@ const errL = (...a) => {
     console.error("[Vejice CHECK]", ...a);
   }
 };
+const logOnlineDrift = (stage, payload = {}) => {
+  if (!shouldEmitOnlineDriftLogs()) return;
+  try {
+    console.log("[Vejice CHECK][Online Drift]", stage, payload);
+  } catch (_err) {
+    // ignore console failures
+  }
+};
 
 const tnow = () => performance?.now?.() ?? Date.now();
 const roundMs = (ms) => (Number.isFinite(ms) ? Math.round(ms * 10) / 10 : 0);
 const SNIP = (s, n = 80) => (typeof s === "string" ? s.slice(0, n) : s);
 const DONE_LOG_SKIPPED_SEGMENTS_LIMIT = 60;
 const DONE_LOG_SKIPPED_SNIPPET_MAX_CHARS = 220;
+const ONLINE_DRIFT_LOG_SUGGESTION_SAMPLE_LIMIT = 30;
 const sanitizeSkippedSnippetForDoneLog = (value, max = DONE_LOG_SKIPPED_SNIPPET_MAX_CHARS) =>
   typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
 const normalizeSkippedSegmentForDoneLog = (segment, fallbackParagraphIndex = null) => {
@@ -1722,6 +1763,7 @@ if (typeof window !== "undefined") {
 
 let toastDialog = null;
 let documentCheckInProgress = false;
+let completedCheckRuns = 0;
 const ACTION_TYPE_IDLE = "idle";
 const ACTION_TYPE_CHECK = "check";
 const ACTION_TYPE_APPLY = "apply";
@@ -1741,6 +1783,7 @@ const CHECK_TIMEOUT_MESSAGE = "Pregled je bil prekinjen zaradi casovne omejitve.
 const CHECK_CANCELLED_MESSAGE = "Pregled je bil prekinjen.";
 const POST_APPLY_COOLDOWN_MESSAGE =
   "Dokument se se usklajuje po samodejnih popravkih. Poskusite znova cez trenutek.";
+const CLEAR_CHUNK_CACHE_AFTER_FIRST_SCAN_DEFAULT = true;
 let actionSequence = 0;
 const checkAbortControllersByTokenId = new Map();
 let activeActionState = {
@@ -1775,6 +1818,17 @@ function resolveOnlineCheckTimeoutMs() {
     timeoutOverride = parsePositiveInteger(process.env?.VEJICE_ONLINE_CHECK_TIMEOUT_MS);
   }
   return timeoutOverride ?? ONLINE_CHECK_TIMEOUT_MS_DEFAULT;
+}
+
+function shouldClearChunkCacheAfterFirstScan() {
+  let override = null;
+  if (typeof window !== "undefined") {
+    override = parseBooleanFlag(window.__VEJICE_CLEAR_CHUNK_CACHE_AFTER_FIRST_SCAN__);
+  }
+  if (typeof override !== "boolean" && typeof process !== "undefined") {
+    override = parseBooleanFlag(process.env?.VEJICE_CLEAR_CHUNK_CACHE_AFTER_FIRST_SCAN);
+  }
+  return typeof override === "boolean" ? override : CLEAR_CHUNK_CACHE_AFTER_FIRST_SCAN_DEFAULT;
 }
 
 function resolveOnlineParagraphTimeoutMs() {
@@ -2168,7 +2222,7 @@ function notifyChunkApiFailure(paragraphIndex, chunkIndex, error = null) {
   if (failure.code) details.push(`code=${failure.code}`);
   if (failure.reason) details.push(`reason=${failure.reason}`);
   const detailSuffix = details.length ? ` | ${details.join(" | ")}` : "";
-  if (!QUIET_LOGS && DEBUG) {
+  if (shouldEmitRuntimeLogs()) {
     console.log(
       `[Vejice CHECK] API chunk failed | paragraph=${paragraphLabel} | sentence=${sentenceLabel}${detailSuffix}`
     );
@@ -4638,22 +4692,103 @@ async function highlightDeleteSuggestion(context, paragraph, suggestion) {
       meta.charEnd ??
       (typeof charStart === "number" && charStart >= 0 ? charStart + 1 : charStart);
     const highlightText = meta.highlightText ?? suggestion.meta?.highlightText ?? ",";
-    let targetRange = await findCommaRangeByOrdinal(
-      context,
-      paragraph,
-      paragraphText,
-      suggestion.meta?.op
-    );
+    const resolveCommaOnlyRange = async (range, label) => {
+      if (!range) return null;
+      try {
+        range.load("text");
+        await context.sync();
+        const resolvedText = typeof range.text === "string" ? range.text : "";
+        if (resolvedText.includes(",")) return range;
+        warn("highlight delete: rejecting non-comma range", {
+          label,
+          text: resolvedText,
+        });
+      } catch (resolveErr) {
+        warn("highlight delete: failed to validate range text", { label, err: resolveErr });
+      }
+      return null;
+    };
+    let targetRange = null;
+
+    if (Number.isFinite(charStart) && charStart >= 0) {
+      targetRange = await resolveCommaOnlyRange(
+        await getRangeForAnchorSpan(
+          context,
+          paragraph,
+          entry,
+          charStart,
+          charEnd,
+          "highlight-delete",
+          highlightText
+        ),
+        "char-hint"
+      );
+    }
+
+    if (!targetRange) {
+      const candidates = buildDeleteRangeCandidates(suggestion);
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
+        if (!Number.isFinite(candidate?.start) || candidate.start < 0) continue;
+        const safeEnd =
+          Number.isFinite(candidate?.end) && candidate.end > candidate.start
+            ? candidate.end
+            : candidate.start + 1;
+        targetRange = await resolveCommaOnlyRange(
+          await getRangeForAnchorSpan(
+            context,
+            paragraph,
+            entry,
+            candidate.start,
+            safeEnd,
+            `highlight-delete-candidate-${i}`,
+            candidate.snippet || highlightText
+          ),
+          `candidate-${i}`
+        );
+        if (targetRange) break;
+      }
+    }
 
     if (!targetRange && Number.isFinite(charStart) && charStart >= 0) {
-      targetRange = await getRangeForAnchorSpan(
-        context,
-        paragraph,
-        entry,
-        charStart,
-        charEnd,
-        "highlight-delete",
-        highlightText
+      paragraph.load("text");
+      await context.sync();
+      const liveText = paragraph.text || "";
+      const sourceText = entry?.originalText ?? paragraphText ?? liveText;
+      const mappedStart = mapIndexAcrossCanonical(sourceText, liveText, charStart);
+      let commaIndex = -1;
+      for (let delta = 0; delta <= 3; delta++) {
+        const left = mappedStart - delta;
+        const right = mappedStart + delta;
+        if (left >= 0 && liveText[left] === ",") {
+          commaIndex = left;
+          break;
+        }
+        if (right < liveText.length && liveText[right] === ",") {
+          commaIndex = right;
+          break;
+        }
+      }
+      if (commaIndex >= 0) {
+        targetRange = await resolveCommaOnlyRange(
+          await getRangeForAnchorSpan(
+            context,
+            paragraph,
+            entry,
+            commaIndex,
+            commaIndex + 1,
+            "highlight-delete-near-hint",
+            ","
+          ),
+          "near-hint"
+        );
+      }
+    }
+
+    if (!targetRange) {
+      targetRange = await resolveCommaOnlyRange(
+        await findCommaRangeByOrdinal(context, paragraph, paragraphText, suggestion.meta?.op),
+        "ordinal-fallback"
       );
     }
 
@@ -10713,6 +10848,19 @@ function buildDesktopSuggestionLogEntry(suggestion) {
   };
 }
 
+function buildOnlineSuggestionTraceEntry(suggestion, sourceText = "") {
+  const base = buildDesktopSuggestionLogEntry(suggestion);
+  if (!base) return null;
+  const candidates = [base.charHintStart, base.opOriginalPos, base.opPos, base.opCorrectedPos];
+  const center = candidates.find((value) => Number.isFinite(value));
+  return {
+    ...base,
+    confidenceLevel: getSuggestionConfidenceLevel(suggestion),
+    markerTag: typeof suggestion?.markerTag === "string" ? suggestion.markerTag : null,
+    sourcePreview: clipDesktopPreviewWindow(sourceText, Number.isFinite(center) ? center : 0),
+  };
+}
+
 function buildDesktopOperationLogEntry(op, planText = "", sourceText = "") {
   if (!op || typeof op !== "object") return null;
   const opStart = Number.isFinite(op?.start) ? op.start : Number.isFinite(op?.pos) ? op.pos : null;
@@ -12059,7 +12207,17 @@ export async function checkDocumentText() {
   }
   documentCheckInProgress = true;
   resetNotificationFlags();
+  const clearChunkCacheForThisRun =
+    completedCheckRuns > 0 &&
+    shouldClearChunkCacheAfterFirstScan() &&
+    typeof commaEngine?.clearChunkApiCache === "function";
   try {
+    if (clearChunkCacheForThisRun) {
+      commaEngine.clearChunkApiCache();
+      log("Chunk API cache cleared before check", {
+        checkRun: completedCheckRuns + 1,
+      });
+    }
     if (isWordOnline()) {
       actionToken.deadlineAt = Date.now() + resolveOnlineCheckTimeoutMs();
       getCheckAbortController(actionToken, { create: true });
@@ -12069,6 +12227,7 @@ export async function checkDocumentText() {
   } finally {
     documentCheckInProgress = false;
     finishAction(actionToken);
+    completedCheckRuns += 1;
   }
 }
 
@@ -13127,6 +13286,7 @@ async function checkDocumentTextDesktop(checkToken) {
 async function checkDocumentTextOnline(checkToken) {
   log("START checkDocumentTextOnline()");
   const checkStartedAt = tnow();
+  const onlineCheckRun = completedCheckRuns + 1;
   let paragraphsProcessed = 0;
   let suggestionsDetected = 0;
   let suggestions = 0;
@@ -13220,6 +13380,14 @@ async function checkDocumentTextOnline(checkToken) {
         paragraphs: flushParagraphThreshold,
         suggestions: flushSuggestionThreshold,
       });
+      logOnlineDrift("check_start", {
+        checkRun: onlineCheckRun,
+        paragraphCacheDisabled,
+        analyzeConcurrency: resolveOnlineAnalyzeConcurrency(),
+        paragraphTimeoutMs,
+        flushParagraphThreshold,
+        flushSuggestionThreshold,
+      });
       const flushHighlightsIfNeeded = async (highlightedInParagraph) => {
         if (highlightedInParagraph <= 0) return;
         ensureCheckActionActive(checkToken);
@@ -13271,6 +13439,7 @@ async function checkDocumentTextOnline(checkToken) {
         paragraph,
         sourceText,
         suggestionsToRender,
+        sourceMode = "unknown",
       }) => {
         const renderList = Array.isArray(suggestionsToRender)
           ? suggestionsToRender.filter(Boolean)
@@ -13279,6 +13448,22 @@ async function checkDocumentTextOnline(checkToken) {
         const sourceHash = buildDesktopParagraphHash(sourceText);
         const suggestionHash = buildParagraphSuggestionSetHash(sourceText, renderList);
         const previousRender = onlineParagraphRenderState.get(paragraphIndex);
+        const suggestionSample = renderList
+          .slice(0, ONLINE_DRIFT_LOG_SUGGESTION_SAMPLE_LIMIT)
+          .map((suggestion) => buildOnlineSuggestionTraceEntry(suggestion, sourceText))
+          .filter(Boolean);
+        logOnlineDrift("render_input", {
+          checkRun: onlineCheckRun,
+          sourceMode,
+          paragraphIndex,
+          renderCount: renderList.length,
+          sampleCount: suggestionSample.length,
+          sourceHash,
+          suggestionHash,
+          previousSourceHash: previousRender?.sourceHash || null,
+          previousSuggestionHash: previousRender?.suggestionHash || null,
+          suggestions: suggestionSample,
+        });
 
         if (!renderList.length) {
           if (previousRender) {
@@ -13334,13 +13519,22 @@ async function checkDocumentTextOnline(checkToken) {
             paragraphIndex,
             suggestionCount: renderList.length,
           });
+          logOnlineDrift("render_skip_same_hash", {
+            checkRun: onlineCheckRun,
+            sourceMode,
+            paragraphIndex,
+            suggestionCount: renderList.length,
+            sourceHash,
+            suggestionHash,
+          });
           return { highlighted: 0, skippedRerender: true };
         }
 
         await clearPreviousRenderMarkers(paragraphIndex, paragraph);
 
         let highlightedInParagraph = 0;
-        for (const suggestionObj of renderList) {
+        for (let suggestionIndex = 0; suggestionIndex < renderList.length; suggestionIndex++) {
+          const suggestionObj = renderList[suggestionIndex];
           suggestionObj.sourceParagraphHash = sourceHash;
           ensureCheckActionActive(checkToken);
           if (checkAbortSignal?.aborted) {
@@ -13354,6 +13548,16 @@ async function checkDocumentTextOnline(checkToken) {
             paragraph,
             suggestionObj
           );
+          if (suggestionIndex < ONLINE_DRIFT_LOG_SUGGESTION_SAMPLE_LIMIT) {
+            logOnlineDrift("render_apply", {
+              checkRun: onlineCheckRun,
+              sourceMode,
+              paragraphIndex,
+              suggestionIndex,
+              highlighted: Boolean(highlighted),
+              suggestion: buildOnlineSuggestionTraceEntry(suggestionObj, sourceText),
+            });
+          }
           if (highlighted) {
             highlightedInParagraph++;
           }
@@ -13369,6 +13573,15 @@ async function checkDocumentTextOnline(checkToken) {
         } else {
           clearOnlineParagraphRenderState(paragraphIndex);
         }
+        logOnlineDrift("render_done", {
+          checkRun: onlineCheckRun,
+          sourceMode,
+          paragraphIndex,
+          renderCount: renderList.length,
+          highlightedInParagraph,
+          sourceHash,
+          suggestionHash,
+        });
         return { highlighted: highlightedInParagraph, skippedRerender: false };
       };
 
@@ -13491,6 +13704,18 @@ async function checkDocumentTextOnline(checkToken) {
               after: renderReadyCached.suggestions.length,
             });
           }
+          logOnlineDrift("paragraph_cached", {
+            checkRun: onlineCheckRun,
+            paragraphIndex: idx,
+            cachedSuggestionCount: Array.isArray(cached.suggestions) ? cached.suggestions.length : 0,
+            renderSuggestionCount: renderReadyCached.suggestions.length,
+            renderDedupDropped: renderReadyCached.renderDedupDropped,
+            planDropped: renderReadyCached.planDropped,
+            noopCount: renderReadyCached.noopCount,
+            skippedCount: renderReadyCached.skippedCount,
+            skippedByReason: renderReadyCached.skippedByReason,
+            deterministicSkipped: renderReadyCached.deterministicSkipped,
+          });
           if (renderReadyCached.deterministicSkipped > 0) {
             deterministicPlannerSkips += renderReadyCached.deterministicSkipped;
             if (!paragraphCacheDisabled) {
@@ -13508,6 +13733,7 @@ async function checkDocumentTextOnline(checkToken) {
             paragraph: p,
             sourceText: original,
             suggestionsToRender: renderReadyCached.suggestions,
+            sourceMode: "cached",
           });
           suggestions += renderOutcome.highlighted;
           await flushHighlightsIfNeeded(renderOutcome.highlighted);
@@ -13616,6 +13842,22 @@ async function checkDocumentTextOnline(checkToken) {
               after: renderReadyResult.suggestions.length,
             });
           }
+          logOnlineDrift("paragraph_fresh", {
+            checkRun: onlineCheckRun,
+            paragraphIndex: job.paragraphIndex,
+            apiErrors: paragraphApiErrors,
+            nonCommaSkips: paragraphNonCommaSkips,
+            nonCommaSalvaged: paragraphNonCommaSalvaged,
+            skippedSegments: paragraphSkippedSegments.length,
+            inputSuggestionCount: Array.isArray(result.suggestions) ? result.suggestions.length : 0,
+            renderSuggestionCount: renderReadyResult.suggestions.length,
+            renderDedupDropped: renderReadyResult.renderDedupDropped,
+            planDropped: renderReadyResult.planDropped,
+            noopCount: renderReadyResult.noopCount,
+            skippedCount: renderReadyResult.skippedCount,
+            skippedByReason: renderReadyResult.skippedByReason,
+            deterministicSkipped: renderReadyResult.deterministicSkipped,
+          });
           if (renderReadyResult.deterministicSkipped > 0) {
             deterministicPlannerSkips += renderReadyResult.deterministicSkipped;
             if (!paragraphCacheDisabled) {
@@ -13633,6 +13875,7 @@ async function checkDocumentTextOnline(checkToken) {
             paragraph: job.paragraph,
             sourceText: job.sourceText,
             suggestionsToRender: renderReadyResult.suggestions,
+            sourceMode: "fresh",
           });
           suggestions += renderOutcome.highlighted;
           await flushHighlightsIfNeeded(renderOutcome.highlighted);

@@ -1,6 +1,7 @@
 /* global window, process, performance, console, setTimeout */
 // src/api/apiVejice.js
 import axios from "axios";
+import { isWordOnline } from "../utils/host.js";
 
 const envIsProd = () =>
   (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
@@ -21,16 +22,38 @@ const QUIET_LOGS_OVERRIDE =
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
+const ONLINE_VERBOSE_LOGS_OVERRIDE =
+  typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_VERBOSE_LOGS__ === "boolean"
+    ? window.__VEJICE_ONLINE_VERBOSE_LOGS__
+    : typeof process !== "undefined"
+      ? parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS)
+      : undefined;
 const QUIET_LOGS = true;
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
-const log = (...a) => !QUIET_LOGS && DEBUG && console.log("[Vejice API]", ...a);
+const isOnlineVerboseLogsEnabled = () => {
+  if (typeof window !== "undefined") {
+    const direct = parseQuietBoolean(window.__VEJICE_ONLINE_VERBOSE_LOGS__);
+    if (typeof direct === "boolean") return direct;
+  }
+  if (typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean") {
+    return ONLINE_VERBOSE_LOGS_OVERRIDE;
+  }
+  if (typeof process !== "undefined") {
+    const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
+    if (typeof envOverride === "boolean") return envOverride;
+  }
+  return isWordOnline();
+};
+const shouldEmitApiRuntimeLogs = () =>
+  (isOnlineVerboseLogsEnabled() && isWordOnline()) || (!QUIET_LOGS && DEBUG);
+const log = (...a) => shouldEmitApiRuntimeLogs() && console.log("[Vejice API]", ...a);
 const QUOTE_TRACE_REGEX = /["'`\u00AB\u00BB\u2039\u203A\u2018\u2019\u201A\u201C\u201D\u201E]/u;
 function isQuoteTraceEnabled() {
-  if (QUIET_LOGS) return false;
+  if (!((isOnlineVerboseLogsEnabled() && isWordOnline()) || !QUIET_LOGS)) return false;
   if (typeof window !== "undefined") {
     const parsed = parseQuietBoolean(window.__VEJICE_QUOTE_TRACE__);
     if (typeof parsed === "boolean") return parsed;
