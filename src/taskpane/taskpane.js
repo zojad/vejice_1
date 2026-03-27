@@ -1,4 +1,4 @@
-/* global document, Office, Word, console, window, URLSearchParams */
+/* global document, Office, Word, console, window, URLSearchParams, navigator */
 
 import {
   checkDocumentText,
@@ -8,6 +8,8 @@ import {
   applySuggestionOnlineById,
   rejectSuggestionOnlineById,
   isDocumentCheckInProgress,
+  cancelDocumentCheck,
+  forceResetDocumentCheckState,
   getPendingSuggestionsOnline,
   restorePendingSuggestionsOnlineIfNeeded,
 } from "../logic/preveriVejice.js";
@@ -77,6 +79,35 @@ let lastCheckClickAt = 0;
 const CHECK_CLICK_DEBOUNCE_MS = 800;
 const MAX_VISIBLE_NOTIFICATIONS = 30;
 let lastNotificationSignature = "";
+const CHECK_RUN_WATCHDOG_MS = 120000;
+const CHECK_GENERIC_ERROR_MESSAGE = "Napaka. Poskusite \u0161e enkrat.";
+const CHECK_OFFLINE_HINT_MESSAGE = "Preverite internetno povezavo.";
+
+const isOffline = () => {
+  try {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  } catch (_err) {
+    return false;
+  }
+};
+
+const withCheckWatchdog = async (promiseFactory, timeoutMs = CHECK_RUN_WATCHDOG_MS) => {
+  let timeoutId = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => promiseFactory()),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const watchdogError = new Error("check-watchdog-timeout");
+          watchdogError.code = "CHECK_WATCHDOG_TIMEOUT";
+          reject(watchdogError);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
 
 const canUseOnlineReviewActions = () => online && ENABLE_ONLINE_REVIEW_ACTIONS;
 
@@ -222,9 +253,16 @@ const runCheck = async () => {
   setBusy(true);
   clearTaskpaneNotifications();
   renderNotifications({ force: true });
+  if (isOffline()) {
+    setStatus(`${CHECK_GENERIC_ERROR_MESSAGE} ${CHECK_OFFLINE_HINT_MESSAGE}`);
+    checkRunInFlight = false;
+    setBusy(false);
+    syncActionButtons();
+    return;
+  }
   setStatus("Preverjam dokument ...");
   try {
-    const summary = await checkDocumentText();
+    const summary = await withCheckWatchdog(() => checkDocumentText());
     if (summary?.status === "deferred") {
       setStatus("Po\u010dakajte, da se trenutno opravilo zaklju\u010di.");
     } else if (online) {
@@ -250,7 +288,24 @@ const runCheck = async () => {
     }
   } catch (err) {
     errL("check failed", err);
-    setStatus("Napaka pri preverjanju.");
+    const timedOut = String(err?.code || err?.message || "").includes("CHECK_WATCHDOG_TIMEOUT");
+    if (timedOut) {
+      try {
+        cancelDocumentCheck("ui-watchdog-timeout");
+      } catch (_cancelErr) {
+        // ignore cancellation failures
+      }
+      try {
+        forceResetDocumentCheckState("ui-watchdog-timeout");
+      } catch (_resetErr) {
+        // ignore forced reset failures
+      }
+    }
+    if (isOffline()) {
+      setStatus(`${CHECK_GENERIC_ERROR_MESSAGE} ${CHECK_OFFLINE_HINT_MESSAGE}`);
+    } else {
+      setStatus(CHECK_GENERIC_ERROR_MESSAGE);
+    }
   } finally {
     checkRunInFlight = false;
     setBusy(false);

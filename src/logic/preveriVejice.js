@@ -2084,6 +2084,18 @@ export function cancelDocumentCheck(reason = CHECK_ABORT_REASON_CANCELLED) {
   return true;
 }
 
+export function forceResetDocumentCheckState(reason = CHECK_ABORT_REASON_CANCELLED) {
+  const activeToken = activeActionState?.token;
+  const hasActiveCheck = getActiveActionType() === ACTION_TYPE_CHECK;
+  if (!hasActiveCheck && !documentCheckInProgress) return false;
+  if (hasActiveCheck && activeToken) {
+    cancelActionToken(activeToken, reason);
+    finishAction(activeToken);
+  }
+  documentCheckInProgress = false;
+  return true;
+}
+
 function showToastNotification(message) {
   if (!message) return;
   if (typeof Office === "undefined" || !Office.context?.ui?.displayDialogAsync) {
