@@ -10677,6 +10677,7 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
     typeof options?.deterministicMode === "boolean"
       ? options.deterministicMode
       : isDeterministicMappingV2Enabled();
+  const applyOrder = options?.applyOrder === "asc" ? "asc" : "desc";
   const setDeterministicSkipReason = (suggestion, reason) => {
     if (!deterministicMode) return;
     if (!suggestion || typeof suggestion !== "object") return;
@@ -10845,7 +10846,9 @@ function buildParagraphOperationsPlan(snapshotText, sourceText, suggestions, opt
   }
 
   rawPlan.sort((a, b) => {
-    if (a.start !== b.start) return b.start - a.start;
+    if (a.start !== b.start) {
+      return applyOrder === "asc" ? a.start - b.start : b.start - a.start;
+    }
     if (a.kind !== b.kind) return a.kind === "delete" ? -1 : 1;
     return b.sortPos - a.sortPos;
   });
@@ -12723,9 +12726,10 @@ async function checkDocumentTextDesktop(checkToken) {
           const snapshotText = paragraph.text || "";
           const sourceForPlan = anchorsEntry?.originalText ?? job.sourceText ?? snapshotText;
           const planOptions = deterministicMappingV2
-            ? { deterministicMode: true }
+            ? { deterministicMode: true, applyOrder: "asc" }
             : {
                 deterministicMode: false,
+                applyOrder: "asc",
               };
           const { plan, skipped, noop } = buildParagraphOperationsPlan(
             snapshotText,
@@ -12739,6 +12743,7 @@ async function checkDocumentTextDesktop(checkToken) {
             planned: plan.length,
             skipped: skipped.length,
             noop: noop.length,
+            applyOrder: planOptions.applyOrder,
             skippedByReason: summarizeSkippedReasons(skipped),
           });
           if (plan.length) {
@@ -12846,6 +12851,7 @@ async function checkDocumentTextDesktop(checkToken) {
               planned: deferredPlan.length,
               skipped: deferredSkipped.length,
               noop: deferredNoop.length,
+              applyOrder: planOptions.applyOrder,
               skippedByReason: summarizeSkippedReasons(deferredSkipped),
             });
             if (deferredPlan.length) {
