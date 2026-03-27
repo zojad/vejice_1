@@ -570,7 +570,6 @@ function isDeterministicMappingV2Enabled() {
 }
 
 function isDesktopVerboseLoggingEnabled() {
-  if (QUIET_LOGS) return false;
   if (typeof window !== "undefined") {
     const override =
       parseBooleanFlag(window.__VEJICE_DESKTOP_VERBOSE_LOGS) ??
@@ -583,6 +582,8 @@ function isDesktopVerboseLoggingEnabled() {
       parseBooleanFlag(process.env?.VEJICE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
+  if (isLocalhostRuntime()) return true;
+  if (QUIET_LOGS) return false;
   return false;
 }
 
@@ -2859,7 +2860,28 @@ async function applyDesktopAuthoritativeInsertOp(context, paragraph, paragraphIn
     if (!Number.isFinite(anchor?.charStart) || anchor.charStart < 0) return false;
     const anchorEnd = getAnchorResolvedEnd(anchor);
     if (!Number.isFinite(anchorEnd) || anchorEnd <= anchor.charStart) return false;
-    const sourceBoundary = insertLocation === Word.InsertLocation.after ? anchorEnd : anchor.charStart;
+    let sourceBoundary = insertLocation === Word.InsertLocation.after ? anchorEnd : anchor.charStart;
+    if (insertLocation === Word.InsertLocation.after) {
+      const trailingBoundaryRaw =
+        typeof anchor?.trailingBoundary === "string" ? anchor.trailingBoundary : "";
+      const trailingBoundary = trailingBoundaryRaw.replace(/^\s+/u, "");
+      if (trailingBoundary && Number.isFinite(sourceBoundary) && sourceBoundary >= 0) {
+        let scan = sourceBoundary;
+        for (const boundaryChar of trailingBoundary) {
+          if (!boundaryChar || /\s/u.test(boundaryChar) || boundaryChar === ",") continue;
+          if (boundaryChar !== ".") break;
+          while (scan < sourceText.length && /[\s\u200B-\u200D\uFEFF]/u.test(sourceText[scan] || "")) {
+            scan++;
+          }
+          if (scan < sourceText.length && sourceText[scan] === boundaryChar) {
+            scan++;
+            continue;
+          }
+          break;
+        }
+        sourceBoundary = scan;
+      }
+    }
     const boundaryFirst = await tryBoundaryInsert(
       sourceBoundary,
       `${traceLabel}-boundary-first`,
@@ -4378,6 +4400,20 @@ function pruneSuggestionsForRenderByPlan(snapshotText, sourceText, suggestions) 
     const renderKey = buildSuggestionRenderDedupKey(chosen) || chosen?.id || `${output.length}`;
     if (seenRenderKeys.has(renderKey)) continue;
     seenRenderKeys.add(renderKey);
+    const chosenMeta =
+      chosen && typeof chosen === "object"
+        ? chosen.meta && typeof chosen.meta === "object"
+          ? chosen.meta
+          : (chosen.meta = {})
+        : null;
+    if (chosenMeta) {
+      chosenMeta.renderPlan = {
+        kind: operation?.kind ?? null,
+        start: Number.isFinite(operation?.start) ? operation.start : null,
+        end: Number.isFinite(operation?.end) ? operation.end : null,
+        replacement: typeof operation?.replacement === "string" ? operation.replacement : null,
+      };
+    }
     output.push(chosen);
   }
 
@@ -4816,6 +4852,9 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
     const rawRight = suggestion.snippets?.rightSnippet ?? corrected.slice(suggestion.meta?.op?.pos ?? 0);
     const lastWord = extractLastWord(rawLeft || "");
     let leftContext = (rawLeft || "").slice(-20).replace(/[\r\n]+/g, " ");
+    const plannedBoundaryPos = Number.isFinite(suggestion?.meta?.renderPlan?.start)
+      ? suggestion.meta.renderPlan.start
+      : null;
     const searchOpts = { matchCase: false, matchWholeWord: false };
     const boundaryIntent = resolveSuggestionQuoteBoundaryIntent(suggestion, suggestion?.meta?.op) ?? "none";
     const boundaryIntentSource = resolveSuggestionQuoteBoundaryIntentSource(
@@ -5285,12 +5324,43 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
           anchor.targetTokenAfter,
           anchor.highlightAnchorTarget,
         ];
-    const lexicalAnchorCandidate = lexicalAnchorPriority.find(
-      (candidate) =>
-        Number.isFinite(candidate?.charStart) &&
-        candidate.charStart >= 0 &&
-        /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
-    );
+    const lexicalBoundaryHintCandidates = [
+      plannedBoundaryPos,
+      anchor?.boundaryMeta?.targetBoundaryPos,
+      anchor?.targetCharStart,
+      suggestion?.meta?.op?.correctedPos,
+      suggestion?.meta?.op?.pos,
+      anchor?.boundaryMeta?.sourceBoundaryPos,
+      suggestion?.meta?.op?.originalPos,
+    ].filter((value, index, arr) => Number.isFinite(value) && arr.indexOf(value) === index);
+    const lexicalBoundaryHint = lexicalBoundaryHintCandidates.length > 0 ? lexicalBoundaryHintCandidates[0] : null;
+    const lexicalAnchorCandidates = lexicalAnchorPriority
+      .map((candidate, priorityIndex) => ({ candidate, priorityIndex }))
+      .filter(
+        ({ candidate }) =>
+          Number.isFinite(candidate?.charStart) &&
+          candidate.charStart >= 0 &&
+          /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
+      );
+    const lexicalAnchorCandidate =
+      lexicalAnchorCandidates.length === 0
+        ? null
+        : Number.isFinite(lexicalBoundaryHint)
+          ? lexicalAnchorCandidates
+              .map(({ candidate, priorityIndex }) => {
+                const start = candidate.charStart;
+                const end = Number.isFinite(candidate?.charEnd) ? candidate.charEnd : candidate.charStart + 1;
+                const distance = Math.min(
+                  Math.abs(lexicalBoundaryHint - start),
+                  Math.abs(lexicalBoundaryHint - end)
+                );
+                return { candidate, priorityIndex, distance };
+              })
+              .sort((a, b) => {
+                if (a.distance !== b.distance) return a.distance - b.distance;
+                return a.priorityIndex - b.priorityIndex;
+              })[0]?.candidate || null
+          : lexicalAnchorCandidates[0].candidate;
     const shouldForcePunctuationBoundary =
       anchor?.boundaryMeta?.forcePunctuationHighlight === true ||
       dashBoundaryRegex.test(boundaryPunctuationChar || "") ||
@@ -5439,6 +5509,17 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       return false;
     }
   } else if (!range && Number.isFinite(anchor.highlightCharStart) && anchor.highlightCharStart >= 0) {
+    const shouldTrustMetaHighlightRange =
+      !Number.isFinite(plannedBoundaryPos) ||
+      Math.abs(plannedBoundaryPos - anchor.highlightCharStart) <= 4;
+    if (!shouldTrustMetaHighlightRange) {
+      traceQuoteSuggestion("highlight_insert.meta_skipped_due_to_plan_boundary", suggestion, {
+        force: true,
+        plannedBoundaryPos,
+        metaHighlightStart: anchor.highlightCharStart,
+      });
+    }
+    if (shouldTrustMetaHighlightRange) {
     const metaEndCandidate = {
       charStart: anchor.highlightCharStart,
       charEnd: anchor.highlightCharEnd,
@@ -5454,6 +5535,7 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       "highlight-insert-meta",
       anchor.highlightText
     );
+    }
   }
 
   const highlightAnchorCandidate = shouldForcePunctuationBoundary
@@ -6376,6 +6458,32 @@ async function resolveStrictInsertRangeForSuggestion(
 
   const beforeAnchorRawToken =
     typeof beforeAnchor?.tokenText === "string" ? beforeAnchor.tokenText.trim() : "";
+  const resolveBeforeAnchorEnd = (startIndex, baseLength) => {
+    if (!Number.isFinite(startIndex) || startIndex < 0) return -1;
+    const safeBaseLength = Number.isFinite(baseLength) ? Math.max(0, Math.floor(baseLength)) : 0;
+    let endIndex = startIndex + safeBaseLength;
+    const trailingBoundaryRaw =
+      typeof beforeAnchor?.trailingBoundary === "string" ? beforeAnchor.trailingBoundary : "";
+    const trailingBoundary = trailingBoundaryRaw.replace(/^\s+/u, "");
+    if (!trailingBoundary || endIndex < 0 || endIndex > liveText.length) {
+      return endIndex;
+    }
+    // Keep abbreviation punctuation bound to the "before" anchor on desktop
+    // so insert-after does not produce "M,." from "M.".
+    for (const boundaryChar of trailingBoundary) {
+      if (!boundaryChar || /\s/u.test(boundaryChar) || boundaryChar === ",") continue;
+      if (boundaryChar !== ".") break;
+      while (endIndex < liveText.length && /[\s\u200B-\u200D\uFEFF]/u.test(liveText[endIndex] || "")) {
+        endIndex++;
+      }
+      if (endIndex < liveText.length && liveText[endIndex] === boundaryChar) {
+        endIndex++;
+        continue;
+      }
+      break;
+    }
+    return endIndex;
+  };
   const beforeAnchorWordToken = getCleanWordTokenFromAnchor(beforeAnchor);
   const afterAnchorWordToken = getCleanWordTokenFromAnchor(afterAnchor);
   const beforeAnchorIsPunctuationOnly = Boolean(beforeAnchorRawToken) && !beforeAnchorWordToken;
@@ -6492,7 +6600,10 @@ async function resolveStrictInsertRangeForSuggestion(
     }
   }
   if (beforeAnchorIsPunctuationOnly && beforeRange && Number.isFinite(beforeStart) && beforeStart >= 0) {
-    const beforeEnd = beforeStart + (typeof beforeText === "string" ? beforeText.length : 0);
+    const beforeEnd = resolveBeforeAnchorEnd(
+      beforeStart,
+      typeof beforeText === "string" ? beforeText.length : 0
+    );
     if (Number.isFinite(beforeEnd) && beforeEnd >= beforeStart) {
       const gapEnd =
         Number.isFinite(afterStart) && afterStart >= beforeEnd
@@ -6789,14 +6900,44 @@ async function resolveStrictInsertRangeForSuggestion(
   };
   const resolveBeforeRangeForInsert = async (traceSuffix = "insert-before-anchor") => {
     if (!beforeRange || !Number.isFinite(beforeStart) || beforeStart < 0) return beforeRange;
-    const beforeEnd = beforeStart + (typeof beforeText === "string" ? beforeText.length : 0);
+    const beforeEnd = resolveBeforeAnchorEnd(
+      beforeStart,
+      typeof beforeText === "string" ? beforeText.length : 0
+    );
     if (!Number.isFinite(beforeEnd) || beforeEnd <= beforeStart) return beforeRange;
-    const safeEnd = Math.max(beforeStart + 1, Math.min(liveText.length, Math.floor(beforeEnd)));
+    const baseEnd = Math.max(beforeStart + 1, Math.min(liveText.length, Math.floor(beforeEnd)));
+    let effectiveEnd = baseEnd;
+    const gapLimit =
+      Number.isFinite(afterStart) && afterStart >= effectiveEnd
+        ? Math.min(liveText.length, Math.floor(afterStart))
+        : Math.min(liveText.length, effectiveEnd + 8);
+    // If the "before" token is an abbreviation stem (e.g., M) and punctuation
+    // immediately follows (e.g., M.), anchor after that punctuation.
+    if (effectiveEnd < gapLimit) {
+      let scan = effectiveEnd;
+      while (scan < gapLimit) {
+        const ch = liveText[scan] || "";
+        if (/[\s\u200B-\u200D\uFEFF]/u.test(ch)) {
+          scan++;
+          continue;
+        }
+        if (ch === ".") {
+          scan++;
+        }
+        break;
+      }
+      if (scan > effectiveEnd) {
+        effectiveEnd = scan;
+      }
+    }
+    const safeEnd = Math.max(beforeStart + 1, Math.min(liveText.length, effectiveEnd));
+    const boundaryExtended = safeEnd > baseEnd;
     let anchorIndex = safeEnd - 1;
     while (anchorIndex >= beforeStart && /[\s\u200B-\u200D\uFEFF]/u.test(liveText[anchorIndex] || "")) {
       anchorIndex--;
     }
-    if (anchorIndex < beforeStart || anchorIndex === safeEnd - 1) {
+    // Keep original range unless we explicitly moved the boundary or trimmed trailing gap chars.
+    if (anchorIndex < beforeStart || (anchorIndex === safeEnd - 1 && !boundaryExtended)) {
       return beforeRange;
     }
     const trimmedRange = await getRangeForCharacterSpan(
@@ -6812,7 +6953,7 @@ async function resolveStrictInsertRangeForSuggestion(
   };
 
   if (beforeRange && afterRange && Number.isFinite(beforeStart) && beforeStart >= 0 && Number.isFinite(afterStart) && afterStart >= 0) {
-    const beforeEnd = beforeStart + beforeText.length;
+    const beforeEnd = resolveBeforeAnchorEnd(beforeStart, beforeText.length);
     if (beforeEnd <= afterStart) {
       const gapText = pairResolved?.gapText ?? liveText.slice(beforeEnd, afterStart);
       if (gapText.includes(",")) {
@@ -6892,7 +7033,7 @@ async function resolveStrictInsertRangeForSuggestion(
   }
 
   if (beforeRange && Number.isFinite(beforeStart) && beforeStart >= 0) {
-    const beforeEnd = beforeStart + beforeText.length;
+    const beforeEnd = resolveBeforeAnchorEnd(beforeStart, beforeText.length);
     const gapEnd =
       Number.isFinite(afterStart) && afterStart >= beforeEnd ? afterStart : liveText.length;
     const gapText = liveText.slice(beforeEnd, gapEnd);
@@ -7310,7 +7451,28 @@ async function tryApplyInsertUsingMetadata(context, paragraph, suggestion) {
       : typeof tokenAnchor.tokenText === "string"
         ? tokenAnchor.charStart + tokenAnchor.tokenText.length
         : tokenAnchor.charStart;
-    const hintIndex = mapIndexAcrossCanonical(originalText, liveText, anchorEnd);
+    const rawHintIndex = mapIndexAcrossCanonical(originalText, liveText, anchorEnd);
+    const trailingBoundaryRaw =
+      typeof tokenAnchor.trailingBoundary === "string" ? tokenAnchor.trailingBoundary : "";
+    const trailingBoundary = trailingBoundaryRaw.replace(/^\s+/u, "");
+    let hintIndex = rawHintIndex;
+    if (Number.isFinite(hintIndex) && hintIndex >= 0 && trailingBoundary) {
+      // Preserve abbreviation punctuation in desktop insertion (e.g., "M." -> place comma after ".").
+      let scan = hintIndex;
+      for (const boundaryChar of trailingBoundary) {
+        if (!boundaryChar || /\s/u.test(boundaryChar)) continue;
+        if (boundaryChar !== ".") break;
+        while (scan < liveText.length && /[\s\u200B-\u200D\uFEFF]/u.test(liveText[scan] || "")) {
+          scan++;
+        }
+        if (scan < liveText.length && liveText[scan] === boundaryChar) {
+          scan++;
+          continue;
+        }
+        break;
+      }
+      hintIndex = scan;
+    }
     if (tokenText) {
       const tokenStart = findTokenStartByHint(liveText, tokenText, hintIndex, tokenOrdinal);
       if (tokenStart > 0 && gapCharRegex.test(liveText[tokenStart - 1])) {

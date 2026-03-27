@@ -439,6 +439,10 @@ Office.onReady((info) => {
 
   const mode = resolveManifestMode();
   online = mode ? mode === "web" : isWordOnline();
+  // Notifications are persisted in localStorage and can leak across documents.
+  // Start each taskpane session clean to avoid showing stale messages in new docs.
+  clearTaskpaneNotifications();
+  lastNotificationSignature = "";
   if (online) {
     const restored = restorePendingSuggestionsOnlineIfNeeded();
     if (restored > 0) {
