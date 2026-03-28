@@ -18,7 +18,21 @@ async function getHttpsOptions() {
   return { ca: httpsOptions.ca, key: httpsOptions.key, cert: httpsOptions.cert };
 }
 
+function parseBuildBooleanFlag(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
 module.exports = async (env, options) => {
+  const enableOnlineReviewActions = parseBuildBooleanFlag(
+    process.env.VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS,
+    false
+  );
   const config = {
     devtool: "source-map",
     entry: {
@@ -47,20 +61,41 @@ module.exports = async (env, options) => {
         },
       ],
     },
+    optimization: {
+      runtimeChunk: {
+        name: "runtime",
+      },
+      splitChunks: {
+        chunks: "all",
+        cacheGroups: {
+          default: false,
+          defaultVendors: false,
+          common: {
+            name: "common",
+            minChunks: 2,
+            chunks: (chunk) => ["commands", "taskpane"].includes(chunk.name),
+            enforce: true,
+          },
+        },
+      },
+    },
     plugins: [
       new HtmlWebpackPlugin({
         filename: "commands.html",
         template: "./src/commands/commands.html",
-        chunks: ["polyfill", "commands"],
+        chunks: ["runtime", "polyfill", "common", "commands"],
         inject: "body",
       }),
       new HtmlWebpackPlugin({
         filename: "taskpane.html",
         template: "./src/taskpane/taskpane.html",
-        chunks: ["polyfill", "taskpane"],
+        chunks: ["runtime", "polyfill", "common", "taskpane"],
         inject: "body",
       }),
       new webpack.DefinePlugin({
+        __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__: JSON.stringify(
+          enableOnlineReviewActions
+        ),
         "process.env.VEJICE_API_URL": JSON.stringify(process.env.VEJICE_API_URL || ""),
         "process.env.VEJICE_USE_MOCK": JSON.stringify(process.env.VEJICE_USE_MOCK || ""),
         "process.env.VEJICE_USE_LEMMATIZER": JSON.stringify(process.env.VEJICE_USE_LEMMATIZER || ""),

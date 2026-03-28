@@ -1,4 +1,4 @@
-/* global document, Office, Word, console, window, URLSearchParams, navigator */
+/* global document, Office, Word, console, window, URLSearchParams, navigator, __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__ */
 
 import {
   checkDocumentText,
@@ -12,6 +12,8 @@ import {
   forceResetDocumentCheckState,
   getPendingSuggestionsOnline,
   restorePendingSuggestionsOnlineIfNeeded,
+  RUNTIME_STATE_EVENT_NAME,
+  RUNTIME_STATE_STORAGE_KEY,
 } from "../logic/preveriVejice.js";
 import { isWordOnline } from "../utils/host.js";
 import {
@@ -23,8 +25,10 @@ import {
 
 const log = (...args) => console.log("[Vejice Taskpane]", ...args);
 const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
-// Temporary kill-switch for the online accept/reject workflow while the flow is unstable.
-const ENABLE_ONLINE_REVIEW_ACTIONS = false;
+const ENABLE_ONLINE_REVIEW_ACTIONS =
+  typeof __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__ === "boolean"
+    ? __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__
+    : false;
 
 const isLikelyAddinRuntimeError = (eventOrReason) => {
   try {
@@ -82,6 +86,12 @@ let lastNotificationSignature = "";
 const CHECK_RUN_WATCHDOG_MS = 120000;
 const CHECK_GENERIC_ERROR_MESSAGE = "Napaka. Poskusite \u0161e enkrat.";
 const CHECK_OFFLINE_HINT_MESSAGE = "Preverite internetno povezavo.";
+const UI_REFRESH_DEBOUNCE_MS = 120;
+let uiRefreshTimerId = null;
+let pendingUiRefresh = {
+  forceNotifications: false,
+  includePendingStatus: false,
+};
 
 const isOffline = () => {
   try {
@@ -210,8 +220,7 @@ const syncActionButtons = () => {
 
 const setBusy = (nextBusy) => {
   busy = Boolean(nextBusy);
-  syncStatusLoadingIndicator();
-  syncActionButtons();
+  scheduleUiRefresh({ immediate: true });
 };
 
 const clampCurrentSuggestionIndex = (total) => {
@@ -239,6 +248,41 @@ const refreshPendingStatus = () => {
   setStatus(`Končano. Predlogi: ${pending.length}.`);
 };
 
+const flushUiRefresh = ({ forceNotifications = false, includePendingStatus = false } = {}) => {
+  syncActionButtons();
+  renderNotifications({ force: forceNotifications });
+  if (includePendingStatus && !busy && !checkRunInFlight && !isDocumentCheckInProgress()) {
+    refreshPendingStatus();
+  }
+};
+
+const scheduleUiRefresh = ({ forceNotifications = false, includePendingStatus = false, immediate = false } = {}) => {
+  if (immediate) {
+    if (uiRefreshTimerId) {
+      clearTimeout(uiRefreshTimerId);
+      uiRefreshTimerId = null;
+    }
+    pendingUiRefresh = {
+      forceNotifications: false,
+      includePendingStatus: false,
+    };
+    flushUiRefresh({ forceNotifications, includePendingStatus });
+    return;
+  }
+  pendingUiRefresh.forceNotifications = pendingUiRefresh.forceNotifications || forceNotifications;
+  pendingUiRefresh.includePendingStatus = pendingUiRefresh.includePendingStatus || includePendingStatus;
+  if (uiRefreshTimerId) return;
+  uiRefreshTimerId = setTimeout(() => {
+    const refreshPayload = pendingUiRefresh;
+    pendingUiRefresh = {
+      forceNotifications: false,
+      includePendingStatus: false,
+    };
+    uiRefreshTimerId = null;
+    flushUiRefresh(refreshPayload);
+  }, UI_REFRESH_DEBOUNCE_MS);
+};
+
 const runCheck = async () => {
   const now = Date.now();
   if (now - lastCheckClickAt < CHECK_CLICK_DEBOUNCE_MS) {
@@ -252,12 +296,11 @@ const runCheck = async () => {
   checkRunInFlight = true;
   setBusy(true);
   clearTaskpaneNotifications();
-  renderNotifications({ force: true });
+  scheduleUiRefresh({ forceNotifications: true, immediate: true });
   if (isOffline()) {
     setStatus(`${CHECK_GENERIC_ERROR_MESSAGE} ${CHECK_OFFLINE_HINT_MESSAGE}`);
     checkRunInFlight = false;
     setBusy(false);
-    syncActionButtons();
     return;
   }
   setStatus("Preverjam dokument ...");
@@ -309,7 +352,6 @@ const runCheck = async () => {
   } finally {
     checkRunInFlight = false;
     setBusy(false);
-    syncActionButtons();
   }
 };
 
@@ -338,7 +380,6 @@ const runClearHighlights = async () => {
     setStatus("Napaka pri brisanju ozna\u010db.");
   } finally {
     setBusy(false);
-    syncActionButtons();
   }
 };
 
@@ -361,7 +402,6 @@ const runAccept = async () => {
     setStatus("Napaka pri sprejemanju.");
   } finally {
     setBusy(false);
-    syncActionButtons();
   }
 };
 
@@ -389,7 +429,6 @@ const runReject = async () => {
     setStatus("Napaka pri zavračanju.");
   } finally {
     setBusy(false);
-    syncActionButtons();
   }
 };
 
@@ -436,7 +475,6 @@ const runAcceptOne = async () => {
     setStatus("Napaka pri sprejemanju predloga.");
   } finally {
     setBusy(false);
-    syncActionButtons();
   }
 };
 const runRejectOne = async () => {
@@ -481,7 +519,6 @@ const runRejectOne = async () => {
     setStatus("Napaka pri zavračanju predloga.");
   } finally {
     setBusy(false);
-    syncActionButtons();
   }
 };
 Office.onReady((info) => {
@@ -538,24 +575,48 @@ Office.onReady((info) => {
   if (clearNotificationsBtn) {
     clearNotificationsBtn.addEventListener("click", () => {
       clearTaskpaneNotifications();
-      renderNotifications({ force: true });
+      scheduleUiRefresh({ forceNotifications: true, immediate: true });
     });
   }
 
   if (typeof window !== "undefined") {
     window.addEventListener("storage", (evt) => {
-      if (!evt || evt.key !== TASKPANE_NOTIFICATION_STORAGE_KEY) return;
-      renderNotifications({ force: true });
+      if (!evt) return;
+      if (evt.key === TASKPANE_NOTIFICATION_STORAGE_KEY) {
+        scheduleUiRefresh({ forceNotifications: true });
+        return;
+      }
+      if (evt.key === RUNTIME_STATE_STORAGE_KEY) {
+        scheduleUiRefresh({ includePendingStatus: true });
+      }
     });
     window.addEventListener(TASKPANE_NOTIFICATION_EVENT_NAME, () => {
-      renderNotifications({ force: true });
+      scheduleUiRefresh({ forceNotifications: true });
+    });
+    window.addEventListener(RUNTIME_STATE_EVENT_NAME, () => {
+      scheduleUiRefresh();
+    });
+    window.addEventListener("focus", () => {
+      scheduleUiRefresh({ includePendingStatus: true });
+    });
+    window.addEventListener("online", () => {
+      scheduleUiRefresh({ includePendingStatus: true });
+    });
+    window.addEventListener("offline", () => {
+      scheduleUiRefresh();
+    });
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      scheduleUiRefresh({ includePendingStatus: true });
     });
   }
 
-  setBusy(false);
-  syncActionButtons();
-  setInterval(syncActionButtons, 500);
-  setInterval(() => renderNotifications(), 1000);
-  renderNotifications({ force: true });
-  refreshPendingStatus();
+  busy = false;
+  scheduleUiRefresh({
+    forceNotifications: true,
+    includePendingStatus: true,
+    immediate: true,
+  });
 });

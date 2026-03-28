@@ -206,6 +206,8 @@ const unstableOnlineParagraphBackoff = new Map();
 const onlineMarkerBaselineByKey = new Map();
 const PENDING_SUGGESTIONS_STORAGE_BASE_KEY = "vejice.pendingSuggestionsOnline.v2";
 const PENDING_SUGGESTIONS_SESSION_KEY = "vejice.pendingSuggestionsSessionId.v1";
+export const RUNTIME_STATE_STORAGE_KEY = "vejice.ui.runtime-state.v1";
+export const RUNTIME_STATE_EVENT_NAME = "vejice:runtime-state-updated";
 const DESKTOP_PARAGRAPH_CACHE_VERSION = 3;
 const ONLINE_PARAGRAPH_CACHE_VERSION = 3;
 const MAX_PARAGRAPH_CHARS = 3000; //???
@@ -845,7 +847,6 @@ function removePendingSuggestionsByReference(suggestions, { persist = true } = {
 }
 
 export function getPendingSuggestionsOnline(debugSnapshot = false) {
-  sortPendingSuggestionsOnlineInPlace();
   if (!debugSnapshot) return pendingSuggestionsOnline;
   return pendingSuggestionsOnline.map((sug) => ({
     id: sug?.id,
@@ -1946,6 +1947,43 @@ function getActiveActionType() {
   return activeActionState?.type || ACTION_TYPE_IDLE;
 }
 
+function emitRuntimeStateUpdate(reason = null) {
+  if (typeof window === "undefined") return;
+  const normalizedReason =
+    typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  const payload = {
+    activeAction: getActiveActionType(),
+    checkInProgress: isDocumentCheckInProgress(),
+    pendingCount: Array.isArray(pendingSuggestionsOnline) ? pendingSuggestionsOnline.length : 0,
+    timestamp: Date.now(),
+    reason: normalizedReason,
+  };
+  try {
+    const storage = window.localStorage;
+    if (storage) {
+      storage.setItem(RUNTIME_STATE_STORAGE_KEY, JSON.stringify(payload));
+    }
+  } catch (_storageErr) {
+    // ignore localStorage failures
+  }
+  if (typeof window.dispatchEvent !== "function") return;
+  try {
+    if (typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent(RUNTIME_STATE_EVENT_NAME, { detail: payload }));
+      return;
+    }
+  } catch (_customEventErr) {
+    // fall through to basic Event
+  }
+  try {
+    if (typeof Event === "function") {
+      window.dispatchEvent(new Event(RUNTIME_STATE_EVENT_NAME));
+    }
+  } catch (_eventErr) {
+    // ignore event dispatch failures
+  }
+}
+
 function getCheckAbortController(token, { create = false } = {}) {
   if (!token || token.type !== ACTION_TYPE_CHECK || !Number.isFinite(token.id)) return null;
   const existing = checkAbortControllersByTokenId.get(token.id);
@@ -1992,17 +2030,22 @@ function beginAction(type) {
     token,
     startedAt: Date.now(),
   };
+  emitRuntimeStateUpdate(`begin:${type}`);
   return token;
 }
 
-function finishAction(token) {
+function finishAction(token, { emitRuntimeState = true, reason = null } = {}) {
   releaseCheckAbortController(token);
   if (!token || activeActionState?.token !== token) return;
+  const finishedType = token?.type || ACTION_TYPE_IDLE;
   activeActionState = {
     type: ACTION_TYPE_IDLE,
     token: null,
     startedAt: 0,
   };
+  if (emitRuntimeState) {
+    emitRuntimeStateUpdate(reason || `finish:${finishedType}`);
+  }
 }
 
 function cancelActionToken(token, reason = CHECK_ABORT_REASON_CANCELLED) {
@@ -2088,11 +2131,14 @@ export function forceResetDocumentCheckState(reason = CHECK_ABORT_REASON_CANCELL
   const activeToken = activeActionState?.token;
   const hasActiveCheck = getActiveActionType() === ACTION_TYPE_CHECK;
   if (!hasActiveCheck && !documentCheckInProgress) return false;
+  documentCheckInProgress = false;
   if (hasActiveCheck && activeToken) {
     cancelActionToken(activeToken, reason);
-    finishAction(activeToken);
+    finishAction(activeToken, {
+      emitRuntimeState: false,
+    });
   }
-  documentCheckInProgress = false;
+  emitRuntimeStateUpdate(`force-reset:${reason || CHECK_ABORT_REASON_CANCELLED}`);
   return true;
 }
 
@@ -12749,16 +12795,18 @@ async function checkDocumentTextDesktop(checkToken) {
             job.suggestions,
             planOptions
           );
-          logDesktopVerbose("Desktop apply plan", {
-            paragraphIndex: job.paragraphIndex,
-            total: job.suggestions.length,
-            planned: plan.length,
-            skipped: skipped.length,
-            noop: noop.length,
-            applyOrder: planOptions.applyOrder,
-            skippedByReason: summarizeSkippedReasons(skipped),
-          });
-          if (plan.length) {
+          if (DESKTOP_VERBOSE_LOGS) {
+            logDesktopVerbose("Desktop apply plan", {
+              paragraphIndex: job.paragraphIndex,
+              total: job.suggestions.length,
+              planned: plan.length,
+              skipped: skipped.length,
+              noop: noop.length,
+              applyOrder: planOptions.applyOrder,
+              skippedByReason: summarizeSkippedReasons(skipped),
+            });
+          }
+          if (DESKTOP_VERBOSE_LOGS && plan.length) {
             logDesktopVerbose("Desktop apply op details", {
               paragraphIndex: job.paragraphIndex,
               ops: plan.map((op, opIndex) => ({
@@ -12767,13 +12815,13 @@ async function checkDocumentTextDesktop(checkToken) {
               })),
             });
           }
-          if (skipped.length) {
+          if (DESKTOP_VERBOSE_LOGS && skipped.length) {
             logDesktopVerbose("Desktop apply skipped details", {
               paragraphIndex: job.paragraphIndex,
               skipped: skipped.map((item) => buildSkippedSuggestionLogEntry(item, sourceForPlan)),
             });
           }
-          if (noop.length) {
+          if (DESKTOP_VERBOSE_LOGS && noop.length) {
             logDesktopVerbose("Desktop apply noop details", {
               paragraphIndex: job.paragraphIndex,
               noop: noop.map((suggestion) => buildDesktopSuggestionLogEntry(suggestion)).filter(Boolean),
@@ -12798,11 +12846,13 @@ async function checkDocumentTextDesktop(checkToken) {
           for (let opIndex = 0; opIndex < plan.length; opIndex++) {
             const op = plan[opIndex];
             try {
-              logDesktopVerbose("Desktop apply op:attempt", {
-                paragraphIndex: job.paragraphIndex,
-                opIndex,
-                op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
-              });
+              if (DESKTOP_VERBOSE_LOGS) {
+                logDesktopVerbose("Desktop apply op:attempt", {
+                  paragraphIndex: job.paragraphIndex,
+                  opIndex,
+                  op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
+                });
+              }
               if (
                 DESKTOP_DIRECT_INSERT_ENABLED &&
                 !deterministicMappingV2 &&
@@ -12815,12 +12865,14 @@ async function checkDocumentTextDesktop(checkToken) {
                   sourceForPlan,
                   op
                 );
-                logDesktopVerbose("Desktop apply op:direct result", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex,
-                  status: directStatus,
-                  op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
-                });
+                if (DESKTOP_VERBOSE_LOGS) {
+                  logDesktopVerbose("Desktop apply op:direct result", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex,
+                    status: directStatus,
+                    op: buildDesktopOperationLogEntry(op, snapshotText, sourceForPlan),
+                  });
+                }
                 if (directStatus === "noop") {
                   continue;
                 }
@@ -12857,16 +12909,18 @@ async function checkDocumentTextDesktop(checkToken) {
               deferredSuggestions,
               planOptions
             );
-            logDesktopVerbose("Desktop deferred apply plan", {
-              paragraphIndex: job.paragraphIndex,
-              total: deferredSuggestions.length,
-              planned: deferredPlan.length,
-              skipped: deferredSkipped.length,
-              noop: deferredNoop.length,
-              applyOrder: planOptions.applyOrder,
-              skippedByReason: summarizeSkippedReasons(deferredSkipped),
-            });
-            if (deferredPlan.length) {
+            if (DESKTOP_VERBOSE_LOGS) {
+              logDesktopVerbose("Desktop deferred apply plan", {
+                paragraphIndex: job.paragraphIndex,
+                total: deferredSuggestions.length,
+                planned: deferredPlan.length,
+                skipped: deferredSkipped.length,
+                noop: deferredNoop.length,
+                applyOrder: planOptions.applyOrder,
+                skippedByReason: summarizeSkippedReasons(deferredSkipped),
+              });
+            }
+            if (DESKTOP_VERBOSE_LOGS && deferredPlan.length) {
               logDesktopVerbose("Desktop deferred op details", {
                 paragraphIndex: job.paragraphIndex,
                 ops: deferredPlan.map((op, deferredOpIndex) => ({
@@ -12875,7 +12929,7 @@ async function checkDocumentTextDesktop(checkToken) {
                 })),
               });
             }
-            if (deferredSkipped.length) {
+            if (DESKTOP_VERBOSE_LOGS && deferredSkipped.length) {
               logDesktopVerbose("Desktop deferred skipped details", {
                 paragraphIndex: job.paragraphIndex,
                 skipped: deferredSkipped.map((item) =>
@@ -12883,7 +12937,7 @@ async function checkDocumentTextDesktop(checkToken) {
                 ),
               });
             }
-            if (deferredNoop.length) {
+            if (DESKTOP_VERBOSE_LOGS && deferredNoop.length) {
               logDesktopVerbose("Desktop deferred noop details", {
                 paragraphIndex: job.paragraphIndex,
                 noop: deferredNoop
@@ -12938,11 +12992,13 @@ async function checkDocumentTextDesktop(checkToken) {
                   isSuggestionAppliedInLiveText(deferredVirtualText, sourceForPlan, suggestion, planOptions)
                 );
                 if (alreadyApplied) {
-                  logDesktopVerbose("Desktop deferred op:skipped already applied", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped already applied", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
                 const hasCommaAlreadyInTokenGap = deferredOpSuggestions.some((suggestion) => {
@@ -12989,11 +13045,13 @@ async function checkDocumentTextDesktop(checkToken) {
                   return Boolean(pairMatch && typeof pairMatch.gapText === "string" && pairMatch.gapText.includes(","));
                 });
                 if (hasCommaAlreadyInTokenGap) {
-                  logDesktopVerbose("Desktop deferred op:skipped existing comma in token gap", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped existing comma in token gap", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
                 const hasAmbiguousTokenPair = deferredOpSuggestions.some((suggestion) => {
@@ -13041,11 +13099,13 @@ async function checkDocumentTextDesktop(checkToken) {
                   return Boolean(pairDiagnostics?.ambiguous);
                 });
                 if (hasAmbiguousTokenPair) {
-                  logDesktopVerbose("Desktop deferred op:skipped ambiguous token pair", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped ambiguous token pair", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
                 const boundaryHintCandidates = [
@@ -13073,26 +13133,30 @@ async function checkDocumentTextDesktop(checkToken) {
                   24
                 );
                 if (fingerprintCheck?.ambiguous) {
-                  logDesktopVerbose("Desktop deferred op:skipped ambiguous boundary fingerprint", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    reason: fingerprintCheck?.reason || null,
-                    fingerprintPositions: fingerprintCheck?.positions || [],
-                    expectedBoundaryPos,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped ambiguous boundary fingerprint", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      reason: fingerprintCheck?.reason || null,
+                      fingerprintPositions: fingerprintCheck?.positions || [],
+                      expectedBoundaryPos,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
                 const commaAlreadyNearBoundary = boundaryHintCandidates.some((hint) =>
                   hasCommaNearMappedHint(deferredVirtualText, hint, 0)
                 );
                 if (commaAlreadyNearBoundary) {
-                  logDesktopVerbose("Desktop deferred op:skipped existing comma near boundary", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    boundaryHintCandidates,
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped existing comma near boundary", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      boundaryHintCandidates,
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
                 if (typeof deferredOp?.replacement === "string" && deferredOp.replacement.includes(",")) {
@@ -13108,12 +13172,14 @@ async function checkDocumentTextDesktop(checkToken) {
                   const checkTo = Math.min(simulatedText.length, insertPos + 4);
                   const localWindow = simulatedText.slice(checkFrom, checkTo);
                   if (/,\s*,/u.test(localWindow)) {
-                    logDesktopVerbose("Desktop deferred op:skipped double-comma guard", {
-                      paragraphIndex: job.paragraphIndex,
-                      opIndex: deferredIndex,
-                      localWindow,
-                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                    });
+                    if (DESKTOP_VERBOSE_LOGS) {
+                      logDesktopVerbose("Desktop deferred op:skipped double-comma guard", {
+                        paragraphIndex: job.paragraphIndex,
+                        opIndex: deferredIndex,
+                        localWindow,
+                        op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                      });
+                    }
                     continue;
                   }
                 }
@@ -13146,12 +13212,14 @@ async function checkDocumentTextDesktop(checkToken) {
                   }
                 } else if (hasBoundaryCue) {
                   applyRangeMisses++;
-                  logDesktopVerbose("Desktop deferred op:skipped strict boundary unresolved", {
-                    paragraphIndex: job.paragraphIndex,
-                    opIndex: deferredIndex,
-                    reason: strictInsertResolution?.reason || "strict_insert_unresolved",
-                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                  });
+                  if (DESKTOP_VERBOSE_LOGS) {
+                    logDesktopVerbose("Desktop deferred op:skipped strict boundary unresolved", {
+                      paragraphIndex: job.paragraphIndex,
+                      opIndex: deferredIndex,
+                      reason: strictInsertResolution?.reason || "strict_insert_unresolved",
+                      op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                    });
+                  }
                   continue;
                 }
               } else if (deferredOp?.kind === "delete" && primaryDeferredSuggestion) {
@@ -13224,29 +13292,35 @@ async function checkDocumentTextDesktop(checkToken) {
                 !deferredResolvedRangeText.includes(",")
               ) {
                 applyRangeMisses++;
-                logDesktopVerbose("Desktop deferred op:skipped delete range mismatch", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex: deferredIndex,
-                  resolvedRangeText: deferredResolvedRangeText,
-                  op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
-                });
+                if (DESKTOP_VERBOSE_LOGS) {
+                  logDesktopVerbose("Desktop deferred op:skipped delete range mismatch", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    resolvedRangeText: deferredResolvedRangeText,
+                    op: buildDesktopOperationLogEntry(deferredOp, deferredVirtualText, sourceForPlan),
+                  });
+                }
                 continue;
               }
               try {
-                logDesktopVerbose("Desktop deferred op:attempt", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex: deferredIndex,
-                  resolvedRangeText: deferredResolvedRangeText,
-                  op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
-                });
+                if (DESKTOP_VERBOSE_LOGS) {
+                  logDesktopVerbose("Desktop deferred op:attempt", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    resolvedRangeText: deferredResolvedRangeText,
+                    op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
+                  });
+                }
                 deferredRange.insertText(deferredOp.replacement, deferredInsertLocation);
-                logDesktopVerbose("Desktop deferred op:queued", {
-                  paragraphIndex: job.paragraphIndex,
-                  opIndex: deferredIndex,
-                  insertLocation: deferredInsertLocation,
-                  resolvedRangeText: deferredResolvedRangeText,
-                  op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
-                });
+                if (DESKTOP_VERBOSE_LOGS) {
+                  logDesktopVerbose("Desktop deferred op:queued", {
+                    paragraphIndex: job.paragraphIndex,
+                    opIndex: deferredIndex,
+                    insertLocation: deferredInsertLocation,
+                    resolvedRangeText: deferredResolvedRangeText,
+                    op: buildDesktopOperationLogEntry(deferredOp, currentSnapshotText, sourceForPlan),
+                  });
+                }
                 countAppliedSuggestions(deferredOp);
                 deferredVirtualText = applyOpToVirtualText(deferredVirtualText, deferredOp);
               } catch (err) {
