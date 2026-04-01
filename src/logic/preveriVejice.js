@@ -180,6 +180,52 @@ const appendSkippedSegmentsForDoneLog = (
   }
   return appended;
 };
+const createChunkOpSelectionRunTotals = () => ({
+  totalChunks: 0,
+  chunksWithApiDetail: 0,
+  chunksWithoutApiDetail: 0,
+  selectedPath: {
+    api_comma_ops: 0,
+    corrections_ops: 0,
+    fallback_ops: 0,
+    none: 0,
+  },
+  fallbackUsableSelections: 0,
+  fallbackOnlySelections: 0,
+  skipReasonCounts: {
+    tooLong: 0,
+    apiError: 0,
+    apiErrorCooldown: 0,
+    apiErrorMaxAttempts: 0,
+    nonCommaChange: 0,
+  },
+});
+const mergeChunkOpSelectionRunTotals = (target, stats) => {
+  if (!target || !stats || typeof stats !== "object") return;
+  target.totalChunks += Number.isFinite(stats.totalChunks) ? stats.totalChunks : 0;
+  target.chunksWithApiDetail += Number.isFinite(stats.chunksWithApiDetail) ? stats.chunksWithApiDetail : 0;
+  target.chunksWithoutApiDetail += Number.isFinite(stats.chunksWithoutApiDetail)
+    ? stats.chunksWithoutApiDetail
+    : 0;
+  const selectedPath = stats.selectedPath;
+  if (selectedPath && typeof selectedPath === "object") {
+    for (const key of Object.keys(target.selectedPath)) {
+      target.selectedPath[key] += Number.isFinite(selectedPath[key]) ? selectedPath[key] : 0;
+    }
+  }
+  target.fallbackUsableSelections += Number.isFinite(stats.fallbackUsableSelections)
+    ? stats.fallbackUsableSelections
+    : 0;
+  target.fallbackOnlySelections += Number.isFinite(stats.fallbackOnlySelections)
+    ? stats.fallbackOnlySelections
+    : 0;
+  const skipReasonCounts = stats.skipReasonCounts;
+  if (skipReasonCounts && typeof skipReasonCounts === "object") {
+    for (const key of Object.keys(target.skipReasonCounts)) {
+      target.skipReasonCounts[key] += Number.isFinite(skipReasonCounts[key]) ? skipReasonCounts[key] : 0;
+    }
+  }
+};
 const MAX_AUTOFIX_PASSES =
   typeof Office !== "undefined" && Office?.context?.platform === "PC" ? 3 : 2;
 
@@ -12466,6 +12512,7 @@ async function checkDocumentTextDesktop(checkToken) {
   let nonCommaSalvaged = 0;
   let skippedSegmentsTotal = 0;
   const skippedSegmentsSample = [];
+  const chunkOpSelectionTotals = createChunkOpSelectionRunTotals();
   let unchangedHardSkips = 0;
   let cacheHits = 0;
   let cacheMisses = 0;
@@ -12713,6 +12760,7 @@ async function checkDocumentTextDesktop(checkToken) {
       const paragraphApiErrors = result.apiErrors || 0;
       const paragraphNonCommaSkips = result.nonCommaSkips || 0;
       const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
+      mergeChunkOpSelectionRunTotals(chunkOpSelectionTotals, result.chunkOpSelectionStats);
       const paragraphSkippedSegments = Array.isArray(result.skippedSegments) ? result.skippedSegments : [];
       apiErrors += paragraphApiErrors;
       nonCommaSkips += paragraphNonCommaSkips;
@@ -13447,6 +13495,16 @@ async function checkDocumentTextDesktop(checkToken) {
       nonCommaSkips,
       "| nonCommaSalvaged:",
       nonCommaSalvaged,
+      "| chunkApiDetail:",
+      `${chunkOpSelectionTotals.chunksWithApiDetail}/${chunkOpSelectionTotals.totalChunks}`,
+      "| chunkSelectedPath:",
+      JSON.stringify(chunkOpSelectionTotals.selectedPath),
+      "| chunkFallbackUsable:",
+      chunkOpSelectionTotals.fallbackUsableSelections,
+      "| chunkFallbackOnly:",
+      chunkOpSelectionTotals.fallbackOnlySelections,
+      "| chunkSkipReasons:",
+      JSON.stringify(chunkOpSelectionTotals.skipReasonCounts),
       "| deterministicPlannerSkips:",
       deterministicPlannerSkips,
       "| applyRangeMisses:",
@@ -13489,6 +13547,7 @@ async function checkDocumentTextDesktop(checkToken) {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      chunkOpSelectionStats: chunkOpSelectionTotals,
       deterministicPlannerSkips,
       applyRangeMisses,
       applyOpFailures,
@@ -13521,6 +13580,7 @@ async function checkDocumentTextDesktop(checkToken) {
       apiErrors,
       nonCommaSkips,
       nonCommaSalvaged,
+      chunkOpSelectionStats: chunkOpSelectionTotals,
       deterministicPlannerSkips,
       applyRangeMisses,
       applyOpFailures,
@@ -13549,6 +13609,7 @@ async function checkDocumentTextOnline(checkToken) {
   let nonCommaSalvaged = 0;
   let skippedSegmentsTotal = 0;
   const skippedSegmentsSample = [];
+  const chunkOpSelectionTotals = createChunkOpSelectionRunTotals();
   let unchangedHardSkips = 0;
   let unstableBackoffSkips = 0;
   let rerenderSkipped = 0;
@@ -14047,6 +14108,7 @@ async function checkDocumentTextOnline(checkToken) {
           const paragraphApiErrors = result.apiErrors || 0;
           const paragraphNonCommaSkips = result.nonCommaSkips || 0;
           const paragraphNonCommaSalvaged = result.nonCommaSalvaged || 0;
+          mergeChunkOpSelectionRunTotals(chunkOpSelectionTotals, result.chunkOpSelectionStats);
           const paragraphSkippedSegments = Array.isArray(result.skippedSegments) ? result.skippedSegments : [];
           apiErrors += paragraphApiErrors;
           nonCommaSkips += paragraphNonCommaSkips;
@@ -14111,6 +14173,13 @@ async function checkDocumentTextOnline(checkToken) {
             skippedCount: renderReadyResult.skippedCount,
             skippedByReason: renderReadyResult.skippedByReason,
             deterministicSkipped: renderReadyResult.deterministicSkipped,
+            chunkSelectedPath: result?.chunkOpSelectionStats?.selectedPath || null,
+            chunkApiDetail: result?.chunkOpSelectionStats
+              ? {
+                  with: result.chunkOpSelectionStats.chunksWithApiDetail || 0,
+                  without: result.chunkOpSelectionStats.chunksWithoutApiDetail || 0,
+                }
+              : null,
           });
           if (renderReadyResult.deterministicSkipped > 0) {
             deterministicPlannerSkips += renderReadyResult.deterministicSkipped;
@@ -14285,6 +14354,16 @@ async function checkDocumentTextOnline(checkToken) {
       nonCommaSkips,
       "| nonCommaSalvaged:",
       nonCommaSalvaged,
+      "| chunkApiDetail:",
+      `${chunkOpSelectionTotals.chunksWithApiDetail}/${chunkOpSelectionTotals.totalChunks}`,
+      "| chunkSelectedPath:",
+      JSON.stringify(chunkOpSelectionTotals.selectedPath),
+      "| chunkFallbackUsable:",
+      chunkOpSelectionTotals.fallbackUsableSelections,
+      "| chunkFallbackOnly:",
+      chunkOpSelectionTotals.fallbackOnlySelections,
+      "| chunkSkipReasons:",
+      JSON.stringify(chunkOpSelectionTotals.skipReasonCounts),
       "| deterministicPlannerSkips:",
       deterministicPlannerSkips,
       "| skippedSegments:",

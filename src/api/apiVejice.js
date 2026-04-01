@@ -126,6 +126,7 @@ const USE_LOCAL_RETRY_PROFILE = isLocalApiTarget(API_URL);
 
 const API_KEY =
   (typeof window !== "undefined" && window.__VEJICE_API_KEY) ||
+  (typeof process !== "undefined" && process.env?.VEJICE_API_KEY) ||
   "";
 const DEFAULT_API_MAX_ATTEMPTS = 2;
 const LOCAL_API_MAX_ATTEMPTS = 2;

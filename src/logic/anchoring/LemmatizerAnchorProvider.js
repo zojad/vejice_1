@@ -340,12 +340,13 @@ export class LemmatizerAnchorProvider extends AnchorProvider {
       }
     })();
     this.lemmaFetchInFlight.set(requestKey, { text: safeText, promise: requestPromise });
-    requestPromise.finally(() => {
+    const clearInFlight = () => {
       const current = this.lemmaFetchInFlight.get(requestKey);
       if (current?.promise === requestPromise) {
         this.lemmaFetchInFlight.delete(requestKey);
       }
-    });
+    };
+    requestPromise.then(clearInFlight, clearInFlight);
     return requestPromise;
   }
 

@@ -122,6 +122,65 @@ async function runWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+function createEmptyChunkOpSelectionStats() {
+  return {
+    totalChunks: 0,
+    chunksWithApiDetail: 0,
+    chunksWithoutApiDetail: 0,
+    selectedPath: {
+      api_comma_ops: 0,
+      corrections_ops: 0,
+      fallback_ops: 0,
+      none: 0,
+    },
+    fallbackUsableSelections: 0,
+    fallbackOnlySelections: 0,
+    skipReasonCounts: {
+      tooLong: 0,
+      apiError: 0,
+      apiErrorCooldown: 0,
+      apiErrorMaxAttempts: 0,
+      nonCommaChange: 0,
+    },
+  };
+}
+
+function buildChunkOpSelectionStats(processedMeta = []) {
+  const stats = createEmptyChunkOpSelectionStats();
+  const list = Array.isArray(processedMeta) ? processedMeta : [];
+  for (const meta of list) {
+    if (!meta) continue;
+    stats.totalChunks++;
+    if (meta.detail) {
+      stats.chunksWithApiDetail++;
+    } else {
+      stats.chunksWithoutApiDetail++;
+    }
+    const reason = typeof meta.skipReason === "string" ? meta.skipReason : "";
+    if (Object.prototype.hasOwnProperty.call(stats.skipReasonCounts, reason)) {
+      stats.skipReasonCounts[reason]++;
+    }
+  }
+  return stats;
+}
+
+function recordChunkSelectionPath(
+  stats,
+  { selectedPath = "none", fallbackUsable = false, usingFallbackOnly = false, mergedOpsCount = 0 } = {}
+) {
+  if (!stats || typeof stats !== "object") return;
+  const safePath = typeof selectedPath === "string" ? selectedPath : "none";
+  if (Object.prototype.hasOwnProperty.call(stats.selectedPath, safePath)) {
+    stats.selectedPath[safePath]++;
+  }
+  if (fallbackUsable && mergedOpsCount > 0) {
+    stats.fallbackUsableSelections++;
+  }
+  if (usingFallbackOnly && mergedOpsCount > 0) {
+    stats.fallbackOnlySelections++;
+  }
+}
+
 if (typeof window !== "undefined") {
   if (!Array.isArray(window.__VEJICE_DEBUG_DUMPS__)) {
     window.__VEJICE_DEBUG_DUMPS__ = [];
@@ -371,6 +430,7 @@ export class CommaSuggestionEngine {
         nonCommaSalvaged: 0,
         skippedSegments: [],
         processedAny: false,
+        chunkOpSelectionStats: createEmptyChunkOpSelectionStats(),
         anchorsEntry: await this.anchorProvider.getAnchors({
           paragraphIndex,
           originalText,
@@ -391,6 +451,17 @@ export class CommaSuggestionEngine {
 
     const makeSnippet = (value, max = 140) =>
       typeof value === "string" ? value.slice(0, max).replace(/\s+/g, " ").trim() : "";
+    const logChunkOpDecision = (payload = {}) => {
+      if (!shouldAllowEngineRuntimeLogs() && !debugEnabled) return;
+      try {
+        console.log("[Vejice Chunk Ops]", {
+          paragraphIndex,
+          ...payload,
+        });
+      } catch (_err) {
+        // Ignore logging failures in restricted runtimes.
+      }
+    };
     const logSkippedChunk = (reason, chunk, extra = {}) => {
       if (!debugEnabled) return;
       const payload = {
@@ -617,6 +688,14 @@ export class CommaSuggestionEngine {
         failureAttempts >= API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN
       ) {
         meta.skipReason = "apiErrorMaxAttempts";
+        logChunkOpDecision({
+          chunkIndex: chunk?.index,
+          stage: "chunk_skipped",
+          reason: meta.skipReason,
+          fallbackUsable: false,
+          fallbackReason: "no_api_detail",
+          attempts: failureAttempts,
+        });
         logSkippedChunk("apiErrorMaxAttempts", chunk, {
           depth,
           attempts: failureAttempts,
@@ -637,6 +716,14 @@ export class CommaSuggestionEngine {
       const cooldownUntil = this.apiChunkFailureCooldownUntil.get(chunkFailureKey) || 0;
       if (cooldownUntil > Date.now()) {
         meta.skipReason = "apiErrorCooldown";
+        logChunkOpDecision({
+          chunkIndex: chunk?.index,
+          stage: "chunk_skipped",
+          reason: meta.skipReason,
+          fallbackUsable: false,
+          fallbackReason: "no_api_detail",
+          cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now()),
+        });
         logSkippedChunk("apiErrorCooldown", chunk, {
           depth,
           cooldownMsRemaining: Math.max(0, cooldownUntil - Date.now()),
@@ -691,6 +778,15 @@ export class CommaSuggestionEngine {
             return mergeChunkProcessResults(retryResults);
           }
           meta.skipReason = exhaustedRetryBudget ? "apiErrorMaxAttempts" : "apiError";
+          logChunkOpDecision({
+            chunkIndex: chunk?.index,
+            stage: "api_error",
+            reason: meta.skipReason,
+            fallbackUsable: false,
+            fallbackReason: "no_api_detail",
+            attempts: updatedFailureAttempts,
+            maxAttempts: API_FAILURE_MAX_ATTEMPTS_PER_CHUNK_PER_RUN,
+          });
           logSkippedChunk(meta.skipReason, chunk, {
             depth,
             apiError: apiErr?.message || String(apiErr || "API error"),
@@ -875,6 +971,7 @@ export class CommaSuggestionEngine {
         chunkDetails.sort((a, b) => compareChunks(a?.chunk, b?.chunk));
       }
     }
+    const chunkOpSelectionStats = buildChunkOpSelectionStats(processedMeta);
 
     const hasDetailedChunk = processedMeta.some((meta) => meta.detail);
     const canFallbackToSentences = !forceSentenceChunks && chunks.length === 1;
@@ -906,6 +1003,7 @@ export class CommaSuggestionEngine {
         nonCommaSalvaged: nonCommaChunkSalvaged,
         skippedSegments: buildSkippedSegments(processedMeta),
         processedAny: false,
+        chunkOpSelectionStats,
         anchorsEntry,
       };
     }
@@ -1030,6 +1128,35 @@ export class CommaSuggestionEngine {
       }
       const usingFallbackOnly = !ops.length;
       const allOps = mergePreferredCommaOps(ops, fallbackOps);
+      const selectedPath = apiOpsPresent
+        ? "api_comma_ops"
+        : ops.length
+          ? "corrections_ops"
+          : fallbackOps.length
+            ? "fallback_ops"
+            : "none";
+      logChunkOpDecision({
+        chunkIndex: entry?.chunk?.index,
+        stage: "op_selection",
+        selectedPath,
+        hasApiDetail: Boolean(detailRef),
+        apiCommaOpsCount: authoritativeApiOps.length,
+        syntheticApiOpsCount: syntheticApiFallbackOps.length,
+        correctionsPresent,
+        correctionsOpsCount: correctionOps.length,
+        diffFallbackOpsCount: Array.isArray(entry?.diffOps) ? entry.diffOps.length : 0,
+        selectedPrimaryOpsCount: ops.length,
+        selectedFallbackOpsCount: fallbackOps.length,
+        mergedOpsCount: allOps.length,
+        usingFallbackOnly,
+        fallbackUsable: !apiOpsPresent && allOps.length > 0,
+      });
+      recordChunkSelectionPath(chunkOpSelectionStats, {
+        selectedPath,
+        fallbackUsable: !apiOpsPresent && allOps.length > 0,
+        usingFallbackOnly,
+        mergedOpsCount: allOps.length,
+      });
       if (!allOps.length) continue;
       const opFlow = debugEnabled
         ? {
@@ -1149,6 +1276,7 @@ export class CommaSuggestionEngine {
         apiErrorSuppressedSuggestions,
         nonCommaSkips: nonCommaChunkSkips,
         nonCommaSalvaged: nonCommaChunkSalvaged,
+        chunkOpSelectionStats,
         suggestions: filteredSuggestions.map((s) => ({
           id: s.id,
           kind: s.kind,
@@ -1190,6 +1318,7 @@ export class CommaSuggestionEngine {
       nonCommaSalvaged: nonCommaChunkSalvaged,
       skippedSegments: buildSkippedSegments(processedMeta),
       processedAny: Boolean(filteredSuggestions.length),
+      chunkOpSelectionStats,
       anchorsEntry,
       correctedParagraph,
     };

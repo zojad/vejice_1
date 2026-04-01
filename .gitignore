@@ -6,3 +6,16 @@ vejice_2/QUOTE_PATTERNS_ANALYSIS.md
 vejice_2/scripts
 vejice_2/reports
 vejice_2/VEJICE_ARTICLE_ANALYSIS.md
+vejice_2/ARTICLE_REVIEW.md
+info/
+/memories/session/
+
+# Scripts and test files
+test-*.js
+scripts/
+reports/
+
+# Markdown files (analysis and documentation)
+*.md
+!README.md
+!ARTICLE_REVIEW.md
