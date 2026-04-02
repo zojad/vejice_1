@@ -1,4 +1,4 @@
-/* global document, Office, Word, console, window, URLSearchParams, navigator, __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__ */
+/* global document, Office, Word, console, window, URLSearchParams, navigator, process, __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__, __VEJICE_BUILD_QUIET_LOGS__, __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__, __VEJICE_BUILD_ONLINE_DRIFT_LOGS__, __VEJICE_BUILD_DEBUG__ */
 
 import {
   checkDocumentText,
@@ -23,8 +23,90 @@ import {
   TASKPANE_NOTIFICATION_STORAGE_KEY,
 } from "../utils/notifications.js";
 
-const log = (...args) => console.log("[Vejice Taskpane]", ...args);
-const errL = (...args) => console.error("[Vejice Taskpane]", ...args);
+const parseBooleanFlag = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+};
+const getBuildBooleanFlag = (flagName) => {
+  try {
+    switch (flagName) {
+      case "quiet":
+        return typeof __VEJICE_BUILD_QUIET_LOGS__ === "boolean" ? __VEJICE_BUILD_QUIET_LOGS__ : undefined;
+      case "onlineVerbose":
+        return typeof __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__ === "boolean"
+          ? __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__
+          : undefined;
+      case "onlineDrift":
+        return typeof __VEJICE_BUILD_ONLINE_DRIFT_LOGS__ === "boolean"
+          ? __VEJICE_BUILD_ONLINE_DRIFT_LOGS__
+          : undefined;
+      case "debug":
+        return typeof __VEJICE_BUILD_DEBUG__ === "boolean" ? __VEJICE_BUILD_DEBUG__ : undefined;
+      default:
+        return undefined;
+    }
+  } catch (_err) {
+    return undefined;
+  }
+};
+const applyBuildDebugFlagsToWindow = () => {
+  if (typeof window === "undefined") return;
+  const quiet = getBuildBooleanFlag("quiet");
+  const onlineVerbose = getBuildBooleanFlag("onlineVerbose");
+  const onlineDrift = getBuildBooleanFlag("onlineDrift");
+  const debug = getBuildBooleanFlag("debug");
+  if (typeof quiet === "boolean" && typeof window.__VEJICE_QUIET_LOGS__ !== "boolean") {
+    window.__VEJICE_QUIET_LOGS__ = quiet;
+  }
+  if (
+    typeof onlineVerbose === "boolean" &&
+    typeof window.__VEJICE_ONLINE_VERBOSE_LOGS__ !== "boolean"
+  ) {
+    window.__VEJICE_ONLINE_VERBOSE_LOGS__ = onlineVerbose;
+  }
+  if (
+    typeof onlineDrift === "boolean" &&
+    typeof window.__VEJICE_ONLINE_DRIFT_LOGS__ !== "boolean"
+  ) {
+    window.__VEJICE_ONLINE_DRIFT_LOGS__ = onlineDrift;
+  }
+  if (typeof debug === "boolean" && typeof window.__VEJICE_DEBUG__ !== "boolean") {
+    window.__VEJICE_DEBUG__ = debug;
+  }
+};
+applyBuildDebugFlagsToWindow();
+const isTaskpaneDebugEnabled = () => {
+  if (typeof window !== "undefined") {
+    const onlineVerboseOverride = parseBooleanFlag(window.__VEJICE_ONLINE_VERBOSE_LOGS__);
+    if (typeof onlineVerboseOverride === "boolean") return onlineVerboseOverride;
+    const debugOverride = parseBooleanFlag(window.__VEJICE_DEBUG__);
+    if (typeof debugOverride === "boolean") return debugOverride;
+  }
+  const buildOnlineVerbose = getBuildBooleanFlag("onlineVerbose");
+  if (typeof buildOnlineVerbose === "boolean") return buildOnlineVerbose;
+  const buildDebug = getBuildBooleanFlag("debug");
+  if (typeof buildDebug === "boolean") return buildDebug;
+  if (typeof process !== "undefined") {
+    const envOnlineVerbose = parseBooleanFlag(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
+    if (typeof envOnlineVerbose === "boolean") return envOnlineVerbose;
+    const envDebug = parseBooleanFlag(process.env?.VEJICE_DEBUG);
+    if (typeof envDebug === "boolean") return envDebug;
+  }
+  return false;
+};
+const log = (...args) => {
+  if (!isTaskpaneDebugEnabled()) return;
+  console.log("[Vejice Taskpane]", ...args);
+};
+const errL = (...args) => {
+  if (!isTaskpaneDebugEnabled()) return;
+  console.error("[Vejice Taskpane]", ...args);
+};
 const ENABLE_ONLINE_REVIEW_ACTIONS =
   typeof __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__ === "boolean"
     ? __VEJICE_ENABLE_ONLINE_REVIEW_ACTIONS__
@@ -304,8 +386,15 @@ const runCheck = async () => {
     return;
   }
   setStatus("Preverjam dokument ...");
+  log("runCheck:start", {
+    online,
+    busy,
+    checkRunInFlight,
+    checkInProgress: isDocumentCheckInProgress(),
+  });
   try {
     const summary = await withCheckWatchdog(() => checkDocumentText());
+    log("runCheck:summary", summary);
     if (summary?.status === "deferred") {
       setStatus("Po\u010dakajte, da se trenutno opravilo zaklju\u010di.");
     } else if (online) {
@@ -350,6 +439,12 @@ const runCheck = async () => {
       setStatus(CHECK_GENERIC_ERROR_MESSAGE);
     }
   } finally {
+    log("runCheck:finally", {
+      online,
+      busy,
+      checkRunInFlight,
+      checkInProgress: isDocumentCheckInProgress(),
+    });
     checkRunInFlight = false;
     setBusy(false);
   }
@@ -531,6 +626,13 @@ Office.onReady((info) => {
 
   const mode = resolveManifestMode();
   online = mode ? mode === "web" : isWordOnline();
+  log("taskpane:ready", {
+    host: info.host,
+    platform: Office?.context?.platform,
+    mode,
+    online,
+    href: typeof window !== "undefined" ? window.location.href : "",
+  });
   // Notifications are persisted in localStorage and can leak across documents.
   // Start each taskpane session clean to avoid showing stale messages in new docs.
   clearTaskpaneNotifications();

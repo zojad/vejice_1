@@ -1,4 +1,4 @@
-/* global Word, window, process, performance, console, Office, URL */
+/* global Word, window, process, performance, console, Office, URL, __VEJICE_BUILD_QUIET_LOGS__, __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__, __VEJICE_BUILD_ONLINE_DRIFT_LOGS__, __VEJICE_BUILD_DEBUG__ */
 import { popraviPoved, popraviPovedDetailed } from "../api/apiVejice.js";
 import { isWordOnline } from "../utils/host.js";
 import { CommaSuggestionEngine } from "./engine/CommaSuggestionEngine.js";
@@ -38,25 +38,57 @@ const parseQuietBoolean = (value) => {
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return undefined;
 };
+const readBuildBooleanFlag = (symbolName) => {
+  try {
+    switch (symbolName) {
+      case "quiet":
+        return typeof __VEJICE_BUILD_QUIET_LOGS__ === "boolean" ? __VEJICE_BUILD_QUIET_LOGS__ : undefined;
+      case "onlineVerbose":
+        return typeof __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__ === "boolean"
+          ? __VEJICE_BUILD_ONLINE_VERBOSE_LOGS__
+          : undefined;
+      case "onlineDrift":
+        return typeof __VEJICE_BUILD_ONLINE_DRIFT_LOGS__ === "boolean"
+          ? __VEJICE_BUILD_ONLINE_DRIFT_LOGS__
+          : undefined;
+      case "debug":
+        return typeof __VEJICE_BUILD_DEBUG__ === "boolean" ? __VEJICE_BUILD_DEBUG__ : undefined;
+      default:
+        return undefined;
+    }
+  } catch (_err) {
+    return undefined;
+  }
+};
+const BUILD_QUIET_LOGS = readBuildBooleanFlag("quiet");
+const BUILD_ONLINE_VERBOSE_LOGS = readBuildBooleanFlag("onlineVerbose");
+const BUILD_ONLINE_DRIFT_LOGS = readBuildBooleanFlag("onlineDrift");
+const BUILD_DEBUG = readBuildBooleanFlag("debug");
 const QUIET_LOGS_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_QUIET_LOGS__ === "boolean"
     ? window.__VEJICE_QUIET_LOGS__
+    : typeof BUILD_QUIET_LOGS === "boolean"
+      ? BUILD_QUIET_LOGS
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_QUIET_LOGS)
       : undefined;
 const ONLINE_VERBOSE_LOGS_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_VERBOSE_LOGS__ === "boolean"
     ? window.__VEJICE_ONLINE_VERBOSE_LOGS__
+    : typeof BUILD_ONLINE_VERBOSE_LOGS === "boolean"
+      ? BUILD_ONLINE_VERBOSE_LOGS
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS)
       : undefined;
 const ONLINE_DRIFT_LOGS_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_ONLINE_DRIFT_LOGS__ === "boolean"
     ? window.__VEJICE_ONLINE_DRIFT_LOGS__
+    : typeof BUILD_ONLINE_DRIFT_LOGS === "boolean"
+      ? BUILD_ONLINE_DRIFT_LOGS
     : typeof process !== "undefined"
       ? parseQuietBoolean(process.env?.VEJICE_ONLINE_DRIFT_LOGS)
       : undefined;
-const QUIET_LOGS = true;
+const QUIET_LOGS = typeof QUIET_LOGS_OVERRIDE === "boolean" ? QUIET_LOGS_OVERRIDE : true;
 const isOnlineVerboseLogsEnabled = () => {
   if (typeof window !== "undefined") {
     const direct = parseQuietBoolean(window.__VEJICE_ONLINE_VERBOSE_LOGS__);
@@ -65,11 +97,14 @@ const isOnlineVerboseLogsEnabled = () => {
   if (typeof ONLINE_VERBOSE_LOGS_OVERRIDE === "boolean") {
     return ONLINE_VERBOSE_LOGS_OVERRIDE;
   }
+  if (typeof BUILD_ONLINE_VERBOSE_LOGS === "boolean") {
+    return BUILD_ONLINE_VERBOSE_LOGS;
+  }
   if (typeof process !== "undefined") {
     const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return isWordOnline();
+  return false;
 };
 const isOnlineDriftLogsEnabled = () => {
   if (typeof window !== "undefined") {
@@ -79,15 +114,20 @@ const isOnlineDriftLogsEnabled = () => {
   if (typeof ONLINE_DRIFT_LOGS_OVERRIDE === "boolean") {
     return ONLINE_DRIFT_LOGS_OVERRIDE;
   }
+  if (typeof BUILD_ONLINE_DRIFT_LOGS === "boolean") {
+    return BUILD_ONLINE_DRIFT_LOGS;
+  }
   if (typeof process !== "undefined") {
     const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_DRIFT_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return isOnlineVerboseLogsEnabled();
+  return false;
 };
 const DEBUG_OVERRIDE =
   typeof window !== "undefined" && typeof window.__VEJICE_DEBUG__ === "boolean"
     ? window.__VEJICE_DEBUG__
+    : typeof BUILD_DEBUG === "boolean"
+      ? BUILD_DEBUG
     : undefined;
 const DEBUG = typeof DEBUG_OVERRIDE === "boolean" ? DEBUG_OVERRIDE : !envIsProd();
 const shouldEmitRuntimeLogs = () => {
@@ -276,7 +316,7 @@ const LOCAL_ONLINE_HIGHLIGHT_FLUSH_SUGGESTIONS_DEFAULT = 10;
 const ONLINE_ACCEPT_MIN_CONFIDENCE_LEVEL = "medium";
 const ONLINE_UNSTABLE_BACKOFF_NON_COMMA_THRESHOLD_DEFAULT = 2;
 const ONLINE_RENDER_STATE_MAX_PARAGRAPHS = 1200;
-const DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE = true;
+const DISABLE_CHAR_SPAN_RANGES_ON_WORD_ONLINE = false;
 let longSentenceNotified = false;
 let chunkApiFailureNotified = false;
 let chunkNonCommaNotified = false;
@@ -1651,6 +1691,16 @@ function persistPendingSuggestionsOnline() {
     const errorName = typeof storageErr?.name === "string" ? storageErr.name : "";
     if (errorName === "QuotaExceededError" || errorName === "SecurityError") {
       pendingSuggestionsStorageDisabled = true;
+      if (errorName === "QuotaExceededError") {
+        try {
+          const storage = window.localStorage;
+          if (storage) {
+            storage.removeItem(getPendingSuggestionsStorageKey());
+          }
+        } catch (_removeErr) {
+          // ignore storage cleanup failures
+        }
+      }
     }
     warn("persistPendingSuggestionsOnline failed", storageErr);
   }
@@ -5428,6 +5478,20 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
           anchor.targetTokenAfter,
           anchor.highlightAnchorTarget,
         ];
+    const resolveLexicalAnchorEnd = (candidate) => {
+      if (!Number.isFinite(candidate?.charStart) || candidate.charStart < 0) return null;
+      if (Number.isFinite(candidate?.charEnd) && candidate.charEnd > candidate.charStart) {
+        return candidate.charEnd;
+      }
+      if (typeof candidate?.tokenText === "string" && candidate.tokenText.length > 0) {
+        return candidate.charStart + candidate.tokenText.length;
+      }
+      return candidate.charStart + 1;
+    };
+    const isLexicalAnchorCandidate = (candidate) =>
+      Number.isFinite(candidate?.charStart) &&
+      candidate.charStart >= 0 &&
+      /[\p{L}\p{N}]/u.test(candidate?.tokenText || "");
     const lexicalBoundaryHintCandidates = [
       plannedBoundaryPos,
       anchor?.boundaryMeta?.targetBoundaryPos,
@@ -5438,22 +5502,48 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
       suggestion?.meta?.op?.originalPos,
     ].filter((value, index, arr) => Number.isFinite(value) && arr.indexOf(value) === index);
     const lexicalBoundaryHint = lexicalBoundaryHintCandidates.length > 0 ? lexicalBoundaryHintCandidates[0] : null;
+    const boundaryBeforeLexicalAnchor = [
+      anchor.sourceTokenBefore,
+      anchor.targetTokenBefore,
+      anchor?.boundaryMeta?.beforeToken,
+    ].find(isLexicalAnchorCandidate);
+    const boundaryAfterLexicalAnchor = [
+      anchor.sourceTokenAfter,
+      anchor.targetTokenAfter,
+      anchor?.boundaryMeta?.afterToken,
+    ].find(isLexicalAnchorCandidate);
+    const shouldPreferBoundaryBeforeLexicalAnchor =
+      Number.isFinite(lexicalBoundaryHint) &&
+      boundaryBeforeLexicalAnchor &&
+      boundaryAfterLexicalAnchor &&
+      (() => {
+        const beforeEnd = resolveLexicalAnchorEnd(boundaryBeforeLexicalAnchor);
+        const afterStart = boundaryAfterLexicalAnchor.charStart;
+        if (!Number.isFinite(beforeEnd) || !Number.isFinite(afterStart)) return false;
+        if (afterStart < beforeEnd) return false;
+        const gapStart = beforeEnd - 1;
+        const gapEnd = afterStart + 1;
+        return lexicalBoundaryHint >= gapStart && lexicalBoundaryHint <= gapEnd;
+      })();
     const lexicalAnchorCandidates = lexicalAnchorPriority
       .map((candidate, priorityIndex) => ({ candidate, priorityIndex }))
-      .filter(
-        ({ candidate }) =>
-          Number.isFinite(candidate?.charStart) &&
-          candidate.charStart >= 0 &&
-          /[\p{L}\p{N}]/u.test(candidate?.tokenText || "")
-      );
+      .filter(({ candidate }) => isLexicalAnchorCandidate(candidate));
+    const shouldForceBeforeLexicalAnchor =
+      !preferAfterLexical &&
+      Boolean(boundaryBeforeLexicalAnchor) &&
+      !(dashBoundaryRegex.test(boundaryPunctuationChar || "") || dashPosFromBoundary >= 0);
     const lexicalAnchorCandidate =
       lexicalAnchorCandidates.length === 0
         ? null
-        : Number.isFinite(lexicalBoundaryHint)
+        : shouldForceBeforeLexicalAnchor
+          ? boundaryBeforeLexicalAnchor
+          : shouldPreferBoundaryBeforeLexicalAnchor
+          ? boundaryBeforeLexicalAnchor
+          : Number.isFinite(lexicalBoundaryHint)
           ? lexicalAnchorCandidates
               .map(({ candidate, priorityIndex }) => {
                 const start = candidate.charStart;
-                const end = Number.isFinite(candidate?.charEnd) ? candidate.charEnd : candidate.charStart + 1;
+                const end = resolveLexicalAnchorEnd(candidate);
                 const distance = Math.min(
                   Math.abs(lexicalBoundaryHint - start),
                   Math.abs(lexicalBoundaryHint - end)
@@ -5465,6 +5555,16 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
                 return a.priorityIndex - b.priorityIndex;
               })[0]?.candidate || null
           : lexicalAnchorCandidates[0].candidate;
+    if (shouldPreferBoundaryBeforeLexicalAnchor && lexicalAnchorCandidate) {
+      log("highlight insert: preferred before-token anchor in boundary gap", {
+        suggestionId: suggestion?.id ?? null,
+        paragraphIndex: suggestion?.paragraphIndex,
+        boundaryPos: lexicalBoundaryHint,
+        beforeToken: boundaryBeforeLexicalAnchor?.tokenText || null,
+        afterToken: boundaryAfterLexicalAnchor?.tokenText || null,
+        selectedToken: lexicalAnchorCandidate?.tokenText || null,
+      });
+    }
     const shouldForcePunctuationBoundary =
       anchor?.boundaryMeta?.forcePunctuationHighlight === true ||
       dashBoundaryRegex.test(boundaryPunctuationChar || "") ||
@@ -5664,18 +5764,58 @@ async function highlightInsertSuggestion(context, paragraph, suggestion) {
         anchor.targetTokenAfter,
       ].find((candidate) => Number.isFinite(candidate?.charStart) && candidate.charStart >= 0);
 
-  if (!range && !shouldPreferQuoteBoundary && !shouldForcePunctuationBoundary && highlightAnchorCandidate) {
-    const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);
-    range = await getRangeForAnchorSpan(
-      context,
-      paragraph,
-      entry,
-      highlightAnchorCandidate.charStart,
-      anchorEnd,
-      "highlight-insert-anchor",
-      highlightAnchorCandidate.tokenText || anchor.highlightText
-    );
-  }
+    const resolveTokenAnchorRangeNearHint = async (anchorCandidate, reasonLabel = "highlight-insert-token") => {
+      if (!anchorCandidate || typeof anchorCandidate !== "object") return null;
+      const tokenText =
+        typeof anchorCandidate.tokenText === "string" ? anchorCandidate.tokenText.trim() : "";
+      if (!tokenText) return null;
+      if (typeof paragraph?.text !== "string") {
+        paragraph.load("text");
+        await context.sync();
+      }
+      const liveText = typeof paragraph?.text === "string" ? paragraph.text : baseText;
+      const sourceHint = Number.isFinite(anchorCandidate?.charStart) ? anchorCandidate.charStart : null;
+      const mappedHint =
+        Number.isFinite(sourceHint) && typeof baseText === "string" && baseText.length
+          ? mapIndexAcrossCanonical(baseText, liveText, sourceHint, { allowEnd: true })
+          : sourceHint;
+      const uniqueResolution = await findUniqueExactSnippetRangeNearIndex(
+        context,
+        paragraph,
+        liveText,
+        tokenText,
+        mappedHint,
+        `${reasonLabel}-unique`,
+        suggestion?.meta?.lemmaAnchorAuthoritative ? 20 : 10
+      );
+      if (uniqueResolution?.range) {
+        return uniqueResolution.range;
+      }
+      return await findExactSnippetRangeNearIndex(
+        context,
+        paragraph,
+        liveText,
+        tokenText,
+        mappedHint,
+        `${reasonLabel}-fallback`
+      );
+    };
+
+    if (!range && !shouldPreferQuoteBoundary && !shouldForcePunctuationBoundary && highlightAnchorCandidate) {
+    range = await resolveTokenAnchorRangeNearHint(highlightAnchorCandidate, "highlight-insert-anchor-token");
+    if (!range) {
+      const anchorEnd = resolveAnchorEnd(highlightAnchorCandidate);
+      range = await getRangeForAnchorSpan(
+        context,
+        paragraph,
+        entry,
+        highlightAnchorCandidate.charStart,
+        anchorEnd,
+        "highlight-insert-anchor",
+        highlightAnchorCandidate.tokenText || anchor.highlightText
+      );
+    }
+    }
 
   if (!range && shouldForcePunctuationBoundary) {
     return false;

@@ -46,7 +46,7 @@ const isOnlineVerboseLogsEnabled = () => {
     const envOverride = parseQuietBoolean(process.env?.VEJICE_ONLINE_VERBOSE_LOGS);
     if (typeof envOverride === "boolean") return envOverride;
   }
-  return isWordOnline();
+  return false;
 };
 const shouldEmitApiRuntimeLogs = () =>
   (isOnlineVerboseLogsEnabled() && isWordOnline()) || (!QUIET_LOGS && DEBUG);

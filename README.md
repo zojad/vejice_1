@@ -44,12 +44,13 @@ Running on Desktop Word:
 
 ```bash
 npm run build:dev
-npm start -- desktop --app word
+npm start
 ```
 
 Running on Word Online:
 
 ```bash
+npm run start:web:manual
 npm run start:web
 ```
 
