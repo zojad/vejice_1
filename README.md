@@ -1,6 +1,6 @@
-# Vejice - Slovenian Commas Checker for Microsoft Word
+# Vejice - Commas Checker for Microsoft Word
 
-A Word add-in that checks Slovenian text for missing or incorrect comma placement in real-time.
+A Word add-in that checks Slovenian text for missing or incorrect comma placement.
 
 Supported on:
 - Word Desktop (Windows and Mac)
@@ -8,10 +8,7 @@ Supported on:
 
 ## Overview
 
-Vejice analyzes Slovenian text and suggests corrections for:
-- Missing commas
-- Incorrect comma placement
-- Redundant commas
+Vejice add-in analyzes Slovenian text and suggests corrections for missing commas and incorrectly placed commas.
 
 ## Getting Started
 
@@ -54,7 +51,7 @@ npm run start:web:manual
 npm run start:web
 ```
 
-Then upload the manifest at: https://localhost:4001/manifest.web.xml
+Then upload the manifest: Add-ins --> More add-ins --> My add-ins --> Manage add-ins --> Upload my add-in. Insert the manifest file at: docs/manifest.web.xml or https://localhost:4001/manifest.web.xml .
 
 Stop debugging:
 
@@ -68,7 +65,7 @@ npm run stop
 npm run build
 ```
 
-Update the manifest files (`src/manifests/manifest.prod.xml` and `src/manifests/manifest.web.prod.xml`) with your domain, then deploy the contents of the `docs` folder to your web server.
+Update the manifest files (`docs/manifest.prod.xml` and `docs/manifest.web.prod.xml`) with your domain, then deploy the contents of the `docs` folder to your web server.
 
 ## Available Commands
 
@@ -79,8 +76,9 @@ Update the manifest files (`src/manifests/manifest.prod.xml` and `src/manifests/
 | `npm run build` | Production build (minified) |
 | `npm run watch` | Watch for file changes and rebuild |
 | `npm run dev-server` | Start webpack dev server only |
-| `npm start -- desktop --app word` | Run on Word Desktop |
-| `npm run start:web` | Run on Word Online |
+| `npm start` | Run on Word Desktop |
+| `npm run start:web:manual` | Start proxies + dev server for Word Online manual flow |
+| `npm run start:web` | Run Word Online debugging with `docs/manifest.web.xml` |
 | `npm run stop` | Stop Word Desktop debugging |
 | `npm run stop:web` | Stop Word Online debugging |
 | `npm run lint:fix` | Fix code style issues |
